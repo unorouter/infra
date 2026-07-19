@@ -7,7 +7,7 @@ spec:
   project: default
   source:
     # host-agnostic: swapping git hosts = change this URL + repo cred, nothing else
-    repoURL: https://github.com/0-don/saas-gitops.git
+    repoURL: https://github.com/unorouter/saas-gitops.git
     targetRevision: main
     path: apps
     directory:
