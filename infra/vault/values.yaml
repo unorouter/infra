@@ -1,0 +1,37 @@
+# Official HashiCorp Vault Helm chart (the recommended install method on k8s).
+# Raft integrated storage (NOT the default standalone/file mode - that is non-production).
+# Single replica now; HA = bump replicas to 3 when nodes exist (raft is already the storage).
+server:
+  ha:
+    enabled: true
+    replicas: 1
+    raft:
+      enabled: true
+      config: |
+        ui = true
+
+        listener "tcp" {
+          address     = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_disable = 1
+        }
+
+        storage "raft" {
+          path = "/vault/data"
+        }
+
+        service_registration "kubernetes" {}
+
+  dataStorage:
+    enabled: true
+    size: 5Gi
+
+  # upgrades MUST be OnDelete (chart default): standbys before leader, snapshot first
+  updateStrategyType: OnDelete
+
+ui:
+  enabled: true
+
+injector:
+  # ESO is our sync path; the agent injector is not needed
+  enabled: false

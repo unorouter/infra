@@ -2,43 +2,13 @@
 package_update: true
 packages:
   - curl
-  - gpg
   - open-iscsi
-
-write_files:
-  # Vault CE runs on the HOST (systemd), outside k8s: survives k3s reinstalls,
-  # costs no extra node. API on private + loopback only; raft snapshots -> S3 (runbook).
-  - path: /etc/vault.d/vault.hcl
-    content: |
-      ui           = true
-      api_addr     = "http://10.100.1.1:8200"
-      cluster_addr = "http://10.100.1.1:8201"
-
-      storage "raft" {
-        path    = "/opt/vault/data"
-        node_id = "vault1"
-      }
-
-      # private-net only; TLS via internal CA is a hardening follow-up
-      listener "tcp" {
-        address     = "10.100.1.1:8200"
-        tls_disable = 1
-      }
-
-      listener "tcp" {
-        address     = "127.0.0.1:8200"
-        tls_disable = 1
-      }
 
 runcmd:
   - curl -fsSL https://tailscale.com/install.sh | sh
 %{ if tailscale_authkey != "" ~}
   - tailscale up --authkey='${tailscale_authkey}' --hostname=saas-node1
 %{ endif ~}
-  - curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
-  - echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com noble main" > /etc/apt/sources.list.d/hashicorp.list
-  - apt-get update && apt-get install -y vault
-  - systemctl enable --now vault
   - |
     PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
     export INSTALL_K3S_EXEC="server \
