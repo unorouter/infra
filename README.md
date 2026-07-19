@@ -1,4 +1,4 @@
-# saas-gitops
+# infra
 
 Config-as-code for the unorouter revenue stack on k3s (Hetzner CAX31 ARM, single node).
 Full plan + rationale: `../backup/k3s-migration-plan.md`.
