@@ -1,0 +1,6 @@
+creation_rules:
+  - path_regex: (secrets/.*|tofu/.*\.sops\.tfvars)\.(ya?ml|json|env)$
+    encrypted_regex: ^(data|stringData)$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
+  - path_regex: tofu/secrets\.sops\.yaml$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9

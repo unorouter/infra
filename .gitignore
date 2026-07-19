@@ -1,0 +1,9 @@
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+tofu/.terraform.lock.hcl
+kubeconfig*
+*.dec.yaml
+*.dec.env
+.env
