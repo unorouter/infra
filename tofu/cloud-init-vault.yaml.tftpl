@@ -1,0 +1,33 @@
+#cloud-config
+package_update: true
+packages:
+  - curl
+  - gpg
+
+write_files:
+  - path: /etc/vault.d/vault.hcl
+    content: |
+      ui            = true
+      cluster_addr  = "http://10.100.1.2:8201"
+      api_addr      = "http://10.100.1.2:8200"
+
+      storage "raft" {
+        path    = "/opt/vault/data"
+        node_id = "vault1"
+      }
+
+      # private-network only; TLS via internal CA is a hardening follow-up
+      listener "tcp" {
+        address     = "10.100.1.2:8200"
+        tls_disable = 1
+      }
+
+runcmd:
+  - curl -fsSL https://tailscale.com/install.sh | sh
+%{ if tailscale_authkey != "" ~}
+  - tailscale up --authkey='${tailscale_authkey}' --hostname=saas-vault1
+%{ endif ~}
+  - curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
+  - echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com noble main" > /etc/apt/sources.list.d/hashicorp.list
+  - apt-get update && apt-get install -y vault
+  - systemctl enable --now vault
