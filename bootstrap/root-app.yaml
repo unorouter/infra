@@ -6,8 +6,8 @@ metadata:
 spec:
   project: default
   source:
-    # REPLACE after the remote exists (host-agnostic: any git URL works)
-    repoURL: https://github.com/REPLACE_ME/saas-gitops.git
+    # host-agnostic: swapping git hosts = change this URL + repo cred, nothing else
+    repoURL: https://github.com/0-don/saas-gitops.git
     targetRevision: main
     path: apps
     directory:

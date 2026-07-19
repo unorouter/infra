@@ -27,11 +27,14 @@ TF_VAR_hcloud_token: "..."
 TF_VAR_s3_access_key: "..."
 TF_VAR_s3_secret_key: "..."
 TF_VAR_tailscale_authkey: "tskey-auth-..."
+TF_VAR_operator_cidr: "x.x.x.x/32"
 EOF
 sops --encrypt --in-place tofu/secrets.sops.yaml
 ```
 
-Non-secret vars -> `tofu/terraform.tfvars` (committed): `operator_cidr`, `ssh_public_key`.
+`operator_cidr` lives in sops (public repo, home IP stays private); switch it to the
+tailnet CIDR `100.64.0.0/10` once Tailscale is up. Non-secret vars ->
+`tofu/terraform.tfvars` (committed): `ssh_public_key` only.
 
 ## Bootstrap order (P0)
 
