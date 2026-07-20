@@ -1,0 +1,20 @@
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: bot-pg-store
+  namespace: databases
+spec:
+  configuration:
+    destinationPath: s3://unorouter-pg-backups/
+    endpointURL: https://fsn1.your-objectstorage.com
+    s3Credentials:
+      accessKeyId:
+        name: bot-pg-s3
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: bot-pg-s3
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: gzip
+    data:
+      compression: gzip

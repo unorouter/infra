@@ -1,0 +1,14 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: newapi-pg-daily
+  namespace: databases
+spec:
+  # daily base backup; continuous WAL archiving (plugin) gives PITR between base backups.
+  schedule: "0 0 3 * * *" # 03:00 UTC daily (CNPG cron = 6 fields, leading seconds)
+  backupOwnerReference: self
+  cluster:
+    name: newapi-pg
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io

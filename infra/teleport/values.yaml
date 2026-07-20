@@ -1,0 +1,29 @@
+# teleport-cluster Helm chart (CE, self-hosted). Access plane: kubectl + Postgres behind
+# GitHub SSO, short-lived certs, session recording + audit.
+#
+# DR posture (decided): re-login is acceptable at 1-2 users -> standalone SQLite on a PVC.
+# On full node loss the PVC dies -> fresh CA -> everyone `tsh login` again. Session recordings
+# survive in S3 (versioned). Avoids the Teleport-needs-Postgres-while-Postgres-restores cycle.
+# If zero-relogin is ever wanted: switch to Postgres backend (CE-supported, holds the CA).
+chartMode: standalone
+clusterName: teleport.unorouter.com
+
+persistence:
+  enabled: true
+  volumeSize: 5Gi
+  storageClassName: local-path
+
+# session recordings -> S3 (node-independent). Audit EVENTS stay on the SQLite backend (fine
+# at this scale); S3 cannot hold audit events without Athena, not worth it here.
+auth:
+  teleportConfig:
+    teleport:
+      storage:
+        audit_sessions_uri: "s3://unorouter-pg-backups/teleport-recordings?endpoint=fsn1.your-objectstorage.com&region=fsn1"
+
+# GitHub SSO connector + roles are applied as Teleport resources (tctl / operator), not here.
+# SHARP EDGE: proxy multiplexes via ALPN -> teleport.unorouter.com must be DNS-only (grey
+# cloud) on its own hostNetwork port, NOT behind the Cloudflare proxy or the Cilium Gateway.
+proxyListenerMode: multiplex
+
+# TLS: ACME off (we're grey-cloud, own port). Mount a cert or use CF Origin cert per the plan.

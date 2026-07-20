@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# CNPG operator + Barman Cloud plugin (CNPG-I). Pinned. In-tree barmanObjectStore is
+# deprecated since 1.26 -- we use the plugin. Plugin needs cert-manager (TLS plugin<->operator).
+resources:
+  - https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.27.0/cnpg-1.27.0.yaml
+  - https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.5.0/manifest.yaml

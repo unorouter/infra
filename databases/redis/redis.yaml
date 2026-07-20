@@ -1,0 +1,40 @@
+# new-api Redis: ephemeral cache, NO persistence, NO backup (rebuilds on restart).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: newapi-redis
+  namespace: databases
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: newapi-redis
+  template:
+    metadata:
+      labels:
+        app: newapi-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["--save", "", "--appendonly", "no"] # no disk persistence
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: newapi-redis
+  namespace: databases
+spec:
+  selector:
+    app: newapi-redis
+  ports:
+    - port: 6379
+      targetPort: 6379

@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: databases
+resources:
+  - objectstore.yaml
+  - cluster.yaml
+  - scheduledbackup.yaml
+# secrets (newapi-pg-s3, newapi-pg-reader) come from SOPS/ESO, not committed plaintext.
+# masking.sql is applied once post-migration (P2), not a kustomize resource.

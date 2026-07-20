@@ -1,0 +1,52 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: newapi-pg
+  namespace: databases
+spec:
+  imageName: ghcr.io/cloudnative-pg/postgresql:15-standard-bookworm
+  instances: 1 # bump to 3 at HA (multi-node)
+  storage:
+    size: 20Gi
+    storageClass: local-path
+
+  # --- DR: restore-from-S3 by default. create-time-only, inert after first init. ---
+  # LINEAGE: restore FROM the current serverName (externalClusters), archive TO the NEXT one
+  # (plugins). On each DR event bump BOTH numbers by one and commit (v1->v2, v2->v3, ...).
+  # Omit recoveryTarget => recover to LATEST. PITR => add recoveryTarget.targetTime.
+  bootstrap:
+    recovery:
+      source: newapi-pg-origin
+      # recoveryTarget:            # uncomment for PITR
+      #   targetTime: "2026-07-21 00:00:00+00"
+
+  externalClusters:
+    - name: newapi-pg-origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: newapi-pg-store
+          serverName: newapi-pg-v1 # RESTORE-FROM lineage (current)
+
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: newapi-pg-store
+        serverName: newapi-pg-v2 # ARCHIVE-TO lineage (current+1); MUST differ from restore-from
+
+  # Teleport-provisioned read role. Declared here so CNPG reconciles it every DR.
+  # The options_masked view + REVOKE/GRANT ride the physical backup (schema objects) -- no hook.
+  managed:
+    roles:
+      - name: reader
+        login: true
+        # password from a Secret; Teleport maps the low-trust GitHub team -> this db-user.
+        passwordSecret:
+          name: newapi-pg-reader
+        inRoles:
+          - pg_read_all_data # broad read; the masking view + REVOKE on `options` still hides secrets
+
+  postgresql:
+    parameters:
+      max_connections: "200"

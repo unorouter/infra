@@ -1,0 +1,24 @@
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: newapi-pg-store
+  namespace: databases
+spec:
+  # serverName is set via plugin parameters on the Cluster, NOT here (plugin API).
+  configuration:
+    destinationPath: s3://unorouter-pg-backups/
+    endpointURL: https://fsn1.your-objectstorage.com
+    s3Credentials:
+      accessKeyId:
+        name: newapi-pg-s3
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: newapi-pg-s3
+        key: ACCESS_SECRET_KEY
+    wal:
+      # Hetzner S3 is Ceph/RadosGW: compress WALs (optimized for ~1MB+ objects) + path style.
+      compression: gzip
+    data:
+      compression: gzip
+    # Ceph checksum workaround (boto3 x-amz-content-sha256 on RadosGW) applied via the
+    # plugin's additionalCommandArgs on the Cluster (--addressing-style path); see cluster.yaml.

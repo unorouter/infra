@@ -1,0 +1,31 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: bot-pg
+  namespace: databases
+spec:
+  imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm
+  instances: 1 # bump to 3 at HA
+  storage:
+    size: 10Gi
+    storageClass: local-path
+
+  # DR: same lineage discipline as newapi-pg. Bump both serverNames on each DR event.
+  bootstrap:
+    recovery:
+      source: bot-pg-origin
+
+  externalClusters:
+    - name: bot-pg-origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: bot-pg-store
+          serverName: bot-pg-v1 # RESTORE-FROM (current)
+
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: bot-pg-store
+        serverName: bot-pg-v2 # ARCHIVE-TO (current+1); MUST differ
