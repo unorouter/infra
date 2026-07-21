@@ -10,23 +10,27 @@ spec:
     size: 20Gi
     storageClass: local-path
 
-  # --- DR: restore-from-S3 by default. create-time-only, inert after first init. ---
-  # LINEAGE: restore FROM the current serverName (externalClusters), archive TO the NEXT one
-  # (plugins). On each DR event bump BOTH numbers by one and commit (v1->v2, v2->v3, ...).
-  # Omit recoveryTarget => recover to LATEST. PITR => add recoveryTarget.targetTime.
+  # --- FIRST BOOT: initdb (don is still the source of truth; data imported via pg_dump). ---
+  # Matches don's db/user (newapi/newapi) so DSNs are unchanged. Re-import cycle = drop the
+  # cluster + resync (fresh initdb) while don stays live as the safety net.
   bootstrap:
-    recovery:
-      source: newapi-pg-origin
-      # recoveryTarget:            # uncomment for PITR
-      #   targetTime: "2026-07-21 00:00:00+00"
+    initdb:
+      database: newapi
+      owner: newapi
 
-  externalClusters:
-    - name: newapi-pg-origin
-      plugin:
-        name: barman-cloud.cloudnative-pg.io
-        parameters:
-          barmanObjectName: newapi-pg-store
-          serverName: newapi-pg-v1 # RESTORE-FROM lineage (current)
+  # --- DR MODE (post-cutover, when don is retired and CNPG's OWN S3 backups are the source).
+  # Swap bootstrap.initdb above for bootstrap.recovery below, then bump the serverName lineage
+  # (restore FROM current, archive TO next). Omit recoveryTarget => latest; add targetTime => PITR.
+  # bootstrap:
+  #   recovery:
+  #     source: newapi-pg-origin
+  # externalClusters:
+  #   - name: newapi-pg-origin
+  #     plugin:
+  #       name: barman-cloud.cloudnative-pg.io
+  #       parameters:
+  #         barmanObjectName: newapi-pg-store
+  #         serverName: newapi-pg-v1 # RESTORE-FROM lineage (current)
 
   plugins:
     - name: barman-cloud.cloudnative-pg.io

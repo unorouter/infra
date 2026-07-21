@@ -29,6 +29,11 @@ provider "aws" {
   skip_requesting_account_id  = true
   skip_metadata_api_check     = true
 
+  # Ceph/RadosGW (Hetzner) compat: path-style + no checksum header. Without these the
+  # lifecycle_configuration call hangs 3min then errors (aws provider >=5.70 sends
+  # transition_default_minimum_object_size / checksums Ceph rejects).
+  s3_use_path_style = true
+
   endpoints {
     s3 = "https://fsn1.your-objectstorage.com"
   }

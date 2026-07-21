@@ -8,6 +8,8 @@ spec:
   configuration:
     destinationPath: s3://unorouter-pg-backups/
     endpointURL: https://fsn1.your-objectstorage.com
+    # Hetzner Ceph requires region or throws LocationConstraintConflict on writes.
+    region: fsn1
     s3Credentials:
       accessKeyId:
         name: newapi-pg-s3
