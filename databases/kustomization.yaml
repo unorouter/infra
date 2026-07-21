@@ -3,6 +3,7 @@ kind: Kustomization
 # top-level: aggregate the per-DB kustomizations so ArgoCD renders one root (not recurse,
 # which double-counts the child kustomization.yaml files).
 resources:
+  - eso-pg-s3.yaml
   - newapi-pg
   - bot-pg
   - redis

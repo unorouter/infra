@@ -1,0 +1,53 @@
+# ESO: pull S3 creds from Vault -> create newapi-pg-s3 / bot-pg-s3 k8s Secrets.
+# Replaces hand-applied secrets. On DR, ESO recreates these once Vault is up.
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: vault-backend
+spec:
+  provider:
+    vault:
+      server: http://vault.vault.svc:8200
+      path: secret
+      version: v2
+      auth:
+        kubernetes:
+          mountPath: kubernetes
+          role: eso
+          serviceAccountRef:
+            name: external-secrets
+            namespace: external-secrets
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-s3
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: newapi-pg-s3
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: pg-s3
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: bot-pg-s3
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: bot-pg-s3
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: pg-s3
