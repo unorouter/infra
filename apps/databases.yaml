@@ -10,9 +10,7 @@ spec:
   source:
     repoURL: https://github.com/unorouter/infra.git
     targetRevision: main
-    path: databases
-    directory:
-      recurse: true # newapi-pg, bot-pg, redis kustomizations
+    path: databases # top-level kustomization aggregates newapi-pg, bot-pg, redis
   destination:
     server: https://kubernetes.default.svc
     namespace: databases
