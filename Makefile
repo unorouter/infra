@@ -46,3 +46,31 @@ dr-verify:
 	@echo ">> waiting for CNPG clusters to become healthy"
 	kubectl -n databases wait --for=condition=Ready --timeout=600s cluster/newapi-pg
 	kubectl -n databases wait --for=condition=Ready --timeout=600s cluster/bot-pg
+
+# --- DR bootstrap: run AFTER 'tofu apply' on a fresh node (Cilium + ArgoCD not in cloud-init) ---
+GW_VER ?= v1.6.1
+CILIUM_VER ?= 1.19.6
+bootstrap: kubeconfig
+	@echo ">> Gateway API CRDs"
+	@for c in gatewayclasses gateways httproutes referencegrants grpcroutes; do \
+		kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/$(GW_VER)/config/crd/standard/gateway.networking.k8s.io_$$c.yaml >/dev/null; done
+	kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/$(GW_VER)/config/crd/experimental/gateway.networking.k8s.io_tlsroutes.yaml >/dev/null
+	@echo ">> Cilium"
+	helm repo add cilium https://helm.cilium.io/ >/dev/null 2>&1 || true
+	helm upgrade --install cilium cilium/cilium --version $(CILIUM_VER) -n kube-system -f infra/cilium/values.yaml
+	kubectl -n kube-system rollout status ds/cilium --timeout=180s
+	@echo ">> ArgoCD + root app-of-apps"
+	kubectl create namespace argocd 2>/dev/null || true
+	kubectl apply -k bootstrap/argocd/ --server-side --force-conflicts
+	kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
+	kubectl apply -f bootstrap/root-app.yaml
+	@echo ">> ArgoCD reconciling from git. Then: make restore (unseal+restore Vault)."
+
+kubeconfig:
+	@NODE=$$(cd tofu && tofu output -raw node_ipv4); \
+	ssh -o StrictHostKeyChecking=no root@$$NODE 'cat /etc/rancher/k3s/k3s.yaml' | sed "s/127.0.0.1/$$NODE/" > kubeconfig; \
+	chmod 600 kubeconfig; echo "kubeconfig -> $$NODE"
+
+# after vault snapshot restore, MUST restart pod + re-apply k8s auth (cluster-specific token reviewer)
+vault-reconfigure-auth:
+	kubectl -n vault exec vault-0 -- sh -c 'VAULT_TOKEN=$$(sops -d $(VAULT_SECRETS) | yq -r .root_token) vault write auth/kubernetes/config kubernetes_host=https://$$KUBERNETES_PORT_443_TCP_ADDR:443'

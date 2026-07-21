@@ -2,6 +2,12 @@
 resource "aws_s3_bucket" "pg_backups" {
   provider = aws.hetzner_s3
   bucket   = "unorouter-pg-backups"
+
+  # DR DATA: never let tofu destroy the backup bucket (CNPG backups + Vault snapshots live
+  # here and must survive every node destroy). tofu destroy will error on this by design.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_versioning" "pg_backups" {
