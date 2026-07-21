@@ -1,5 +1,5 @@
 # Operator entrypoints. Full runbook: bootstrap/dr/README.md
-.PHONY: help apply destroy restore vault-unseal vault-snapshot-restore dr-verify
+.PHONY: help apply destroy restore vault-unseal vault-snapshot-restore dr-verify bootstrap kubeconfig
 
 KUBECONFIG ?= ./kubeconfig
 VAULT_SECRETS ?= secrets/openbao-init.sops.yaml   # SOPS+age: unseal keys + root token
@@ -39,7 +39,8 @@ vault-snapshot-restore:
 	@echo ">> pulling latest.snap from S3 into openbao-0 and restoring (raft)"
 	rclone copyto hz:unorouter-pg-backups/openbao-snapshots/latest.snap /tmp/vault-latest.snap
 	kubectl -n openbao cp /tmp/vault-latest.snap openbao-0:/tmp/latest.snap
-	@echo ">> now: kubectl -n vault exec -it vault-0 -- sh -c 'VAULT_TOKEN=<root> vault operator raft snapshot restore -force /tmp/latest.snap'"
+	@echo ">> now: kubectl -n openbao exec -it openbao-0 -- sh -c 'BAO_TOKEN=<root> bao operator raft snapshot restore -force /tmp/latest.snap'"
+	@echo ">> then RESTART the pod (kubectl -n openbao delete pod openbao-0), then 'make vault-unseal' with ORIGINAL keys"
 	@echo ">> (root token: sops -d $(VAULT_SECRETS) | yq -r .root_token)"
 
 dr-verify:
@@ -71,6 +72,7 @@ kubeconfig:
 	ssh -o StrictHostKeyChecking=no root@$$NODE 'cat /etc/rancher/k3s/k3s.yaml' | sed "s/127.0.0.1/$$NODE/" > kubeconfig; \
 	chmod 600 kubeconfig; echo "kubeconfig -> $$NODE"
 
-# after vault snapshot restore, MUST restart pod + re-apply k8s auth (cluster-specific token reviewer)
-vault-reconfigure-auth:
-	kubectl -n vault exec vault-0 -- sh -c 'VAULT_TOKEN=$$(sops -d $(VAULT_SECRETS) | yq -r .root_token) vault write auth/kubernetes/config kubernetes_host=https://$$KUBERNETES_PORT_443_TCP_ADDR:443'
+# k8s auth is now SELF-HEALING (config uses kubernetes.default.svc + omits token_reviewer_jwt
+# -> OpenBao reads its pod SA token/CA fresh each request, survives rebuild). No reconfigure
+# target needed anymore. If ever required after a full re-init:
+#   kubectl -n openbao exec openbao-0 -- sh -c 'BAO_TOKEN=<root> bao write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc'
