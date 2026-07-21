@@ -4,7 +4,8 @@
 # Standard image (no HSM build needed for Shamir).
 server:
   image:
-    repository: quay.io/openbao/openbao
+    registry: quay.io
+    repository: openbao/openbao
     tag: "2.6.0"
   ha:
     enabled: true
