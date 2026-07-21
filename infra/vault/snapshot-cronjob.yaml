@@ -1,0 +1,79 @@
+# Vault raft snapshot -> Hetzner S3 (MANDATORY: k3s-uninstall/node-loss wipes local-path PVs).
+# On DR: fresh Vault -> restore this snapshot -> unseal (SOPS keys). See bootstrap/dr.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-snapshot
+  namespace: vault
+---
+# ESO syncs the S3 creds into the vault namespace for the upload step.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: vault-snapshot-s3
+  namespace: vault
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: vault-snapshot-s3
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: pg-s3
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-raft-snapshot
+  namespace: vault
+spec:
+  schedule: "0 */6 * * *" # every 6h
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: vault-snapshot
+          restartPolicy: OnFailure
+          containers:
+            - name: snapshot
+              image: rclone/rclone:1.74.4 # has sh + rclone; we call Vault HTTP API via wget
+              env:
+                - name: VAULT_ADDR
+                  value: http://vault.vault.svc:8200
+                - name: RCLONE_CONFIG_HZ_TYPE
+                  value: s3
+                - name: RCLONE_CONFIG_HZ_PROVIDER
+                  value: Ceph
+                - name: RCLONE_CONFIG_HZ_ENDPOINT
+                  value: https://fsn1.your-objectstorage.com
+                - name: RCLONE_CONFIG_HZ_ACCESS_KEY_ID
+                  valueFrom: { secretKeyRef: { name: vault-snapshot-s3, key: ACCESS_KEY_ID } }
+                - name: RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: vault-snapshot-s3, key: ACCESS_SECRET_KEY } }
+                - name: RCLONE_CONFIG_HZ_REGION
+                  valueFrom: { secretKeyRef: { name: vault-snapshot-s3, key: REGION } }
+                - name: RCLONE_CONFIG_HZ_LOCATION_CONSTRAINT
+                  valueFrom: { secretKeyRef: { name: vault-snapshot-s3, key: REGION } }
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                  # login via Vault HTTP API (no vault binary in this image)
+                  VAULT_TOKEN=$(wget -qO- --header="Content-Type: application/json" \
+                    --post-data="{\"role\":\"snapshot\",\"jwt\":\"$JWT\"}" \
+                    "$VAULT_ADDR/v1/auth/kubernetes/login" | grep -o '"client_token":"[^"]*"' | cut -d'"' -f4)
+                  TS=$(date +%Y%m%dT%H%M%S)
+                  wget -qO /tmp/vault-$TS.snap --header="X-Vault-Token: $VAULT_TOKEN" \
+                    "$VAULT_ADDR/v1/sys/storage/raft/snapshot"
+                  echo "snapshot $(stat -c%s /tmp/vault-$TS.snap) bytes -> S3"
+                  rclone copyto /tmp/vault-$TS.snap hz:unorouter-pg-backups/vault-snapshots/vault-$TS.snap
+                  rclone copyto /tmp/vault-$TS.snap hz:unorouter-pg-backups/vault-snapshots/latest.snap
+                  echo "uploaded vault-$TS.snap + latest.snap"
