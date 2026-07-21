@@ -1,5 +1,5 @@
 resource "hcloud_firewall" "node" {
-  name = "saas-node"
+  name = "unorouter-node"
 
   rule {
     direction  = "in"

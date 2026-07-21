@@ -1,10 +1,10 @@
 resource "hcloud_ssh_key" "operator" {
-  name       = "saas-operator"
+  name       = "unorouter-operator"
   public_key = var.ssh_public_key
 }
 
 resource "hcloud_server" "node1" {
-  name        = "saas-node1"
+  name        = "unorouter-node1"
   server_type = var.node_type
   image       = "ubuntu-24.04"
   location    = var.location

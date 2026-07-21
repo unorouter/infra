@@ -1,5 +1,5 @@
 resource "hcloud_network" "cluster" {
-  name     = "saas-cluster"
+  name     = "unorouter-cluster"
   ip_range = "10.100.0.0/16"
 }
 
