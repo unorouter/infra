@@ -8,8 +8,6 @@ spec:
   configuration:
     destinationPath: s3://unorouter-pg-backups/
     endpointURL: https://fsn1.your-objectstorage.com
-    # Hetzner Ceph requires region or throws LocationConstraintConflict on writes.
-    region: fsn1
     s3Credentials:
       accessKeyId:
         name: newapi-pg-s3
@@ -17,6 +15,10 @@ spec:
       secretAccessKey:
         name: newapi-pg-s3
         key: ACCESS_SECRET_KEY
+      # Hetzner Ceph requires region or throws LocationConstraintConflict on writes.
+      region:
+        name: newapi-pg-s3
+        key: REGION
     wal:
       # Hetzner S3 is Ceph/RadosGW: compress WALs (optimized for ~1MB+ objects) + path style.
       compression: gzip

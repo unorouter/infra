@@ -7,8 +7,6 @@ spec:
   configuration:
     destinationPath: s3://unorouter-pg-backups/
     endpointURL: https://fsn1.your-objectstorage.com
-    # Hetzner Ceph requires region or throws LocationConstraintConflict on writes.
-    region: fsn1
     s3Credentials:
       accessKeyId:
         name: bot-pg-s3
@@ -16,6 +14,9 @@ spec:
       secretAccessKey:
         name: bot-pg-s3
         key: ACCESS_SECRET_KEY
+      region:
+        name: bot-pg-s3
+        key: REGION
     wal:
       compression: gzip
     data:
