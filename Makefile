@@ -2,7 +2,7 @@
 .PHONY: help apply destroy restore vault-unseal vault-snapshot-restore dr-verify
 
 KUBECONFIG ?= ./kubeconfig
-VAULT_SECRETS ?= secrets/vault-init.enc.yaml   # SOPS+age: unseal keys + root token
+VAULT_SECRETS ?= secrets/vault-init.sops.yaml   # SOPS+age: unseal keys + root token
 export KUBECONFIG
 
 help:
@@ -33,10 +33,14 @@ vault-unseal:
 	@kubectl -n vault exec vault-0 -- vault status | grep Sealed
 
 # only when the raft store is empty (fresh Vault after full node loss).
+# restore Vault data from S3 (only on a FRESH Vault after full node loss). Needs rclone env
+# (hz: remote) or set S3 creds. Vault must be initialized+unsealed first, then restore -force.
 vault-snapshot-restore:
-	@echo ">> fetching latest raft snapshot from S3 and restoring"
-	@echo ">> (manual: aws s3 cp s3://unorouter-pg-backups/vault-snapshots/latest.snap . ;"
-	@echo ">>  vault operator raft snapshot restore latest.snap) -- see bootstrap/dr/README.md"
+	@echo ">> pulling latest.snap from S3 into vault-0 and restoring (raft)"
+	rclone copyto hz:unorouter-pg-backups/vault-snapshots/latest.snap /tmp/vault-latest.snap
+	kubectl -n vault cp /tmp/vault-latest.snap vault-0:/tmp/latest.snap
+	@echo ">> now: kubectl -n vault exec -it vault-0 -- sh -c 'VAULT_TOKEN=<root> vault operator raft snapshot restore -force /tmp/latest.snap'"
+	@echo ">> (root token: sops -d $(VAULT_SECRETS) | yq -r .root_token)"
 
 dr-verify:
 	@echo ">> waiting for CNPG clusters to become healthy"
