@@ -7,3 +7,5 @@ kubeconfig*
 *.dec.yaml
 *.dec.env
 .env
+tofu/storage/.terraform/
+tofu/storage/terraform.tfstate*

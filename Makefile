@@ -16,8 +16,14 @@ help:
 apply:
 	cd tofu && bash -c 'set -a; . ./.env; set +a; tofu apply'
 
+# the S3 backup bucket lives in its OWN state (tofu/storage) so 'destroy' can't reach it.
+# Run once at setup; almost never again. prevent_destroy guards it.
+storage-apply:
+	cd tofu/storage && bash -c 'set -a; . ../.env; set +a; tofu init && tofu apply'
+
 destroy:
 	cd tofu && bash -c 'set -a; . ./.env; set +a; tofu destroy'
+
 
 # DR: bring secrets back online. CNPG auto-restores via ArgoCD; this handles Vault.
 # Teleport = re-login (tsh login), by design (re-login accepted).

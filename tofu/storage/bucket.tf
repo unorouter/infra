@@ -1,6 +1,5 @@
 # Pre-created here because Barman Cloud >=3.16 no longer auto-creates buckets.
 resource "aws_s3_bucket" "pg_backups" {
-  provider = aws.hetzner_s3
   bucket   = "unorouter-pg-backups"
 
   # DR DATA: never let tofu destroy the backup bucket (CNPG backups + Vault snapshots live
@@ -11,7 +10,6 @@ resource "aws_s3_bucket" "pg_backups" {
 }
 
 resource "aws_s3_bucket_versioning" "pg_backups" {
-  provider = aws.hetzner_s3
   bucket   = aws_s3_bucket.pg_backups.id
   versioning_configuration {
     status = "Enabled"
@@ -22,7 +20,6 @@ resource "aws_s3_bucket_versioning" "pg_backups" {
    Set via CLI instead (see bootstrap/dr/README). Bucket+versioning stay tofu-managed.
 # Expiry LONGER than Barman retention (30d) so retention deletes first; this is the safety net.
 resource "aws_s3_bucket_lifecycle_configuration" "pg_backups" {
-  provider = aws.hetzner_s3
   bucket   = aws_s3_bucket.pg_backups.id
 
   # Ceph has no size-based transition tiers; disable the aws>=5.70 default probe.

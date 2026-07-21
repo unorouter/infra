@@ -2,10 +2,6 @@ output "node_ipv4" {
   value = hcloud_server.node1.ipv4_address
 }
 
-output "bucket" {
-  value = aws_s3_bucket.pg_backups.id
-}
-
 output "s3_endpoint" {
   value = "https://fsn1.your-objectstorage.com"
 }
