@@ -9,6 +9,8 @@ Renovate (P9) automates this later.
 | k3s | v1.36.2+k3s1 (stable channel) | get.k3s.io | live on node (auto) |
 | hcloud tofu provider | ~> 1.66 (1.66.1) | terraform-provider-hcloud | tofu/providers.tf |
 | Cilium | 1.19.6 | cilium/cilium | helm install --version |
+| Gateway API CRDs | v1.6.1 (standard+tlsroute) | kubernetes-sigs/gateway-api | applied pre-Cilium |
+| cert-manager | v1.21.0 | cert-manager/cert-manager | infra/cert-manager |
 | CNPG operator | 1.30.0 | cloudnative-pg | infra/cnpg-operator |
 | Barman Cloud plugin | 0.13.0 | plugin-barman-cloud | infra/cnpg-operator |
 | CNPG PostgreSQL (newapi) | 15-standard-bookworm | ghcr cloudnative-pg/postgresql | databases/newapi-pg |
