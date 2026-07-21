@@ -60,36 +60,34 @@ Verify restore:
 kubectl -n databases get cluster newapi-pg bot-pg   # wait for status: Cluster in healthy state
 ```
 
-### 3. Restore Vault (fresh raft) -- VERIFIED SEQUENCE from the 2026-07-22 destroy test
+### 3. Restore OpenBao (fresh raft) -- VERIFIED SEQUENCE (2nd destroy test 2026-07-22)
 
-A fresh Vault has empty raft. To restore the S3 snapshot you must init it first (temp keys),
-restore, then it reverts to the ORIGINAL keys. Exact working sequence:
+A fresh OpenBao has empty raft. To restore the S3 snapshot: init with temp keys, restore,
+restart, then unseal with the ORIGINAL keys. Exact working sequence:
 
 ```
-# a. init fresh vault with throwaway 1-of-1 keys (just to enable restore)
-kubectl -n vault exec vault-0 -- vault operator init -key-shares=1 -key-threshold=1 -format=json > /tmp/vtmp.json
-kubectl -n vault exec vault-0 -- vault operator unseal $(jq -r .unseal_keys_b64[0] /tmp/vtmp.json)
+# a. temp init (throwaway 1-of-1) just to enable restore
+kubectl -n openbao exec openbao-0 -- bao operator init -key-shares=1 -key-threshold=1 -format=json > /tmp/botmp.json
+kubectl -n openbao exec openbao-0 -- bao operator unseal $(jq -r .unseal_keys_b64[0] /tmp/botmp.json)
 
 # b. pull latest.snap from S3 + restore -force (overwrites with ORIGINAL data + keys)
-make vault-snapshot-restore   # copies latest.snap into the pod
-kubectl -n vault exec vault-0 -- sh -c "VAULT_TOKEN=$(jq -r .root_token /tmp/vtmp.json) vault operator raft snapshot restore -force /tmp/latest.snap"
+make vault-snapshot-restore   # copies latest.snap into openbao-0
+kubectl -n openbao exec openbao-0 -- sh -c "BAO_TOKEN=$(jq -r .root_token /tmp/botmp.json) bao operator raft snapshot restore -force /tmp/latest.snap"
 
-# c. RESTART the pod (MANDATORY -- restored raft state only loads clean after restart,
-#    else unseal fails 'invalid key size')
-kubectl -n vault delete pod vault-0    # wait for Running
+# c. RESTART the pod (MANDATORY -- restored raft loads clean only after restart, else
+#    unseal fails 'invalid key size'). The Vault-lineage quirk carries to OpenBao.
+kubectl -n openbao delete pod openbao-0    # wait for Running
 
-# d. unseal with the ORIGINAL keys (SOPS / Bitwarden), 3 of 5
+# d. unseal with the ORIGINAL keys (SOPS openbao-init / Bitwarden), 3 of 5
 make vault-unseal
 
-# e. RECONFIGURE k8s auth (MANDATORY -- the restored token-reviewer binding is from the OLD
-#    cluster; ESO can't auth until this is redone against the new cluster)
-make vault-reconfigure-auth
-# then force ESO resync: kubectl -n databases annotate es --all force-sync=$(date +%s) --overwrite
+# e. self-healing k8s auth -> NO reconfigure needed. If ESO cached a failure, just bounce it:
+kubectl -n external-secrets rollout restart deploy/external-secrets
 ```
 
 Then: `tsh login --proxy=teleport.unorouter.com` (Teleport CA regenerated -> re-login).
 
-Break-glass (age key lost): unseal keys are in Bitwarden -> `vault operator unseal` by hand.
+Break-glass (age key lost): unseal keys are in Bitwarden -> `bao operator unseal` by hand.
 
 ### DR test learnings (2026-07-22, all folded into the steps above)
 
