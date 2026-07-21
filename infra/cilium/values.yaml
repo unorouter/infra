@@ -39,3 +39,8 @@ hubble:
 
 operator:
   replicas: 1
+
+# NOTE: these values are ALSO inlined in tofu/cloud-init.yaml.tftpl (the k3s auto-deploy
+# HelmChart) because bootstrap can't reference git before ArgoCD exists. Keep the two in
+# sync on any Cilium values change. This file is the source of truth for `make bootstrap`
+# (manual fallback) + documentation; cloud-init is the zero-touch path.
