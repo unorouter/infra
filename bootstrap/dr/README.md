@@ -21,18 +21,23 @@ SQLite, ArgoCD), every pod.
 
 ## The 3 steps
 
-### 1. Recreate the node + bootstrap
+### 1. Recreate the node (ZERO-TOUCH bootstrap)
 
 ```
-make apply       # tofu apply -> fresh node (same or new IP), k3s via cloud-init
-make bootstrap   # Cilium + Gateway CRDs + ArgoCD + root app-of-apps
+make apply       # tofu apply -> fresh node; cloud-init auto-deploys Cilium+ArgoCD+root-app
 ```
 
-IMPORTANT (verified in the 2026-07-22 destroy test): cloud-init installs ONLY k3s + tailscale.
-Cilium and ArgoCD are NOT in cloud-init -> `make bootstrap` installs them. Once ArgoCD is up it
-reconciles the whole app-of-apps from git: cert-manager, CNPG operator, Vault, ESO, databases.
-CNPG `Cluster`s come up (initdb now; `bootstrap.recovery` from S3 once cut over from don).
-Vault boots SEALED + UNINITIALIZED (fresh raft).
+VERIFIED (2026-07-22, 2nd destroy test): cloud-init writes k3s auto-deploy manifests
+(`/var/lib/rancher/k3s/server/manifests/`): Cilium HelmChart (`bootstrap:true` -> installs
+before CNI-ready, node goes Ready), ArgoCD helm chart, and the root app-of-apps. So
+`tofu apply` ALONE brings up k3s + Cilium + ArgoCD + the whole app-of-apps from git. NO
+`make bootstrap` needed (that target remains as a manual fallback only). ArgoCD then
+reconciles cert-manager, CNPG operator, OpenBao, ESO, databases. CNPG `Cluster`s come up
+(initdb; flip to `bootstrap.recovery` from S3 once cut over from don). OpenBao boots SEALED +
+UNINITIALIZED (fresh raft).
+
+Note: on a rebuilt node reusing the old IP, clear the stale SSH host key first:
+`ssh-keygen -R <node-ip>`.
 
 If the new node IP differs from the old, update the Cloudflare A records (grey-cloud for
 `teleport.unorouter.com`; proxied for the rest) and the firewall `operator_cidr` if yours changed.
@@ -88,13 +93,15 @@ Break-glass (age key lost): unseal keys are in Bitwarden -> `vault operator unse
 
 ### DR test learnings (2026-07-22, all folded into the steps above)
 
-1. Bucket needs `prevent_destroy` (tofu tried to delete the DR data; `BucketNotEmpty` + the
-   lifecycle guard now both protect it).
+1. Bucket is in its OWN tofu state (`tofu/storage/`) so `make destroy` (plain `tofu destroy`)
+   physically cannot reach it -- no -target/-exclude needed. prevent_destroy guards storage/ too.
 2. Vault pod MUST be restarted after `snapshot restore -force` or unseal fails.
-3. Vault k8s auth MUST be reconfigured after rebuild (cluster-specific token reviewer) or ESO
-   fails `SecretSyncedError`.
-4. Cilium + ArgoCD are a `make bootstrap` step (not in cloud-init).
-VERIFIED: a full destroy/apply cycle recovered all 7 apps + a Vault DR-marker survived.
+3. k8s auth is now SELF-HEALING (kubernetes.default.svc host + omit token_reviewer_jwt/ca ->
+   OpenBao reads its pod SA token/CA fresh each request). NO reconfigure after rebuild. Just
+   restart ESO if it cached a failure. (VERIFIED 2nd test: ESO synced with zero manual auth steps.)
+4. Cilium + ArgoCD now auto-deploy via cloud-init (zero-touch). `make bootstrap` = fallback only.
+VERIFIED (x2): full destroy/apply recovered all 7 apps + an OpenBao DR-marker survived, with
+zero-touch bootstrap and self-healing auth (2nd test needed NO make bootstrap, NO auth reconfigure).
 
 ## Notes
 
