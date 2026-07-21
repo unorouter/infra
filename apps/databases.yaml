@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: databases
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1" # after cnpg-operator (wave -1)
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/unorouter/infra.git
+    targetRevision: main
+    path: databases
+    directory:
+      recurse: true # newapi-pg, bot-pg, redis kustomizations
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: databases
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+  # NOTE: Clusters stay Pending until the S3 secrets (newapi-pg-s3, bot-pg-s3) exist.
+  # Those come from a SOPS-encrypted file synced by the sops app (or ESO), plus the
+  # Hetzner bucket created once in the console. This app SYNCs; the DB just waits.
+  ignoreDifferences:
+    - group: postgresql.cnpg.io
+      kind: Cluster
+      jsonPointers:
+        - /spec/instances # allow manual scale without drift alarms
