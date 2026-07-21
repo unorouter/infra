@@ -21,14 +21,21 @@ gatewayAPI:
 envoy:
   securityContext:
     capabilities:
-      # required for listeners on ports <=1023 in hostNetwork mode
-      keepCapNetBindService: true
+      # datapath caps (NET_ADMIN + SYS_ADMIN) are MANDATORY or envoy crashes; keep the
+      # chart defaults and ADD NET_BIND_SERVICE for hostNetwork listeners on ports <=1023.
       envoy:
         - NET_ADMIN
+        - SYS_ADMIN
         - NET_BIND_SERVICE
+      # pass NET_BIND_SERVICE through to the actual Envoy process (sibling of `envoy`, not nested)
+      keepCapNetBindService: true
 
 hubble:
   relay:
     enabled: true
   ui:
     enabled: true
+
+
+operator:
+  replicas: 1
