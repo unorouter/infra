@@ -15,7 +15,7 @@ Renovate (P9) automates this later.
 | Barman Cloud plugin | 0.13.0 | plugin-barman-cloud | infra/cnpg-operator |
 | CNPG PostgreSQL (newapi) | 15-standard-bookworm | ghcr cloudnative-pg/postgresql | databases/newapi-pg |
 | CNPG PostgreSQL (bot) | 18-standard-bookworm | ghcr cloudnative-pg/postgresql | databases/bot-pg |
-| Vault Helm chart | 0.34.0 | hashicorp/vault-helm | helm install --version |
+| OpenBao Helm chart | 0.28.5 (app 2.6.0) | openbao/openbao-helm | apps/openbao.yaml |
 | Teleport | 18.10.0 | gravitational/teleport | helm install --version |
 | ArgoCD | 3.4.5 | argoproj/argo-cd | bootstrap/argocd |
 | External Secrets Operator | 2.8.0 (helm-chart) | external-secrets | helm install --version |

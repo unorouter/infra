@@ -1,0 +1,42 @@
+# OpenBao (LF-governed Vault fork, MPL-2.0). Drop-in for the hashicorp/vault chart.
+# Shamir manual unseal (same model as before) -- softhsm auto-unseal is available for free
+# LATER if wanted (OpenBao unlocks it without Enterprise), but not built now (complexity).
+# Standard image (no HSM build needed for Shamir).
+server:
+  image:
+    repository: quay.io/openbao/openbao
+    tag: "2.6.0"
+  ha:
+    enabled: true
+    replicas: 1
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = true
+
+        listener "tcp" {
+          address         = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_disable     = 1
+        }
+
+        storage "raft" {
+          path = "/openbao/data"
+        }
+
+        service_registration "kubernetes" {}
+
+  dataStorage:
+    enabled: true
+    size: 5Gi
+    mountPath: /openbao/data
+
+  updateStrategyType: OnDelete
+
+ui:
+  enabled: true
+
+injector:
+  # ESO is the sync path; injector not needed
+  enabled: false

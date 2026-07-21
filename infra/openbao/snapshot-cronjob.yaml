@@ -1,0 +1,76 @@
+# OpenBao raft snapshot -> Hetzner S3 (node loss wipes local-path PV; snapshot is the DR source).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-snapshot
+  namespace: openbao
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: openbao-snapshot-s3
+  namespace: openbao
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend # ClusterSecretStore (points at OpenBao; name kept for compat)
+    kind: ClusterSecretStore
+  target:
+    name: openbao-snapshot-s3
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: pg-s3
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openbao-raft-snapshot
+  namespace: openbao
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: openbao-snapshot
+          restartPolicy: OnFailure
+          containers:
+            - name: snapshot
+              image: rclone/rclone:1.74.4
+              env:
+                - name: BAO_ADDR
+                  value: http://openbao.openbao.svc:8200
+                - name: RCLONE_CONFIG_HZ_TYPE
+                  value: s3
+                - name: RCLONE_CONFIG_HZ_PROVIDER
+                  value: Ceph
+                - name: RCLONE_CONFIG_HZ_ENDPOINT
+                  value: https://fsn1.your-objectstorage.com
+                - name: RCLONE_CONFIG_HZ_ACCESS_KEY_ID
+                  valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: ACCESS_KEY_ID } }
+                - name: RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: ACCESS_SECRET_KEY } }
+                - name: RCLONE_CONFIG_HZ_REGION
+                  valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: REGION } }
+                - name: RCLONE_CONFIG_HZ_LOCATION_CONSTRAINT
+                  valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: REGION } }
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                  BAO_TOKEN=$(wget -qO- --header="Content-Type: application/json" \
+                    --post-data="{\"role\":\"snapshot\",\"jwt\":\"$JWT\"}" \
+                    "$BAO_ADDR/v1/auth/kubernetes/login" | grep -o '"client_token":"[^"]*"' | cut -d'"' -f4)
+                  TS=$(date +%Y%m%dT%H%M%S)
+                  wget -qO /tmp/openbao-$TS.snap --header="X-Vault-Token: $BAO_TOKEN" \
+                    "$BAO_ADDR/v1/sys/storage/raft/snapshot"
+                  echo "snapshot $(stat -c%s /tmp/openbao-$TS.snap) bytes -> S3"
+                  rclone copyto /tmp/openbao-$TS.snap hz:unorouter-pg-backups/openbao-snapshots/openbao-$TS.snap
+                  rclone copyto /tmp/openbao-$TS.snap hz:unorouter-pg-backups/openbao-snapshots/latest.snap
+                  echo "uploaded openbao-$TS.snap + latest.snap"
