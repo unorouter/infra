@@ -36,9 +36,9 @@ vault-unseal:
 # restore Vault data from S3 (only on a FRESH Vault after full node loss). Needs rclone env
 # (hz: remote) or set S3 creds. Vault must be initialized+unsealed first, then restore -force.
 vault-snapshot-restore:
-	@echo ">> pulling latest.snap from S3 into vault-0 and restoring (raft)"
+	@echo ">> pulling latest.snap from S3 into openbao-0 and restoring (raft)"
 	rclone copyto hz:unorouter-pg-backups/openbao-snapshots/latest.snap /tmp/vault-latest.snap
-	kubectl -n vault cp /tmp/vault-latest.snap vault-0:/tmp/latest.snap
+	kubectl -n openbao cp /tmp/vault-latest.snap openbao-0:/tmp/latest.snap
 	@echo ">> now: kubectl -n vault exec -it vault-0 -- sh -c 'VAULT_TOKEN=<root> vault operator raft snapshot restore -force /tmp/latest.snap'"
 	@echo ">> (root token: sops -d $(VAULT_SECRETS) | yq -r .root_token)"
 
