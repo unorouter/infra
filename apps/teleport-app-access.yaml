@@ -1,0 +1,48 @@
+# teleport-kube-agent (App Access) + its join-token ExternalSecrets.
+# sync-wave 3: after teleport (proxy/auth) is up and OpenBao/ESO can serve the token.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: teleport-app-access-secrets
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/unorouter/infra.git
+    targetRevision: main
+    path: infra/teleport-app-access
+    directory:
+      include: externalsecrets.yaml
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: teleport-app-access
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  sources:
+    - repoURL: https://charts.releases.teleport.dev
+      chart: teleport-kube-agent
+      targetRevision: 18.10.1
+      helm:
+        valueFiles:
+          - $values/infra/teleport-app-access/values.yaml
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: teleport-agent
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]
