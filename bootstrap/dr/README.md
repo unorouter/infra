@@ -62,27 +62,11 @@ kubectl -n databases get cluster newapi-pg bot-pg   # wait for status: Cluster i
 
 ### 3. Restore OpenBao (fresh raft) -- VERIFIED SEQUENCE (2nd destroy test 2026-07-22)
 
-A fresh OpenBao has empty raft. To restore the S3 snapshot: init with temp keys, restore,
-restart, then unseal with the ORIGINAL keys. Exact working sequence:
+A fresh OpenBao has empty raft. The restore is now ONE command (temp-init -> restore snapshot
+-> restart pod -> unseal with original keys -> ESO resync, all automated):
 
 ```
-# a. temp init (throwaway 1-of-1) just to enable restore
-kubectl -n openbao exec openbao-0 -- bao operator init -key-shares=1 -key-threshold=1 -format=json > /tmp/botmp.json
-kubectl -n openbao exec openbao-0 -- bao operator unseal $(jq -r .unseal_keys_b64[0] /tmp/botmp.json)
-
-# b. pull latest.snap from S3 + restore -force (overwrites with ORIGINAL data + keys)
-make vault-snapshot-restore   # copies latest.snap into openbao-0
-kubectl -n openbao exec openbao-0 -- sh -c "BAO_TOKEN=$(jq -r .root_token /tmp/botmp.json) bao operator raft snapshot restore -force /tmp/latest.snap"
-
-# c. RESTART the pod (MANDATORY -- restored raft loads clean only after restart, else
-#    unseal fails 'invalid key size'). The Vault-lineage quirk carries to OpenBao.
-kubectl -n openbao delete pod openbao-0    # wait for Running
-
-# d. unseal with the ORIGINAL keys (SOPS openbao-init / Bitwarden), 3 of 5
-make vault-unseal
-
-# e. self-healing k8s auth -> NO reconfigure needed. If ESO cached a failure, just bounce it:
-kubectl -n external-secrets rollout restart deploy/external-secrets
+make restore          # == ./scripts/dr.sh restore
 ```
 
 Then: `tsh login --proxy=teleport.unorouter.com` (Teleport CA regenerated -> re-login).
