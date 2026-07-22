@@ -41,6 +41,12 @@ auth:
     - name: app-join-token
       mountPath: /etc/teleport-join
       readOnly: true
+  # S3 creds for session-recording uploads (ESO secret teleport-s3)
+  extraEnv:
+    - name: AWS_ACCESS_KEY_ID
+      valueFrom: { secretKeyRef: { name: teleport-s3, key: AWS_ACCESS_KEY_ID } }
+    - name: AWS_SECRET_ACCESS_KEY
+      valueFrom: { secretKeyRef: { name: teleport-s3, key: AWS_SECRET_ACCESS_KEY } }
 
 # expose the proxy on the host network (needs the public IP for ACME + ALPN passthrough)
 service:
