@@ -80,3 +80,9 @@ spec:
       volumes:
         - name: config
           configMap: { name: cloudflared-config }
+---
+# CF ACCESS SSO (configured via CF API, not k8s - documented here):
+# - GitHub IdP added to CF Zero Trust (OAuth app "Cloudflare Access SSO", client id Ov23li3hWWBmKefWvgxj)
+# - each UI Access app policy: allow if (github-organization=unorouter) OR (email=owner, break-glass)
+# - login: argocd/hubble/openbao.unorouter.com -> CF Access -> GitHub SSO (org-gated) or email OTP
+# - IdP + policies live in Cloudflare (account 7dad953...); GitHub OAuth app is portable.
