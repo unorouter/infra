@@ -17,7 +17,7 @@ metadata:
   name: unorouter-bot
   namespace: services
 spec:
-  replicas: 0 # cutover switch: don bot down -> this to 1
+  replicas: 1 # single Discord gateway (don bot stopped at cutover)
   strategy:
     type: Recreate # never two gateways during a roll
   selector:
