@@ -40,7 +40,7 @@ spec:
         serverName: newapi-pg-v4 # ARCHIVE-TO lineage (current+1); MUST differ from restore-from
 
   # Teleport-provisioned read role. Declared here so CNPG reconciles it every DR.
-  # The options_masked view + REVOKE/GRANT ride the physical backup (schema objects) -- no hook.
+  # masking = RLS policy on options (masking.sql); re-apply after fresh don imports.
   managed:
     roles:
       - name: reader

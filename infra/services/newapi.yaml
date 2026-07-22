@@ -1,6 +1,6 @@
 # new-api gateway: master (1, runs migrations + scheduled jobs) + slaves (2, serve traffic).
 # Both share one `app: new-api` Service (master also serves, like don's Traefik WRR).
-# /data + /logs = hostPath shared across pods (single node; HA -> RWX later).
+# /data + /logs = per-pod emptyDir (verified on don: pprof dumps + rotated logs only).
 apiVersion: v1
 kind: Service
 metadata:
@@ -50,10 +50,12 @@ spec:
             httpGet: { path: /api/status, port: 3000 }
             periodSeconds: 20
       volumes:
+        # per-pod scratch: /data holds only pprof dumps, /logs rotated logfiles -- nothing
+        # shared, nothing worth surviving a pod. Kills the multi-node RWX debt entirely.
         - name: data
-          hostPath: { path: /var/lib/newapi/data, type: DirectoryOrCreate }
+          emptyDir: {}
         - name: logs
-          hostPath: { path: /var/lib/newapi/logs, type: DirectoryOrCreate }
+          emptyDir: {}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -90,10 +92,12 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
       volumes:
+        # per-pod scratch: /data holds only pprof dumps, /logs rotated logfiles -- nothing
+        # shared, nothing worth surviving a pod. Kills the multi-node RWX debt entirely.
         - name: data
-          hostPath: { path: /var/lib/newapi/data, type: DirectoryOrCreate }
+          emptyDir: {}
         - name: logs
-          hostPath: { path: /var/lib/newapi/logs, type: DirectoryOrCreate }
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
