@@ -16,9 +16,9 @@ Renovate (P9) automates this later.
 | CNPG PostgreSQL (newapi)  | 15-standard-bookworm          | ghcr cloudnative-pg/postgresql | databases/newapi-pg    |
 | CNPG PostgreSQL (bot)     | 18-standard-bookworm          | ghcr cloudnative-pg/postgresql | databases/bot-pg       |
 | OpenBao Helm chart        | 0.28.5 (app 2.6.0)            | openbao/openbao-helm           | apps/openbao.yaml      |
-| Teleport                  | 18.10.0                       | gravitational/teleport         | helm install --version |
 | ArgoCD                    | 3.4.5                         | argoproj/argo-cd               | bootstrap/argocd       |
 | External Secrets Operator | 2.8.0 (helm-chart)            | external-secrets               | helm install --version |
+| Teleport | 18.10.1 (chart teleport-cluster) | gravitational/teleport | apps/teleport.yaml |
 | Velero | 12.1.0 (app 1.18.1) + aws-plugin v1.12.1 | vmware-tanzu/velero | apps/velero.yaml |
 
 Note: earlier scaffolding pinned CNPG 1.27 / barman 0.5 from stale memory; corrected to the
