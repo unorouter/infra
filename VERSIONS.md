@@ -18,6 +18,7 @@ Renovate (P9) automates this later.
 | OpenBao Helm chart        | 0.28.5 (app 2.6.0)            | openbao/openbao-helm           | apps/openbao.yaml      |
 | ArgoCD                    | 3.4.5                         | argoproj/argo-cd               | bootstrap/argocd       |
 | External Secrets Operator | 2.8.0 (helm-chart)            | external-secrets               | helm install --version |
+| cloudflared | 2026.7.0 | cloudflare/cloudflared | apps/cloudflared.yaml |
 | Teleport | 18.10.1 (chart teleport-cluster) | gravitational/teleport | apps/teleport.yaml |
 | Velero | 12.1.0 (app 1.18.1) + aws-plugin v1.12.1 | vmware-tanzu/velero | apps/velero.yaml |
 
