@@ -4,6 +4,11 @@ metadata:
   name: bot-pg
   namespace: databases
 spec:
+  env:
+    - name: AWS_REQUEST_CHECKSUM_CALCULATION
+      value: when_required
+    - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+      value: when_required
   imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm
   instances: 1 # bump to 3 at HA
   storage:
