@@ -1,0 +1,12 @@
+# DB access role: masked reader on newapi-pg. RLS on the options table hides secret rows
+# from this role (enforced in postgres, not here). Applied via tctl create -f.
+kind: role
+version: v7
+metadata:
+  name: newapi-db-reader
+spec:
+  allow:
+    db_labels:
+      env: prod
+    db_names: ["newapi"]
+    db_users: ["reader"]

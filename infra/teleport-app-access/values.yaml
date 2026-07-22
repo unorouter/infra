@@ -1,12 +1,35 @@
 # teleport-kube-agent -- App Access only. Enrolls the internal web UIs behind Teleport SSO.
 # Reaches the proxy at its public ACME address (multiplex/ALPN). Joins with the static app
 # token from OpenBao (via ESO secret teleport-app-join, key auth-token).
-roles: app
+roles: app,db
 proxyAddr: teleport.unorouter.com:443
 # join token comes from an EXTERNAL secret (ESO -> OpenBao); chart reads key `auth-token`.
 joinTokenSecret:
   create: false
   name: teleport-kube-agent-join-token
+
+# DB access: tsh db connect newapi-pg --db-user=reader (RLS-masked role). Teleport signs a
+# per-session client cert (CN=reader); postgres trusts it via the client-CA bundle on the
+# cluster. verify-full against CNPG's server CA (synced from databases ns by ESO).
+databases:
+  - name: newapi-pg
+    uri: newapi-pg-rw.databases.svc.cluster.local:5432
+    protocol: postgres
+    static_labels:
+      env: prod
+    tls:
+      mode: verify-full
+      ca_cert_file: /etc/teleport-tls-db/newapi-pg/ca.crt
+
+extraVolumes:
+  - name: newapi-pg-server-ca
+    secret:
+      secretName: newapi-pg-server-ca
+      items: [{ key: ca.crt, path: ca.crt }]
+extraVolumeMounts:
+  - name: newapi-pg-server-ca
+    mountPath: /etc/teleport-tls-db/newapi-pg
+    readOnly: true
 
 # routing is by Host header: browser hits <public_addr>, proxy matches it to the app, forwards
 # to uri. TLS terminates at Cloudflare's edge; the cloudflared->proxy hop rides the WebSocket
