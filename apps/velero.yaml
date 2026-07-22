@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: velero
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://vmware-tanzu.github.io/helm-charts
+      chart: velero
+      targetRevision: 12.1.0
+      helm:
+        valueFiles:
+          - $values/infra/velero/values.yaml
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      path: infra/velero   # the ESO secret
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: velero
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

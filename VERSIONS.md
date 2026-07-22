@@ -19,6 +19,7 @@ Renovate (P9) automates this later.
 | Teleport                  | 18.10.0                       | gravitational/teleport         | helm install --version |
 | ArgoCD                    | 3.4.5                         | argoproj/argo-cd               | bootstrap/argocd       |
 | External Secrets Operator | 2.8.0 (helm-chart)            | external-secrets               | helm install --version |
+| Velero | 12.1.0 (app 1.18.1) + aws-plugin v1.12.1 | vmware-tanzu/velero | apps/velero.yaml |
 
 Note: earlier scaffolding pinned CNPG 1.27 / barman 0.5 from stale memory; corrected to the
 above after live upstream check.

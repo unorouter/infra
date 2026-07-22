@@ -1,0 +1,38 @@
+# Velero: catch-all cluster backup (PVCs + k8s resource state) -> Hetzner S3.
+# Fills the gap GitOps + CNPG/OpenBao snapshots don't cover (arbitrary PVC data, namespace
+# state, dynamically-created resources). node-agent (Kopia) does file-level PV backup.
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.12.1
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+# S3 creds come from the ESO-synced velero-s3 secret (key 'cloud')
+credentials:
+  existingSecret: velero-s3
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: unorouter-pg-backups
+      prefix: velero
+      config:
+        region: fsn1
+        s3ForcePathStyle: "true"   # Ceph/RadosGW needs path-style
+        s3Url: https://fsn1.your-objectstorage.com
+        checksumAlgorithm: ""      # Hetzner Ceph: disable the aws checksum header
+  volumeSnapshotLocation: []       # local-path has no CSI snapshots; use file-level (Kopia) instead
+
+# node-agent = Kopia file-level PV backup (local-path has no CSI snapshots)
+deployNodeAgent: true
+
+# daily backup of everything, keep 14 days; Kopia for PV data
+schedules:
+  daily:
+    schedule: "0 2 * * *"
+    template:
+      ttl: 336h  # 14 days
+      defaultVolumesToFsBackup: true  # Kopia file-level for all PVCs
+      storageLocation: default
