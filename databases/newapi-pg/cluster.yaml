@@ -54,6 +54,15 @@ spec:
         inRoles:
           - pg_read_all_data
 
+  # Teleport DB access: reader authenticates with a Teleport-signed client cert (CN=reader).
+  # clientCASecret ca.crt = own 10y CA (first, holds ca.key -> operator signs streaming_replica
+  # from it) + Teleport db-client CA appended. Server certs stay operator-managed.
+  certificates:
+    clientCASecret: newapi-pg-client-ca
+
   postgresql:
+    # cert rule lands AFTER CNPG's fixed streaming_replica rules, BEFORE the scram catch-all
+    pg_hba:
+      - hostssl newapi reader all cert
     parameters:
       max_connections: "200"

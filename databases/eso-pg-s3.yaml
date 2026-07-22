@@ -68,3 +68,26 @@ spec:
   dataFrom:
     - extract:
         key: newapi-pg-reader
+---
+# client CA (own CA + Teleport db-client CA bundle) for newapi-pg cert auth; pair lives in
+# OpenBao (DR). cnpg.io/reload label makes the instance reload on change.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-client-ca
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: newapi-pg-client-ca
+    creationPolicy: Owner
+    template:
+      metadata:
+        labels:
+          cnpg.io/reload: ""
+  dataFrom:
+    - extract:
+        key: newapi-pg-client-ca

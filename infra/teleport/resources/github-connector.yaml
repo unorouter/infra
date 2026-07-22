@@ -12,4 +12,4 @@ spec:
   teams_to_roles:
     - organization: unorouter
       team: admins
-      roles: ["access", "editor", "auditor"]
+      roles: ["access", "editor", "auditor", "newapi-db-reader"]
