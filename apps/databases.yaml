@@ -4,6 +4,7 @@ metadata:
   name: databases
   namespace: argocd
   annotations:
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
     argocd.argoproj.io/sync-wave: "1" # after cnpg-operator (wave -1)
 spec:
   project: default
