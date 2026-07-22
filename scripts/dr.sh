@@ -9,9 +9,9 @@ SOPS_KEYS() { sops -d secrets/openbao-init.sops.yaml | grep -oP '^\s*-\s*\K\S+';
 SOPS_ROOT() { sops -d secrets/openbao-init.sops.yaml | grep -oP '^root_token:\s*\K\S+'; }
 export KUBECONFIG="$PWD/kubeconfig"
 
-apply() { (cd tofu && set -a && . ./.env && set +a && tofu apply); }
-destroy() { (cd tofu && set -a && . ./.env && set +a && tofu destroy); }
-storage_apply() { (cd tofu/storage && set -a && . ../.env && set +a && tofu init && tofu apply); }
+apply() { (cd tofu && set -a && . ./.env && set +a && tofu apply -auto-approve); }
+destroy() { (cd tofu && set -a && . ./.env && set +a && tofu destroy -auto-approve); }
+storage_apply() { (cd tofu/storage && set -a && . ../.env && set +a && tofu init && tofu apply -auto-approve); }
 
 kubeconfig() {
   local ip; ip=$(NODE_IP); ssh-keygen -R "$ip" >/dev/null 2>&1 || true
@@ -60,7 +60,7 @@ restore() {
   echo ">> restore -force"
   kubectl -n openbao exec openbao-0 -- sh -c "BAO_TOKEN='$trt' bao operator raft snapshot restore -force /tmp/latest.snap"
   echo ">> restart pod (raft loads clean only after restart)"
-  kubectl -n openbao delete pod openbao-0 >/dev/null
+  kubectl -n openbao delete pod openbao-0 >/dev/null; sleep 8
   kubectl -n openbao wait --for=condition=Ready pod/openbao-0 --timeout=120s || sleep 15
   unseal
   echo ">> resync ESO (self-healing auth, no reconfigure)"
