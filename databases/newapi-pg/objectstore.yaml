@@ -20,9 +20,15 @@ spec:
         name: newapi-pg-s3
         key: REGION
     wal:
-      # Hetzner S3 is Ceph/RadosGW: compress WALs (optimized for ~1MB+ objects) + path style.
       compression: gzip
     data:
       compression: gzip
-    # Ceph checksum workaround (boto3 x-amz-content-sha256 on RadosGW) applied via the
-    # plugin's additionalCommandArgs on the Cluster (--addressing-style path); see cluster.yaml.
+  # boto3 >=1.36 attaches x-amz-checksum headers Ceph/RadosGW rejects on MULTIPART uploads:
+  # WAL (single-part) archives fine, the base backup (multipart) hangs forever. These env vars
+  # revert to legacy checksum behavior. Runs in the barman plugin sidecar. (EDB/barman#1057)
+  instanceSidecarConfiguration:
+    env:
+      - name: AWS_REQUEST_CHECKSUM_CALCULATION
+        value: when_required
+      - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+        value: when_required

@@ -21,3 +21,11 @@ spec:
       compression: gzip
     data:
       compression: gzip
+  # boto3 >=1.36 checksum headers hang Ceph multipart uploads (see newapi-pg-store). bot is
+  # small so it slipped through single-part, but set it here too for consistency + growth.
+  instanceSidecarConfiguration:
+    env:
+      - name: AWS_REQUEST_CHECKSUM_CALCULATION
+        value: when_required
+      - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+        value: when_required
