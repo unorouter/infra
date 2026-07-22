@@ -94,3 +94,33 @@ zero-touch bootstrap and self-healing auth (2nd test needed NO make bootstrap, N
   `bootstrap.recovery.recoveryTarget.targetTime` before the apply, then remove it after.
 - TEST the full destroy/apply/restore cycle on a THROWAWAY cluster before trusting it on
   revenue (CNPG#6645 Hetzner-restore is a known sharp edge -- hard gate).
+
+## Full-DR test findings (2026-07-22, destroy -> apply -> restore, PASSED)
+
+Verified end to end: node rebuild (fsn1, new IP), zero-touch cloud-init bootstrap, 14 apps
+reconciled, OpenBao snapshot restore + unseal, ESO resync, BOTH CNPG clusters restored from
+S3 (base + WAL replay incl post-backup writes; users=8531 exact), services 200 via tunnel,
+Dex SSO, Teleport App/DB access. Extra steps the happy path needs:
+
+1. **Pre-destroy: force a fresh OpenBao snapshot** (`kubectl -n openbao create job
+   --from=cronjob/openbao-raft-snapshot ...`). The 6h cron can be older than recent
+   secret rotations; restoring a stale snapshot resurrects dead credentials.
+2. **CNPG lineage bump**: restore-from = last archive lineage, archive-to = +1 (committed
+   BEFORE destroy; bootstrap.recovery is create-time-only).
+3. **New node IP**: update `infra/teleport/values.yaml` externalIPs + the grey-cloud
+   `teleport.unorouter.com` A record. Tunnel-routed hosts follow automatically.
+4. **Teleport is stateless by design (fresh SQLite)**: reapply
+   `infra/teleport/resources/*.yaml` (github connector needs client_secret injected from
+   OpenBao `teleport-github`); users `tsh login` again.
+5. **Teleport db-client CA is regenerated** -> rebuild `newapi-pg-client-ca` bundle:
+   own CA cert (first block, key unchanged in OpenBao) + fresh
+   `tctl auth export --type=db-client`. ESO resyncs, cnpg.io/reload reloads postgres.
+   NOTE: ca.key must be SEC1 ("BEGIN EC PRIVATE KEY"); CNPG rejects PKCS8.
+6. **masking.sql** re-apply after any fresh don import (don has no RLS); after pure
+   S3 recovery it rides the backup.
+7. **Races that self-heal**: CNPG recovery jobs may fail until ESO delivers the S3
+   secrets (operator retries); velero can deadlock its first sync waiting on the
+   DaemonSet whose secret its own sync creates -- clear operation + refresh.
+8. **Hetzner Ceph**: boto3>=1.36 checksum headers hang multipart base backups
+   (AWS_*_CHECKSUM_*=when_required in Cluster.spec.env fixes; WAL unaffected).
+   A healthy 1GB backup takes ~15 min and logs NOTHING at default level (-vv shows parts).
