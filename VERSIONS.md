@@ -24,3 +24,5 @@ Renovate (P9) automates this later.
 
 Note: earlier scaffolding pinned CNPG 1.27 / barman 0.5 from stale memory; corrected to the
 above after live upstream check.
+| dex | v2.45.1 | ghcr.io/dexidp/dex | cluster OIDC IdP (GitHub -> argocd/openbao) |
+| teleport-kube-agent | 18.10.1 | charts.releases.teleport.dev | App+DB access agent |
