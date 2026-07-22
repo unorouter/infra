@@ -74,7 +74,10 @@ spec:
       containers:
         - name: mcp
           image: node:22-alpine
-          command: [npx, -y, unorouter-mcp@latest]
+          command: [npx, -y, --package=unorouter-mcp@0.2.1, unorouter-mcp-http]
+          env:
+            - name: PORT
+              value: "3000"
           ports:
             - containerPort: 3000
           readinessProbe:
