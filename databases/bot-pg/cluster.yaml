@@ -22,4 +22,4 @@ spec:
       isWALArchiver: true
       parameters:
         barmanObjectName: bot-pg-store
-        serverName: bot-pg-v2 # ARCHIVE-TO (current+1); MUST differ
+        serverName: bot-pg-v3 # ARCHIVE-TO (current+1); MUST differ
