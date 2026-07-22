@@ -32,8 +32,8 @@ restore: dr-verify vault-unseal
 	@echo ">> Then re-login to Teleport:  tsh login --proxy=teleport.unorouter.com"
 
 vault-unseal:
-	@echo ">> unsealing Vault from $(VAULT_SECRETS)"
-	@for k in $$(sops -d $(VAULT_SECRETS) | yq -r '.unseal_keys[]'); do \
+	@echo ">> unsealing OpenBao from $(VAULT_SECRETS)"
+	@for k in $$(sops -d $(VAULT_SECRETS) | python3 -c "import sys,re; [print(m) for m in re.findall(r'^\s*-\s*(\S+)', sys.stdin.read(), re.M)]"); do \
 		kubectl -n openbao exec openbao-0 -- bao operator unseal "$$k"; \
 	done
 	@kubectl -n openbao exec openbao-0 -- bao status | grep Sealed
