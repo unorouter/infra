@@ -33,8 +33,11 @@ spec:
             - secretRef: { name: bot-env }
           ports:
             - containerPort: 4000
-          # no /healthz yet (source change pending); TCP on the webhook port
           readinessProbe:
-            tcpSocket: { port: 4000 }
+            httpGet: { path: /health, port: 4000 }
             initialDelaySeconds: 10
             periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 4000 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
