@@ -37,7 +37,7 @@ spec:
       isWALArchiver: true
       parameters:
         barmanObjectName: newapi-pg-store
-        serverName: newapi-pg-v2 # ARCHIVE-TO lineage (current+1); MUST differ from restore-from
+        serverName: newapi-pg-v3 # ARCHIVE-TO lineage (current+1); MUST differ from restore-from
 
   # Teleport-provisioned read role. Declared here so CNPG reconciles it every DR.
   # The options_masked view + REVOKE/GRANT ride the physical backup (schema objects) -- no hook.

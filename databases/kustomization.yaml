@@ -6,4 +6,3 @@ resources:
   - eso-pg-s3.yaml
   - newapi-pg
   - bot-pg
-  - redis
