@@ -1,0 +1,33 @@
+# teleport-kube-agent -- App Access only. Enrolls the internal web UIs behind Teleport SSO.
+# Reaches the proxy at its public ACME address (multiplex/ALPN). Joins with the static app
+# token from OpenBao (via ESO secret teleport-app-join, key auth-token).
+roles: app
+proxyAddr: teleport.unorouter.com:443
+authTokenSecretName: teleport-app-join
+
+# routing is by Host header: browser hits <public_addr>, proxy matches it to the app, forwards
+# to uri. TLS terminates at Cloudflare's edge; the cloudflared->proxy hop rides the WebSocket
+# upgrade so the proxy needs NO per-app/wildcard cert (only its own teleport.unorouter.com cert).
+apps:
+  - name: argocd
+    uri: http://argo-cd-argocd-server.argocd.svc.cluster.local:80
+    public_addr: argocd-tp.unorouter.com
+    labels: { env: internal }
+    rewrite:
+      redirect:
+        - argo-cd-argocd-server.argocd.svc.cluster.local
+  - name: hubble
+    uri: http://hubble-ui.kube-system.svc.cluster.local:80
+    public_addr: hubble-tp.unorouter.com
+    labels: { env: internal }
+  - name: openbao
+    uri: http://openbao.openbao.svc.cluster.local:8200   # tls_disable in this deploy
+    public_addr: openbao-tp.unorouter.com
+    labels: { env: internal }
+    rewrite:
+      redirect:
+        - openbao.openbao.svc.cluster.local
+
+# single node, no HA yet
+highAvailability:
+  replicaCount: 1

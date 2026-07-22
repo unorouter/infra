@@ -22,11 +22,25 @@ persistence:
   storageClassName: local-path
 
 # session recordings -> S3 (node-independent, survives node loss). Audit events stay on SQLite.
+# static app-join token (file-based) lets the in-cluster teleport-kube-agent (App Access) join
+# without a short-lived tctl step -- reproducible on every DR. Secret value from OpenBao via ESO,
+# mounted into the auth pod; same value reaches the agent as its authToken (single source).
 auth:
   teleportConfig:
     teleport:
       storage:
         audit_sessions_uri: "s3://unorouter-pg-backups/teleport-recordings?endpoint=fsn1.your-objectstorage.com&region=fsn1"
+    auth_service:
+      tokens:
+        - "app:/etc/teleport-join/token"
+  extraVolumes:
+    - name: app-join-token
+      secret:
+        secretName: teleport-app-join
+  extraVolumeMounts:
+    - name: app-join-token
+      mountPath: /etc/teleport-join
+      readOnly: true
 
 # expose the proxy on the host network (needs the public IP for ACME + ALPN passthrough)
 service:

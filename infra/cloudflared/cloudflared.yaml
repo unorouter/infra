@@ -34,13 +34,21 @@ data:
     # tunnel run reads token from env; ingress rules here (locally-managed config)
     metrics: 0.0.0.0:2000
     no-autoupdate: true
+    # Internal UIs now front through Teleport App Access (GitHub SSO), NOT CF Access.
+    # All *-tp hosts point at the SAME proxy origin; Teleport routes by Host header to the app
+    # whose public_addr matches. noTLSVerify: proxy serves its own teleport.unorouter.com cert
+    # on this in-cluster hop (edge TLS already terminated at Cloudflare). Do NOT set
+    # httpHostHeader -- the original Host is what selects the app.
     ingress:
-      - hostname: argocd.unorouter.com
-        service: http://argo-cd-argocd-server.argocd.svc:80
-      - hostname: hubble.unorouter.com
-        service: http://hubble-ui.kube-system.svc:80
-      - hostname: openbao.unorouter.com
-        service: http://openbao.openbao.svc:8200
+      - hostname: argocd-tp.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: hubble-tp.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: openbao-tp.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
       - service: http_status:404
 ---
 apiVersion: apps/v1
@@ -81,8 +89,9 @@ spec:
         - name: config
           configMap: { name: cloudflared-config }
 ---
-# CF ACCESS SSO (configured via CF API, not k8s - documented here):
-# - GitHub IdP added to CF Zero Trust (OAuth app "Cloudflare Access SSO", client id Ov23li3hWWBmKefWvgxj)
-# - each UI Access app policy: allow if (github-organization=unorouter) OR (email=owner, break-glass)
-# - login: argocd/hubble/openbao.unorouter.com -> CF Access -> GitHub SSO (org-gated) or email OTP
-# - IdP + policies live in Cloudflare (account 7dad953...); GitHub OAuth app is portable.
+# SSO: internal UIs are gated by TELEPORT App Access (GitHub connector), not CF Access.
+# - hosts argocd-tp / hubble-tp / openbao-tp .unorouter.com -> tunnel -> teleport proxy -> app.
+# - Teleport GitHub SSO (org unorouter, team admins) is the gate; one pane like the work setup.
+# - CF Access apps + the "Cloudflare Access SSO" GitHub OAuth app on these hosts are RETIRED
+#   (removed via CF API). Cloudflare here is only the tunnel (IP hiding), not the auth layer.
+# - the flat *-tp naming keeps CF free Universal SSL (*.unorouter.com) valid at the edge (no ACM).
