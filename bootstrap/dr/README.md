@@ -134,6 +134,22 @@ don is protected by `max_slot_wal_keep_size` (10GB newapi / 2GB bot): if k3s sta
 than the cap, the slot is invalidated (don unaffected) -- re-init = truncate mirror tables
 (NOT secret_keys) + recreate the subscription with copy_data=true.
 
+### CUTOVER EXECUTED 2026-07-23 ~01:05-01:15 CEST (procedure below kept for reference)
+
+k3s is production now. don revenue containers are COLD (new-api scaled 0, bot stopped;
+unorouter/mcp/redis/postgres still running but receive no traffic). DNS: specific records
+api/www/status/bot/mcp + apex -> k3s tunnel; don wildcard remains for postiz/debug.
+Rollback within ~1wk = revert those DNS records + rescale don services (data written on
+k3s after cutover would be lost -- reverse-replicate first if >minutes of traffic).
+
+Gotcha hit at cutover: bot reads ONLY `DATABASE_URL` (src/lib/db.ts), the POSTGRES_* parts
+in bot-env are decoration -> added DATABASE_URL to OpenBao `secret/bot-env` pointing at
+bot-pg-rw. Sequences setval'd from don, subscriptions dropped (slots removed on don too).
+
+Post-cutover queue: after ~1wk stable -> stop remaining don unorouter containers, close
+don's public 5439/5442 port mappings, retire pgbackup sidecars/Duplicati dirs for migrated
+DBs, rotate don sudo password.
+
 ### Cutover procedure (minutes, not a freeze-window)
 1. Stop don writers: `docker service scale newapi_newapi-master=0 newapi_newapi-slave=0`
    + stop don bot container.
