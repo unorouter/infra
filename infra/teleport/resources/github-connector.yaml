@@ -1,0 +1,15 @@
+# GitHub SSO connector. client_secret comes from OpenBao (secret/teleport-github), applied
+# via tctl (not committed). teams_to_roles maps org teams -> teleport roles.
+# Client ID is public. Apply: tctl create -f (with secret injected).
+kind: github
+version: v3
+metadata:
+  name: github
+spec:
+  client_id: Ov23li6rNPrZg3tJr1v5
+  # client_secret: <from OpenBao secret/teleport-github, injected at apply time>
+  redirect_url: https://teleport.unorouter.com/v1/webapi/github/callback
+  teams_to_roles:
+    - organization: unorouter
+      team: admins
+      roles: ["access", "editor", "auditor"]
