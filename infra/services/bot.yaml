@@ -1,5 +1,5 @@
-# Discord bot: SINGLE gateway connection -- replicas stays 0 until cutover (don bot must
-# stop first, else duplicate event handling). Scale to 1 at flip: stop don bot -> scale here.
+# Discord bot: SINGLE gateway connection -- never more than 1 replica (duplicate event
+# handling otherwise). Recreate strategy keeps that true during rollouts.
 apiVersion: v1
 kind: Service
 metadata:
