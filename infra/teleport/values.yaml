@@ -31,6 +31,9 @@ auth:
 # expose the proxy on the host network (needs the public IP for ACME + ALPN passthrough)
 service:
   type: ClusterIP
+  spec:
+    externalIPs:
+      - "46.224.153.131"   # single bare node: route node-public-IP:443 to the proxy (no cloud LB)
 proxy:
   # hostNetwork so :443 binds the node public IP directly (grey-cloud DNS points here)
   annotations: {}
