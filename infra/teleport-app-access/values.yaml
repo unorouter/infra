@@ -13,8 +13,9 @@ joinTokenSecret:
 # upgrade so the proxy needs NO per-app/wildcard cert (only its own teleport.unorouter.com cert).
 apps:
   - name: argocd
-    uri: http://argo-cd-argocd-server.argocd.svc.cluster.local:80
+    uri: https://argo-cd-argocd-server.argocd.svc.cluster.local:443  # https to stop the 80->443 self-redirect loop
     public_addr: argocd-tp.unorouter.com
+    insecure_skip_verify: true   # argocd-server self-signed TLS
     labels: { env: internal }
     rewrite:
       redirect:
