@@ -1,0 +1,83 @@
+# unorouter (Next.js BFF). NEXT_PUBLIC_* baked at build; server env at runtime wins over the
+# image's .env (dotenv semantics). PRIVATE image (build bakes secrets) -> ghcr-pull.
+apiVersion: v1
+kind: Service
+metadata:
+  name: unorouter
+  namespace: services
+spec:
+  selector: { app: unorouter }
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unorouter
+  namespace: services
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: unorouter }
+  template:
+    metadata:
+      labels: { app: unorouter }
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: unorouter
+          image: ghcr.io/unorouter/unorouter:latest
+          envFrom:
+            - secretRef: { name: unorouter-env }
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet: { path: /api/ops/health, port: 3000 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /api/ops/health, port: 3000 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+---
+# mcp: stateless npx package, no secrets
+apiVersion: v1
+kind: Service
+metadata:
+  name: unorouter-mcp
+  namespace: services
+spec:
+  selector: { app: unorouter-mcp }
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unorouter-mcp
+  namespace: services
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: unorouter-mcp }
+  template:
+    metadata:
+      labels: { app: unorouter-mcp }
+    spec:
+      containers:
+        - name: mcp
+          image: node:22-alpine
+          command: [npx, -y, unorouter-mcp@latest]
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10

@@ -1,0 +1,124 @@
+# new-api gateway: master (1, runs migrations + scheduled jobs) + slaves (2, serve traffic).
+# Both share one `app: new-api` Service (master also serves, like don's Traefik WRR).
+# /data + /logs = hostPath shared across pods (single node; HA -> RWX later).
+apiVersion: v1
+kind: Service
+metadata:
+  name: new-api
+  namespace: services
+spec:
+  selector: { app: new-api }
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: new-api-master
+  namespace: services
+spec:
+  replicas: 1 # HARD singleton: DB migrations + scheduled jobs gate on master
+  selector:
+    matchLabels: { app: new-api, tier: master }
+  template:
+    metadata:
+      labels: { app: new-api, tier: master }
+    spec:
+      containers:
+        - name: new-api
+          image: ghcr.io/unorouter/new-api:latest
+          envFrom:
+            - secretRef: { name: newapi-env }
+          # NODE_TYPE empty in the env secret => master
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: logs, mountPath: /logs }
+          readinessProbe:
+            httpGet: { path: /api/status, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/status, port: 3000 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: data
+          hostPath: { path: /var/lib/newapi/data, type: DirectoryOrCreate }
+        - name: logs
+          hostPath: { path: /var/lib/newapi/logs, type: DirectoryOrCreate }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: new-api-slave
+  namespace: services
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: new-api, tier: slave }
+  template:
+    metadata:
+      labels: { app: new-api, tier: slave }
+    spec:
+      containers:
+        - name: new-api
+          image: ghcr.io/unorouter/new-api:latest
+          envFrom:
+            - secretRef: { name: newapi-env }
+          env:
+            - name: NODE_TYPE
+              value: slave
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: logs, mountPath: /logs }
+          readinessProbe:
+            httpGet: { path: /api/status, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/status, port: 3000 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: data
+          hostPath: { path: /var/lib/newapi/data, type: DirectoryOrCreate }
+        - name: logs
+          hostPath: { path: /var/lib/newapi/logs, type: DirectoryOrCreate }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: newapi-redis
+  namespace: services
+spec:
+  selector: { app: newapi-redis }
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+# cache only (sessions/rate-limit): ephemeral, no persistence to migrate
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: newapi-redis
+  namespace: services
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: newapi-redis }
+  template:
+    metadata:
+      labels: { app: newapi-redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            tcpSocket: { port: 6379 }

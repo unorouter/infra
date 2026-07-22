@@ -1,0 +1,40 @@
+# Discord bot: SINGLE gateway connection -- replicas stays 0 until cutover (don bot must
+# stop first, else duplicate event handling). Scale to 1 at flip: stop don bot -> scale here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: unorouter-bot
+  namespace: services
+spec:
+  selector: { app: unorouter-bot }
+  ports:
+    - port: 4000
+      targetPort: 4000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unorouter-bot
+  namespace: services
+spec:
+  replicas: 0 # cutover switch: don bot down -> this to 1
+  strategy:
+    type: Recreate # never two gateways during a roll
+  selector:
+    matchLabels: { app: unorouter-bot }
+  template:
+    metadata:
+      labels: { app: unorouter-bot }
+    spec:
+      containers:
+        - name: bot
+          image: ghcr.io/unorouter/unorouter-bot:latest
+          envFrom:
+            - secretRef: { name: bot-env }
+          ports:
+            - containerPort: 4000
+          # no /healthz yet (source change pending); TCP on the webhook port
+          readinessProbe:
+            tcpSocket: { port: 4000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
