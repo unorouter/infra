@@ -15,16 +15,21 @@ spec:
     size: 10Gi
     storageClass: local-path
 
-  # FIRST BOOT: initdb (don is source of truth; data imported via pg_dump). Matches don's
-  # db/user so DSNs are unchanged. DR mode (recovery from S3) = post-cutover, see newapi-pg.
+  # DR MODE: create-time-only recovery from S3 (see newapi-pg for the lineage mechanics).
   bootstrap:
-    initdb:
-      database: unorouter-bot-db
-      owner: unorouter
+    recovery:
+      source: bot-pg-origin
+  externalClusters:
+    - name: bot-pg-origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: bot-pg-store
+          serverName: bot-pg-v3 # RESTORE-FROM (current archive)
 
   plugins:
     - name: barman-cloud.cloudnative-pg.io
       isWALArchiver: true
       parameters:
         barmanObjectName: bot-pg-store
-        serverName: bot-pg-v3 # ARCHIVE-TO (current+1); MUST differ
+        serverName: bot-pg-v4 # ARCHIVE-TO (current+1); MUST differ from restore-from
