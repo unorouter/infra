@@ -3,7 +3,10 @@
 # token from OpenBao (via ESO secret teleport-app-join, key auth-token).
 roles: app
 proxyAddr: teleport.unorouter.com:443
-authTokenSecretName: teleport-app-join
+# join token comes from an EXTERNAL secret (ESO -> OpenBao); chart reads key `auth-token`.
+joinTokenSecret:
+  create: false
+  name: teleport-kube-agent-join-token
 
 # routing is by Host header: browser hits <public_addr>, proxy matches it to the app, forwards
 # to uri. TLS terminates at Cloudflare's edge; the cloudflared->proxy hop rides the WebSocket
