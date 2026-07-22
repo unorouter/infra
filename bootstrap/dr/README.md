@@ -124,3 +124,25 @@ Dex SSO, Teleport App/DB access. Extra steps the happy path needs:
 8. **Hetzner Ceph**: boto3>=1.36 checksum headers hang multipart base backups
    (AWS_*_CHECKSUM_*=when_required in Cluster.spec.env fixes; WAL unaffected).
    A healthy 1GB backup takes ~15 min and logs NOTHING at default level (-vv shows parts).
+
+## Standing logical replication (don -> CNPG, pre-cutover)
+
+don streams every write live into the k3s clusters (subscription `don_sync` on both DBs;
+publications `k3s_pub` on don, `wal_level=logical`). Mirror lag is ~0; runs indefinitely.
+k3s new-api is PARKED (replicas 0 in git) so nothing else writes the mirrored tables.
+don is protected by `max_slot_wal_keep_size` (10GB newapi / 2GB bot): if k3s stalls longer
+than the cap, the slot is invalidated (don unaffected) -- re-init = truncate mirror tables
+(NOT secret_keys) + recreate the subscription with copy_data=true.
+
+### Cutover procedure (minutes, not a freeze-window)
+1. Stop don writers: `docker service scale newapi_newapi-master=0 newapi_newapi-slave=0`
+   + stop don bot container.
+2. Wait lag=0 (compare `count(*) FROM logs` both sides; it converges in seconds).
+3. Sequences are NOT replicated: sync them --
+   on mirror: `SELECT format('SELECT setval(%L, %s);', S.relname, last_value) ...`
+   (script: for each sequence on don, `setval` same value on the mirror; both DBs).
+4. Drop subscriptions: `DROP SUBSCRIPTION don_sync;` (both DBs).
+5. Un-park k3s: restore replicas (master 1, slaves 2) in services/newapi.yaml, bot 1; push.
+6. Flip DNS to the tunnel: api / unorouter+www+status / mcp / bot hostnames -> tunnel CNAME
+   + add the hostnames to cloudflared ingress. Purge CF cache for unorouter.com.
+7. Watch relay success + /api/status; don stays cold-intact for instant DNS rollback.
