@@ -9,3 +9,4 @@ kubeconfig*
 .env
 tofu/storage/.terraform/
 tofu/storage/terraform.tfstate*
+BITWARDEN-*.txt
