@@ -1,13 +1,17 @@
--- options secret-value masking for the Teleport `reader` role (new-api options table).
--- Apply ONCE after the initial don->CNPG data migration (P2). On DR this rides the physical
--- S3 backup and comes back automatically -- re-running is idempotent/harmless.
+-- options secret-value hiding for the Teleport `reader` role (new-api options table).
+-- Apply ONCE after the don->CNPG data import (P2). Idempotent. Rides the physical S3 backup
+-- on DR (schema object) -- no re-run needed after restore.
 --
--- Model: reader sees every row; `value` shows '****' for secret keys, real for config keys.
--- Enforcement = owner-rights security-barrier view + revoked base table. App/owner unaffected.
--- Scope: defends against the Teleport `reader` role only; owner/superuser still read plaintext
--- (true fix = move the secret into Vault; P9). See plan "DB secret-value hiding" section.
+-- MODEL: Row Level Security (NOT a view, NOT column REVOKE). Verified on real data.
+-- reader has pg_read_all_data (browses users/channels/etc normally) BUT an RLS policy on
+-- `options` hides the secret-key ROWS. pg_read_all_data does NOT bypass RLS (only a BYPASSRLS
+-- role does, which reader must never have). App/owner bypasses RLS as table owner -> sees all.
+--
+-- WHY NOT the earlier view+REVOKE: pg_read_all_data SILENTLY BYPASSES table REVOKEs, so a
+-- REVOKE SELECT ON options leaked the real value via the base table. RLS is bypass-proof.
+-- Scope: defends against the Teleport reader role only; superuser/BYPASSRLS still read all.
 
--- secret key list (edit here, not in the view DDL)
+-- secret key list (edit here; the RLS policy reads it live)
 CREATE TABLE IF NOT EXISTS secret_keys (key text PRIMARY KEY);
 INSERT INTO secret_keys (key) VALUES
   ('CreemApiKey'), ('CreemWebhookSecret'), ('discord.client_secret'),
@@ -16,18 +20,8 @@ INSERT INTO secret_keys (key) VALUES
   ('StripeApiSecret'), ('StripeWebhookSecret'), ('TurnstileSecretKey')
 ON CONFLICT DO NOTHING;
 
-CREATE OR REPLACE VIEW options_masked WITH (security_barrier = true) AS
-SELECT
-  o.key,
-  CASE WHEN EXISTS (SELECT 1 FROM secret_keys s WHERE s.key = o.key)
-       THEN '****'
-       ELSE o.value
-  END AS value
-FROM options o;
-
--- reader reaches ONLY the view; base table + secret_keys revoked. (reader role itself is
--- reconciled by CNPG managed.roles; here we bind privileges.)
-REVOKE ALL ON options FROM PUBLIC;
-REVOKE ALL ON secret_keys FROM PUBLIC;
-REVOKE SELECT ON options FROM reader;
-GRANT SELECT ON options_masked TO reader;
+-- RLS: reader sees every options row EXCEPT the secret keys. Owner/app unaffected.
+ALTER TABLE options ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS reader_hide_secrets ON options;
+CREATE POLICY reader_hide_secrets ON options FOR SELECT TO reader
+  USING (key NOT IN (SELECT key FROM secret_keys));

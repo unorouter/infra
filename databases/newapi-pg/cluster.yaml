@@ -46,10 +46,13 @@ spec:
       - name: reader
         login: true
         # password from a Secret; Teleport maps the low-trust GitHub team -> this db-user.
+        # pg_read_all_data = browse all tables (users/channels/etc). Secret option VALUES are
+        # hidden by an RLS policy on `options` (masking.sql) which pg_read_all_data does NOT
+        # bypass. reader must NEVER get BYPASSRLS (that WOULD defeat it). Verified on real data.
         passwordSecret:
           name: newapi-pg-reader
         inRoles:
-          - pg_read_all_data # broad read; the masking view + REVOKE on `options` still hides secrets
+          - pg_read_all_data
 
   postgresql:
     parameters:
