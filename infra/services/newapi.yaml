@@ -18,7 +18,7 @@ metadata:
   name: new-api-master
   namespace: services
 spec:
-  replicas: 0 # REPLICATION PHASE: parked while don streams into CNPG (cutover scales to 1)
+  replicas: 1 # singleton: runs migrations + scheduled jobs (IsMasterNode)
   selector:
     matchLabels: { app: new-api, tier: master }
   template:
@@ -63,7 +63,7 @@ metadata:
   name: new-api-slave
   namespace: services
 spec:
-  replicas: 0 # REPLICATION PHASE: parked (cutover scales to 2)
+  replicas: 2
   selector:
     matchLabels: { app: new-api, tier: slave }
   template:
