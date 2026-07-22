@@ -17,34 +17,27 @@ spec:
     size: 20Gi
     storageClass: local-path
 
-  # --- FIRST BOOT: initdb (don is still the source of truth; data imported via pg_dump). ---
-  # Matches don's db/user (newapi/newapi) so DSNs are unchanged. Re-import cycle = drop the
-  # cluster + resync (fresh initdb) while don stays live as the safety net.
+  # --- DR MODE: recovery is create-time-only (inert on a running cluster). On every fresh
+  # cluster create this RESTORES from S3 (latest; add recoveryTarget.targetTime for PITR).
+  # On each DR event bump the lineage PAIR: restore-from = last archive, archive-to = +1.
+  # (initdb era over: CNPG's own S3 backups are the source of truth now.)
   bootstrap:
-    initdb:
-      database: newapi
-      owner: newapi
-
-  # --- DR MODE (post-cutover, when don is retired and CNPG's OWN S3 backups are the source).
-  # Swap bootstrap.initdb above for bootstrap.recovery below, then bump the serverName lineage
-  # (restore FROM current, archive TO next). Omit recoveryTarget => latest; add targetTime => PITR.
-  # bootstrap:
-  #   recovery:
-  #     source: newapi-pg-origin
-  # externalClusters:
-  #   - name: newapi-pg-origin
-  #     plugin:
-  #       name: barman-cloud.cloudnative-pg.io
-  #       parameters:
-  #         barmanObjectName: newapi-pg-store
-  #         serverName: newapi-pg-v1 # RESTORE-FROM lineage (current)
+    recovery:
+      source: newapi-pg-origin
+  externalClusters:
+    - name: newapi-pg-origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: newapi-pg-store
+          serverName: newapi-pg-v3 # RESTORE-FROM lineage (current archive)
 
   plugins:
     - name: barman-cloud.cloudnative-pg.io
       isWALArchiver: true
       parameters:
         barmanObjectName: newapi-pg-store
-        serverName: newapi-pg-v3 # ARCHIVE-TO lineage (current+1); MUST differ from restore-from
+        serverName: newapi-pg-v4 # ARCHIVE-TO lineage (current+1); MUST differ from restore-from
 
   # Teleport-provisioned read role. Declared here so CNPG reconciles it every DR.
   # The options_masked view + REVOKE/GRANT ride the physical backup (schema objects) -- no hook.

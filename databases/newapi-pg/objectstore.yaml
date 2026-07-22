@@ -23,11 +23,10 @@ spec:
       compression: gzip
     data:
       compression: gzip
-      # Hetzner Ceph stalls the default multipart upload even with checksums off; force a
-      # smaller explicit chunk + path-style addressing so RadosGW completes the parts.
+      # -vv: barman logs at WARNING by default = a healthy 15-min 1GB upload is SILENT and
+      # indistinguishable from a hang. Debug logging shows per-part progress.
       additionalCommandArgs:
-        - "--min-chunk-size=5MB"
-        - "--read-timeout=300"
+        - "-vv"
   # boto3 >=1.36 attaches x-amz-checksum headers Ceph/RadosGW rejects on MULTIPART uploads:
   # WAL (single-part) archives fine, the base backup (multipart) hangs forever. These env vars
   # revert to legacy checksum behavior. Runs in the barman plugin sidecar. (EDB/barman#1057)
