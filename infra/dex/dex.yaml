@@ -1,0 +1,118 @@
+# Dex -- the cluster's mini OIDC IdP (wraps GitHub OAuth into real OIDC).
+# argocd + openbao point their OIDC login at it => one GitHub session, no app passwords.
+# Public via the tunnel at dex.unorouter.com (IdPs are meant to be public; auth happens at
+# GitHub, org-gated to unorouter/admins). Stateless (memory storage): restart = re-click,
+# nothing to back up, nothing extra on DR.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dex
+  namespace: dex
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: dex-env
+  namespace: dex
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: dex-env
+    creationPolicy: Owner
+  data:
+    - secretKey: GITHUB_CLIENT_ID
+      remoteRef: { key: dex-sso, property: githubClientId }
+    - secretKey: GITHUB_CLIENT_SECRET
+      remoteRef: { key: dex-sso, property: githubClientSecret }
+    - secretKey: ARGOCD_CLIENT_SECRET
+      remoteRef: { key: dex-sso, property: argocdClientSecret }
+    - secretKey: OPENBAO_CLIENT_SECRET
+      remoteRef: { key: dex-sso, property: openbaoClientSecret }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex-config
+  namespace: dex
+data:
+  # official image gomplate-templates *.yaml args -> {{ .Env.X }} pulls from the env secret
+  config.yaml: |
+    issuer: https://dex.unorouter.com
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:5556
+    oauth2:
+      skipApprovalScreen: true
+    connectors:
+      - type: github
+        id: github
+        name: GitHub
+        config:
+          clientID: "{{ .Env.GITHUB_CLIENT_ID }}"
+          clientSecret: "{{ .Env.GITHUB_CLIENT_SECRET }}"
+          redirectURI: https://dex.unorouter.com/callback
+          orgs:
+            - name: unorouter
+              teams: [admins]
+          teamNameField: slug
+    staticClients:
+      - id: argocd
+        name: ArgoCD
+        redirectURIs:
+          - https://argocd-tp.unorouter.com/auth/callback
+        secret: "{{ .Env.ARGOCD_CLIENT_SECRET }}"
+      - id: openbao
+        name: OpenBao
+        redirectURIs:
+          - https://openbao-tp.unorouter.com/ui/vault/auth/oidc/oidc/callback
+          - http://localhost:8250/oidc/callback
+        secret: "{{ .Env.OPENBAO_CLIENT_SECRET }}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  replicas: 1 # memory storage => keep 1 (sessions are node-local)
+  selector:
+    matchLabels: { app: dex }
+  template:
+    metadata:
+      labels: { app: dex }
+    spec:
+      serviceAccountName: dex
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.45.1
+          command: [docker-entrypoint, dex, serve, /etc/dex/cfg/config.yaml]
+          envFrom:
+            - secretRef: { name: dex-env }
+          ports:
+            - containerPort: 5556
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dex/cfg
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: 5556 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap: { name: dex-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  selector: { app: dex }
+  ports:
+    - port: 5556
+      targetPort: 5556

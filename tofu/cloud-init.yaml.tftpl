@@ -77,6 +77,19 @@ write_files:
           crds:
             install: true
             keep: false
+          configs:
+            cm:
+              url: https://argocd-tp.unorouter.com
+              oidc.config: |
+                name: GitHub
+                issuer: https://dex.unorouter.com
+                clientID: argocd
+                clientSecret: $argocd-dex-sso:argocdClientSecret
+                requestedScopes: [openid, profile, email, groups]
+            rbac:
+              policy.csv: |
+                g, unorouter:admins, role:admin
+              scopes: "[groups, email]"
 
   - path: /var/lib/rancher/k3s/server/manifests/root-app.yaml
     permissions: "0644"
