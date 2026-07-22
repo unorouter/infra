@@ -1,0 +1,82 @@
+# Cloudflare Tunnel (cloudflared) - outbound-only edge entry. Hides node IP, no inbound ports.
+# Routes internal UIs (gated by CF Access GitHub SSO) + prod apps later (-> Cilium Gateway).
+# Token from OpenBao via ESO. Teleport stays DIRECT grey-cloud (ALPN, can't tunnel).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: cloudflared-token
+  namespace: cloudflared
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: cloudflared-token
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef: { key: cloudflared, property: token }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: cloudflared
+data:
+  config.yaml: |
+    # tunnel run reads token from env; ingress rules here (locally-managed config)
+    metrics: 0.0.0.0:2000
+    no-autoupdate: true
+    ingress:
+      - hostname: argocd.unorouter.com
+        service: http://argo-cd-argocd-server.argocd.svc:80
+      - hostname: hubble.unorouter.com
+        service: http://hubble-ui.kube-system.svc:80
+      - hostname: openbao.unorouter.com
+        service: http://openbao.openbao.svc:8200
+      - service: http_status:404
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+spec:
+  replicas: 2  # HA only; do NOT autoscale (downscale breaks connections)
+  selector:
+    matchLabels: { app: cloudflared }
+  template:
+    metadata:
+      labels: { app: cloudflared }
+    spec:
+      serviceAccountName: cloudflared
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2026.7.0
+          args:
+            - tunnel
+            - --config
+            - /etc/cloudflared/config.yaml
+            - --no-autoupdate
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom: { secretKeyRef: { name: cloudflared-token, key: token } }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared
+              readOnly: true
+          livenessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap: { name: cloudflared-config }
