@@ -53,6 +53,15 @@ data:
       # and browser redirects land here; actual auth happens at GitHub (org-gated).
       - hostname: dex.unorouter.com
         service: http://dex.dex.svc.cluster.local:5556
+      # PostHog EU ingest proxy (was a don traefik route; NEXT_PUBLIC_POSTHOG_HOST is
+      # build-baked to ph.unorouter.com so the host must keep working). Assets rule first.
+      - hostname: ph.unorouter.com
+        path: ^/static/.*
+        service: https://eu-assets.i.posthog.com
+        originRequest: { httpHostHeader: eu-assets.i.posthog.com, originServerName: eu-assets.i.posthog.com }
+      - hostname: ph.unorouter.com
+        service: https://eu.i.posthog.com
+        originRequest: { httpHostHeader: eu.i.posthog.com, originServerName: eu.i.posthog.com }
       # ---- prod services (real hostnames since cutover; *-k3s shadows kept for testing) ----
       - hostname: api.unorouter.com
         service: http://new-api.services.svc.cluster.local:3000
