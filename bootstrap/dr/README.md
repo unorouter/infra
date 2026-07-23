@@ -150,6 +150,28 @@ Post-cutover queue: after ~1wk stable -> stop remaining don unorouter containers
 don's public 5439/5442 port mappings, retire pgbackup sidecars/Duplicati dirs for migrated
 DBs, rotate don sudo password.
 
+### Incident 2026-07-23 night: frontend crashloop ~8h (site 502, API unaffected)
+
+Chain: k3s unorouter-env was missing `INTERNAL_API_URL` (don injects it via compose, not
+.env -- same trap as bot's DATABASE_URL) -> frontend server-side calls fell back to public
+`https://api.unorouter.com` (hairpin: pod -> CF edge -> tunnel -> back into cluster) ->
+Cloudflare L3/4 auto-mitigation started dropping the node's IPv4 mid-TLS-handshake for our
+zone only (v6 fine, other CF zones fine, external clients fine; invisible in zone security
+events; zone IP-allow rule does NOT bypass it) -> /api/ops/health hung >5s -> liveness
+probe (same dep-checking endpoint, 5s timeout) killed both replicas in a loop all night.
+
+Fixes (all in git/OpenBao):
+1. Liveness = tcpSocket ONLY (process-local); readiness keeps the dep check, 10s timeout.
+   Killing a pod never fixes a slow external dep.
+2. `INTERNAL_API_URL=http://new-api.services.svc.cluster.local:3000` in unorouter-env,
+   `NEW_API_URL` same in bot-env: in-cluster server-side traffic NEVER leaves the cluster.
+   Browser-facing NEXT_PUBLIC_API_URL stays public (external clients unaffected by design).
+3. Node IP whitelisted in CF zone (L7 only, kept as belt).
+
+Lesson: don compose files inject env vars beyond .env -- when migrating a service, diff
+`docker inspect <c> .Config.Env` against the k8s secret, not just the .env file.
+Lesson 2: no alerting = 8h silent frontend outage. healthchecks.io/ntfy is next.
+
 ### Cutover procedure (minutes, not a freeze-window)
 1. Stop don writers: `docker service scale newapi_newapi-master=0 newapi_newapi-slave=0`
    + stop don bot container.
