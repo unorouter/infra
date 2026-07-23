@@ -31,7 +31,7 @@ resource "hcloud_server" "node2" {
   name         = "unorouter-node2"
   server_type  = var.ha_node_type
   image        = "ubuntu-24.04"
-  location     = var.location
+  location     = "nbg1" # fsn1 capacity shortage 2026-07-23; 3-DC spread = quorum survives a DC outage
   ssh_keys     = [hcloud_ssh_key.operator.id]
   firewall_ids = [hcloud_firewall.node.id]
 
@@ -55,7 +55,7 @@ resource "hcloud_server" "node3" {
   name         = "unorouter-node3"
   server_type  = var.ha_node_type
   image        = "ubuntu-24.04"
-  location     = var.location
+  location     = "hel1"
   ssh_keys     = [hcloud_ssh_key.operator.id]
   firewall_ids = [hcloud_firewall.node.id]
 

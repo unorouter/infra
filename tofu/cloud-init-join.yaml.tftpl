@@ -18,6 +18,7 @@ runcmd:
       --token '${k3s_token}' \
       --node-ip ${private_ip} \
       --node-external-ip $PUBLIC_IP \
+      --advertise-address=${private_ip} \
       --flannel-backend=none \
       --disable-network-policy \
       --disable=traefik \
