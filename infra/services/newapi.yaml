@@ -28,6 +28,8 @@ spec:
       containers:
         - name: new-api
           image: ghcr.io/unorouter/new-api:latest
+          resources:
+            requests: { memory: 256Mi, cpu: 100m }
           envFrom:
             - secretRef: { name: newapi-env }
           # NODE_TYPE empty in the env secret => master
@@ -70,9 +72,19 @@ spec:
     metadata:
       labels: { app: new-api, tier: slave }
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: new-api, tier: slave }
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: new-api
           image: ghcr.io/unorouter/new-api:latest
+          resources:
+            requests: { memory: 256Mi, cpu: 100m }
           envFrom:
             - secretRef: { name: newapi-env }
           env:

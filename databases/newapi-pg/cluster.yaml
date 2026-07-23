@@ -5,7 +5,10 @@ metadata:
   namespace: databases
 spec:
   imageName: ghcr.io/cloudnative-pg/postgresql:15-standard-bookworm
-  instances: 1 # bump to 3 at HA
+  instances: 3
+  resources:
+    requests:
+      memory: 1Gi
   # barman-cloud-backup runs in the postgres container -> the boto3 checksum-disable env must
   # be HERE (not just instanceSidecarConfiguration). Fixes the Hetzner Ceph multipart hang.
   env:

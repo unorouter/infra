@@ -29,6 +29,8 @@ spec:
       containers:
         - name: bot
           image: ghcr.io/unorouter/unorouter-bot:latest
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
           envFrom:
             - secretRef: { name: bot-env }
           ports:

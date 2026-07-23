@@ -96,6 +96,14 @@ spec:
     metadata:
       labels: { app: cloudflared }
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: cloudflared }
+                topologyKey: kubernetes.io/hostname
       serviceAccountName: cloudflared
       containers:
         - name: cloudflared
