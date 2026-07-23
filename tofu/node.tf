@@ -33,27 +33,32 @@ resource "hcloud_server" "node1" {
 
 # HA expansion: joining SERVERS (embedded etcd; node1 was flipped to --cluster-init first).
 # Deliberately separate resources, NOT a refactor of node1 into for_each -- changing node1's
-# user_data would force destroy+recreate of the production node.
-resource "hcloud_server" "node2" {
-  name         = "unorouter-node2"
-  server_type  = var.ha_node_type
+# user_data would force destroy+recreate of a production node. node2/node3 (interim cpx22)
+# were replaced by sniped cx23s (node4/node5) on 2026-07-23; numbering is cattle.
+resource "hcloud_server" "node5" {
+  name         = "unorouter-node5"
+  server_type  = "cx23"
   image        = "ubuntu-24.04"
-  location     = "nbg1" # fsn1 capacity shortage 2026-07-23; 3-DC spread = quorum survives a DC outage
+  location     = "nbg1" # 3-DC spread with fsn1 (node1) + hel1 (node4): quorum survives a DC outage
   ssh_keys     = [hcloud_ssh_key.operator.id]
   firewall_ids = [hcloud_firewall.node.id]
 
   network {
     network_id = hcloud_network.cluster.id
-    ip         = "10.100.1.2"
+    ip         = "10.100.1.3"
   }
 
   user_data = templatefile("${path.module}/cloud-init-join.yaml.tftpl", {
     k3s_version       = var.k3s_version
     tailscale_authkey = var.tailscale_authkey
     k3s_token         = var.k3s_token
-    node_name         = "unorouter-node2"
-    private_ip        = "10.100.1.2"
+    node_name         = "unorouter-node5"
+    private_ip        = "10.100.1.3"
   })
+
+  lifecycle {
+    ignore_changes = [user_data, ssh_keys]
+  }
 
   depends_on = [hcloud_network_subnet.nodes]
 }
