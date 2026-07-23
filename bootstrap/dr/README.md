@@ -73,7 +73,7 @@ per apply, primaries checked first.
 
 ### SWAP EXECUTED 2026-07-23 ~14:55-15:20: node3 cpx22 -> node4 cx23 (zero downtime)
 
-Sniper (`scripts/hetzner-snipe.sh`) grabbed a cx23 (EUR5.49) during a ~1min hel1 stock
+Sniper script (deleted after both swaps; see git history `scripts/hetzner-snipe.sh`) grabbed a cx23 (EUR5.49) during a ~1min hel1 stock
 window; hand-incorporated per the rules above. This is the CANONICAL single-node swap:
 
 1. Preflight: both CNPG primaries confirmed on node1 (rule 5), argocd 14/14 green, WAL
