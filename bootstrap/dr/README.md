@@ -166,6 +166,13 @@ Note: on a rebuilt node reusing the old IP, clear the stale SSH host key first:
 If the new node IP differs from the old, update the Cloudflare A records (grey-cloud for
 `teleport.unorouter.com`; proxied for the rest) and the firewall `operator_cidr` if yours changed.
 
+Teleport entry IP: the `teleport.unorouter.com` A record AND the teleport svc `externalIPs`
+(infra/teleport/values.yaml) both point at **node5** (178.104.78.126) on purpose -- the
+published/DDoSable IP must be a sacrificial node, never node1 (DB primaries, OpenBao). The
+two MUST stay in sync: Cilium only answers an externalIP on the node that owns it, mismatch =
+connection refused (bit us 2026-07-23). If node5 is replaced, update both together; ops access
+falls back to the direct kubeconfig meanwhile.
+
 ### 2. Bump the CNPG serverName lineage (the ONE unavoidable edit)
 
 CNPG's empty-archive safety check HALTS the restored primary if it archives WAL to the same
