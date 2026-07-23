@@ -146,9 +146,12 @@ Gotcha hit at cutover: bot reads ONLY `DATABASE_URL` (src/lib/db.ts), the POSTGR
 in bot-env are decoration -> added DATABASE_URL to OpenBao `secret/bot-env` pointing at
 bot-pg-rw. Sequences setval'd from don, subscriptions dropped (slots removed on don too).
 
-Post-cutover queue: after ~1wk stable -> stop remaining don unorouter containers, close
-don's public 5439/5442 port mappings, retire pgbackup sidecars/Duplicati dirs for migrated
-DBs, rotate don sudo password.
+DON DECOMMISSIONED 2026-07-23 ~12:00: revenue containers REMOVED (new-api stack,
+unorouter a/b, mcp, bot, both postgres + redis + pgbackup/logrotate sidecars). Public DB
+ports 5439/5442 closed with them. Data volumes KEPT on don disk as cold archive (last
+state = cutover + zombie writes; restore-of-last-resort via pg dump from the volume dirs).
+postiz + debug-* + hobby stay. Rollback now = k3s DR path only (tested; S3 PITR).
+Still open: rotate don sudo password, retire Duplicati source dirs for migrated DBs.
 
 ### Incident 2026-07-23 night: frontend crashloop ~8h (site 502, API unaffected)
 
