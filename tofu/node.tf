@@ -58,9 +58,12 @@ resource "hcloud_server" "node2" {
   depends_on = [hcloud_network_subnet.nodes]
 }
 
-resource "hcloud_server" "node3" {
-  name         = "unorouter-node3"
-  server_type  = var.ha_node_type
+# Sniped budget replacement for the cpx22-era node3 (2026-07-23): created via raw API
+# during a stock window, hand-joined, then tofu-imported. user_data below is the
+# DR-rebuild path only -- the live server was built without cloud-init.
+resource "hcloud_server" "node4" {
+  name         = "unorouter-node4"
+  server_type  = "cx23"
   image        = "ubuntu-24.04"
   location     = "hel1"
   ssh_keys     = [hcloud_ssh_key.operator.id]
@@ -68,16 +71,20 @@ resource "hcloud_server" "node3" {
 
   network {
     network_id = hcloud_network.cluster.id
-    ip         = "10.100.1.3"
+    ip         = "10.100.1.4"
   }
 
   user_data = templatefile("${path.module}/cloud-init-join.yaml.tftpl", {
     k3s_version       = var.k3s_version
     tailscale_authkey = var.tailscale_authkey
     k3s_token         = var.k3s_token
-    node_name         = "unorouter-node3"
-    private_ip        = "10.100.1.3"
+    node_name         = "unorouter-node4"
+    private_ip        = "10.100.1.4"
   })
+
+  lifecycle {
+    ignore_changes = [user_data, ssh_keys]
+  }
 
   depends_on = [hcloud_network_subnet.nodes]
 }
