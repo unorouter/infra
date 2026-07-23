@@ -206,7 +206,10 @@ NOT reconciled from git):
 - **OpenBao's OIDC role redirect is a runtime `bao write`, not a manifest.** On DR (fresh
   raft) or any hostname change, re-set it:
   `bao write auth/oidc/role/admin allowed_redirect_uris='https://openbao.unorouter.com/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback'`
-  (plus user_claim=email, token_policies=admin, bound_audiences=openbao, oidc_scopes=openid,profile,email,groups, groups_claim=groups). Dex must ALSO allow that callback (dex.yaml staticClients).
+  (plus user_claim=email, token_policies=admin, bound_audiences=openbao, oidc_scopes=openid,profile,email,groups, groups_claim=groups, token_ttl=168h, token_max_ttl=768h). Dex must ALSO allow that callback (dex.yaml staticClients).
+  Role writes REPLACE the whole role -- always send every field, a partial write wipes the rest.
+  token_ttl=168h keeps the UI session alive a week (default 8h forced daily re-login); no
+  auto-submit login exists in OpenBao, long sessions are what makes it feel like ArgoCD.
 - **OpenBao UI defaults to the Token method** unless OIDC is surfaced:
   `bao auth tune -listing-visibility=unauth oidc/` makes OIDC the login default (re-apply on
   DR). OpenBao 2.6.0 has NO `sys/config/ui/login/default-auth` (Vault 1.20+ only), so this is
