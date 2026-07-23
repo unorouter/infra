@@ -45,7 +45,7 @@ spec:
             - secretRef: { name: unorouter-env }
           ports:
             - containerPort: 3000
-          # readiness gates traffic on deps (db/upstream/r2); generous timeout, deps can be slow
+          # readiness gates traffic on deps (db/upstream); generous timeout, deps can be slow
           readinessProbe:
             httpGet: { path: /api/ops/health, port: 3000 }
             initialDelaySeconds: 15

@@ -22,7 +22,7 @@ handles anything without a rule.
 
 ONLY exceptions that cannot be the wildcard (keep explicit, do not add more): apex
 `unorouter.com` (wildcard skips root), `teleport` (grey-cloud A record, raw-TLS ALPN
-passthrough - not proxied), `media` (R2 bucket-managed), MX/TXT (email/DKIM). Everything
+passthrough - not proxied), MX/TXT (email/DKIM). Everything
 else is the wildcard - if you find yourself creating a proxied CNAME to the tunnel, stop:
 the wildcard already covers it, just add the cloudflared rule.
 
