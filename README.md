@@ -94,21 +94,16 @@ Secrets: `bao kv`. DR: `bootstrap/dr/README.md`.
 3. **Tailscale** reusable authkey (ACL autoApprover for pod CIDR 10.42.0.0/16).
 4. **Cloudflare Origin cert** (SSL/TLS -> Origin Server, 15y, `*.unorouter.com`).
 
-## tofu secrets (never plaintext)
+## tofu secrets
+
+`tofu/.env` (gitignored, plaintext on disk only) exports every `TF_VAR_*`: hcloud_token,
+s3_access_key/secret_key, k3s_token (etcd join; also in OpenBao `secret/cluster`),
+operator_cidr, ssh_public_key, tailscale_authkey, node_type, location. Load before any
+tofu command:
 
 ```sh
-cat > tofu/secrets.sops.yaml <<'EOF'
-TF_VAR_hcloud_token: "..."
-TF_VAR_s3_access_key: "..."
-TF_VAR_s3_secret_key: "..."
-TF_VAR_tailscale_authkey: "tskey-auth-..."
-TF_VAR_operator_cidr: "x.x.x.x/32"
-TF_VAR_k3s_token: "..."   # etcd join token; also in OpenBao secret/cluster
-EOF
-sops --encrypt --in-place tofu/secrets.sops.yaml
+set -a; source .env; set +a
 ```
-
-`operator_cidr` in sops (public repo). Non-secret vars -> `tofu/terraform.tfvars` (`ssh_public_key`).
 
 ## Bootstrap / DR
 
@@ -119,8 +114,9 @@ procedure (CNPG S3 restore, OpenBao snapshot, lineage bump) + node-swap runbook 
 
 ```sh
 cd tofu && tofu init
-sops exec-env secrets.sops.yaml 'tofu plan'    # READ before apply; server ops one node at a time
-sops exec-env secrets.sops.yaml 'tofu apply'   # manual only, never CI
+set -a; source .env; set +a
+tofu plan    # READ before apply; server ops one node at a time
+tofu apply   # manual only, never CI
 ```
 
 ## Non-negotiable gotchas
