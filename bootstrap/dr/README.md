@@ -19,6 +19,36 @@
 - DRILLS PASSED 2026-07-23: node3 drain (30/30 public probes 200), newapi-pg primary kill
   (promotion ~70s, 25/25 probes 200, old primary auto-rejoined as replica).
 
+### INCIDENT 2026-07-23 ~13:19-13:53 CEST: quorum loss + 34min DB-write outage (self-inflicted)
+
+Trigger: interim node-type downswap executed with `TF_VAR_ha_node_type=cpx22 tofu apply
+-replace=hcloud_server.node2`. The env override changed BOTH nodes' server_type, so the plan
+replaced node2 AND node3 -- node3 was destroyed UNDRAINED. The pg primary lived on node2
+(post-drill) and etcd lost 2 of 3 members simultaneously: quorum gone, apiserver down, CNPG
+unable to promote the surviving replica -> "Database error" for all logins/writes ~34min.
+Public reads/pages kept serving off node1 the whole time (data plane independent). ZERO data
+loss (replica was current; S3 PITR untouched).
+
+RULES (cost of learning them: 34min of revenue downtime):
+1. NEVER combine a var override that widens blast radius with -replace + -auto-approve.
+   ALWAYS `tofu plan` first and READ the add/change/destroy lines before any apply that
+   touches servers. One node at a time means the PLAN must show exactly one destroy.
+2. k3s quorum-loss recovery: `k3s server --cluster-reset` on the survivor -- MUST pass the
+   SAME --node-ip/--advertise-address flags as the service unit, or membership is written
+   with the PUBLIC peer URL and k3s wedges on "not a member of the etcd cluster" (the fix
+   attempt itself failed twice on this). Run it under nohup (a killed ssh mid-reset leaves
+   a broken half-state + reset-flag). Stop/disable k3s on all OTHER nodes first (their
+   join storm destabilizes the fresh single-member etcd: "too many learner members").
+3. Rejoin nodes ONE at a time with `rm -rf /var/lib/rancher/k3s/server/db` first.
+4. Replicas whose local-path PVCs lived on dead nodes: delete pod + PVC, CNPG re-provisions
+   from the primary automatically (~4min for 1GB).
+5. Before ANY node surgery: check where the CNPG primaries currently run
+   (`kubectl get cluster -n databases`) -- drills move them; assumptions rot in hours.
+
+Current HA nodes after incident: 2x cpx22 (4GB, EUR19.49 -- overpriced AMD, only stock).
+Target stays 2x cx22 (EUR4.49) when Intel returns; swap MANUALLY with plan-review, one node
+per apply, primaries checked first.
+
 
 Full node loss -> back online with the smallest manual intervention. The node is disposable
 cattle; all durable state lives OFF-node (Hetzner S3, git, SOPS-in-git, age key, Bitwarden,
