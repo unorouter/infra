@@ -43,9 +43,6 @@ data:
       - hostname: argocd.unorouter.com
         service: https://teleport.teleport.svc.cluster.local:443
         originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
-      - hostname: hubble.unorouter.com
-        service: https://teleport.teleport.svc.cluster.local:443
-        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
       - hostname: openbao.unorouter.com
         service: https://teleport.teleport.svc.cluster.local:443
         originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
@@ -124,7 +121,7 @@ spec:
           configMap: { name: cloudflared-config }
 ---
 # SSO: internal UIs are gated by TELEPORT App Access (GitHub connector), not CF Access.
-# - hosts argocd / hubble / openbao .unorouter.com -> tunnel -> teleport proxy -> app (SSO-gated).
+# - hosts argocd / openbao .unorouter.com -> tunnel -> teleport proxy -> app (SSO-gated).
 # - Teleport GitHub SSO (org unorouter, team admins) is the gate; one pane like the work setup.
 # - CF Access apps + the "Cloudflare Access SSO" GitHub OAuth app on these hosts are RETIRED
 #   (removed via CF API). Cloudflare here is only the tunnel (IP hiding), not the auth layer.
