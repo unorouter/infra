@@ -5,6 +5,13 @@ packages:
   - open-iscsi
 
 write_files:
+  # :22 is world-open in the firewall; key-only auth is the actual gate.
+  - path: /etc/ssh/sshd_config.d/99-keyonly.conf
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+
   # k3s auto-deploy manifests: applied automatically on first server start (and on change).
   # This makes `tofu apply` ALONE bring up k3s + Cilium + ArgoCD + app-of-apps -- no `make
   # bootstrap`. Filenames MUST be RFC1123 (no underscores). Cilium uses bootstrap:true so it

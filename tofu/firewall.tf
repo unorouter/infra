@@ -11,11 +11,13 @@ resource "hcloud_firewall" "node" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
+  # :22 world-open: key-only auth, DDoSing sshd is pointless; operator_cidr allowlist was
+  # more lockout risk (IP rotation) than protection.
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = "22"
-    source_ips = [var.operator_cidr]
+    source_ips = ["0.0.0.0/0", "::/0"]
   }
 
   rule {
