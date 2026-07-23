@@ -66,7 +66,17 @@ Live-verified 2026-07-23. Bump check: `curl -s https://api.github.com/repos/<org
 ```sh
 tsh login --proxy=teleport.unorouter.com   # GitHub SSO
 tsh kube login unorouter
+
+# logs: one deploy, or aggregated across master + all slaves (--prefix tags each pod)
 kubectl -n services logs deploy/new-api-master --tail 100
+kubectl -n services logs -l app=new-api --prefix -f --tail 50
+
+# db, audited RLS reader (tsh signs per-session cert, CN=reader):
+tsh db connect newapi-pg --db-user=reader --db-name=newapi          # interactive psql
+tsh proxy db newapi-pg --db-user=reader --db-name=newapi --port 15432 --tunnel &
+psql postgres://reader@127.0.0.1:15432/newapi -c "<sql>"            # one-shot / GUI clients
+
+# db, full admin (via kube exec on the primary):
 kubectl -n databases exec newapi-pg-1 -c postgres -- psql -U postgres -d newapi -c "<sql>"
 ```
 
