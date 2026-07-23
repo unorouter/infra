@@ -1,5 +1,25 @@
 # Disaster Recovery runbook
 
+## TOPOLOGY SINCE 2026-07-23: 3-node etcd HA (multi-DC)
+
+- node1 cx33 fsn1 (116.202.14.228, 10.100.1.1) + node2 cpx32 nbg1 (10.100.1.2) + node3
+  cpx32 hel1 (10.100.1.3). All k3s SERVERS, embedded etcd -- quorum survives a full DC
+  outage. Private net 10.100.0.0/16 carries etcd/vxlan/apiserver-kubelet (all servers run
+  `--advertise-address=<private>`; without it remotedialer dials public :6443 = firewalled).
+- k3s join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
+- Cilium `k8sServiceHost: 127.0.0.1` is VALID only because every node is a server. Adding
+  an AGENT node requires changing that first. After changing any node's --node-ip, restart
+  the cilium daemonset (agents cache node IPs; stale public IP breaks cross-node vxlan
+  through the firewall).
+- CNPG: newapi-pg instances 3 (one per DC), bot-pg 2. spec.instances is GIT-owned (the old
+  ignoreDifferences entry deliberately removed).
+- Still node1-affine (local-path PVs / fixed IP): openbao, teleport (+grey-cloud DNS),
+  argocd, redis, mcp, new-api-master. Node1 loss = those restart cold on another node
+  minus their PVs -> follow the DR restore path for openbao; teleport is stateless-by-design.
+- DRILLS PASSED 2026-07-23: node3 drain (30/30 public probes 200), newapi-pg primary kill
+  (promotion ~70s, 25/25 probes 200, old primary auto-rejoined as replica).
+
+
 Full node loss -> back online with the smallest manual intervention. The node is disposable
 cattle; all durable state lives OFF-node (Hetzner S3, git, SOPS-in-git, age key, Bitwarden,
 Cloudflare DNS).
