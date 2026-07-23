@@ -31,10 +31,12 @@ envoy:
       keepCapNetBindService: true
 
 hubble:
+  # relay kept for cluster-wide `hubble observe` (CLI). UI removed 2026-07-23: rarely opened,
+  # flows are reachable via `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe`.
   relay:
     enabled: true
   ui:
-    enabled: true
+    enabled: false
 
 
 operator:

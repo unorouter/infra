@@ -32,8 +32,10 @@ Log into [teleport.unorouter.com](https://teleport.unorouter.com) (GitHub SSO), 
 tiles. Direct hits 404 without a session by design (Teleport sets the cookie via the launcher).
 
 - [argocd.unorouter.com](https://argocd.unorouter.com) - GitOps deploy dashboard
-- [hubble.unorouter.com](https://hubble.unorouter.com) - Cilium network flow observability
 - [openbao.unorouter.com](https://openbao.unorouter.com) - secrets vault UI
+
+Network flows: no UI (removed 2026-07-23). Use the CLI when debugging:
+`kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --follow`.
 
 ## Pinned versions
 

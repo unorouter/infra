@@ -49,10 +49,6 @@ apps:
     rewrite:
       redirect:
         - argo-cd-argocd-server.argocd.svc.cluster.local
-  - name: hubble
-    uri: http://hubble-ui.kube-system.svc.cluster.local:80
-    public_addr: hubble.unorouter.com
-    labels: { env: internal }
   - name: openbao
     uri: http://openbao.openbao.svc.cluster.local:8200   # tls_disable in this deploy
     public_addr: openbao.unorouter.com
