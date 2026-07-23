@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Hetzner budget-node restock watcher (notify-only). Watched: cx33/cx32/cax21 (8GB pref),
-# cx22/cax11 (4GB ok) in nbg1-dc3 / hel1-dc2. On hit: desktop notification + log line.
-set -euo pipefail
+# cx22/cax11 (4GB ok) in nbg1-dc3 / hel1-dc2. Loops every 60s; Ctrl+C to stop.
+# On hit: prints + desktop notification + ~/.local/state/hetzner-stock-hits.log
+set -uo pipefail
 source /home/zero/MEGA/Projects/ai-api/infra/tofu/.env
 
+while true; do
 HITS=$(python3 - <<EOF
 import json,urllib.request,os
 tok=os.environ["TF_VAR_hcloud_token"]
@@ -29,3 +31,5 @@ if [ -n "$HITS" ]; then
 else
   echo "$(date -Is) no stock (watched: cx33 cx32 cax21 cx22 cax11 in nbg1/hel1)"
 fi
+sleep 60
+done
