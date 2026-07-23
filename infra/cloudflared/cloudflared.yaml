@@ -62,7 +62,7 @@ data:
       - hostname: ph.unorouter.com
         service: https://eu.i.posthog.com
         originRequest: { httpHostHeader: eu.i.posthog.com, originServerName: eu.i.posthog.com }
-      # ---- prod services (real hostnames since cutover; *-k3s shadows kept for testing) ----
+      # ---- prod services (real hostnames since cutover) ----
       - hostname: api.unorouter.com
         service: http://new-api.services.svc.cluster.local:3000
       - hostname: unorouter.com
@@ -75,12 +75,6 @@ data:
         service: http://unorouter-mcp.services.svc.cluster.local:3000
       - hostname: bot.unorouter.com
         service: http://unorouter-bot.services.svc.cluster.local:4000
-      - hostname: uno-k3s.unorouter.com
-        service: http://unorouter.services.svc.cluster.local:3000
-      - hostname: api-k3s.unorouter.com
-        service: http://new-api.services.svc.cluster.local:3000
-      - hostname: mcp-k3s.unorouter.com
-        service: http://unorouter-mcp.services.svc.cluster.local:3000
       - service: http_status:404
 ---
 apiVersion: apps/v1
