@@ -59,8 +59,11 @@ auth:
 service:
   type: ClusterIP
   spec:
+    # node5's public IP: the teleport A record points here ON PURPOSE. node5 is the
+    # sacrificial entry node - a DDoS on the published IP must never hit node1 (DB
+    # primaries, OpenBao). Keep DNS + this list in sync; node1's IP stays unpublished.
     externalIPs:
-      - "116.202.14.228"   # single bare node: route node-public-IP:443 to the proxy (no cloud LB)
+      - "178.104.78.126"
 proxy:
   # hostNetwork so :443 binds the node public IP directly (grey-cloud DNS points here)
   annotations: {}
