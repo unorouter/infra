@@ -20,6 +20,24 @@
 - Still node1-affine (local-path PVs / fixed IP): openbao, teleport (+grey-cloud DNS),
   argocd, redis, mcp, new-api-master. Node1 loss = those restart cold on another node
   minus their PVs -> follow the DR restore path for openbao; teleport is stateless-by-design.
+### Cluster access hierarchy (kubectl)
+
+1. **Teleport (primary, audited)**: `tsh login --proxy=teleport.unorouter.com --auth=github`
+   -> `tsh kube login unorouter` -> kubectl. Session-recorded, SSO, short-lived certs.
+   Context `teleport.unorouter.com-unorouter`. Set up 2026-07-23: the agent runs
+   `roles: app,db,kube` + `kubeClusterName: unorouter` (registers the kube_cluster), the
+   `kube-admin` Teleport role grants `kubernetes_groups: [system:masters]`, mapped to the
+   GH `unorouter/admins` team in the connector. Role/connector applied via tctl (connector
+   needs the client_secret from OpenBao `secret/teleport-github`); values.yaml is git/ArgoCD.
+   GOTCHA: a `tsh login` reusing a still-valid cert keeps the OLD roles -- after any
+   connector role change, `tsh logout` THEN login to re-map (else kube-admin is absent).
+2. **Direct kubeconfig (backup)**: `kubectl --context unorouter-direct ...` (hits node1
+   apiserver at :6443 directly, in `~/.kube/config`). Use when Teleport is down. Also
+   `infra/kubeconfig` in the repo as a portable copy.
+3. **Raw SSH (break-glass)**: `ssh root@<node-public-ip>` -- for the layer BELOW k8s
+   (etcd/quorum recovery, k3s install/stop, node disk/journal) when the kube API itself
+   is dead. IPs in `tofu` outputs.
+
 - DRILLS PASSED 2026-07-23: node3 drain (30/30 public probes 200), newapi-pg primary kill
   (promotion ~70s, 25/25 probes 200, old primary auto-rejoined as replica).
 
