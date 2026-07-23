@@ -33,6 +33,13 @@ auth:
     auth_service:
       tokens:
         - "app,db,kube:/etc/teleport-join/token"
+      # GitHub SSO only: hide local username/password/passkey from the login UI. Everyone
+      # signs in via the org-gated GitHub connector. Break-glass = tctl on the auth pod
+      # (kubectl exec), which bypasses UI auth entirely, so no local user is needed.
+      authentication:
+        type: github
+        connector_name: github
+        local_auth: false
   extraVolumes:
     - name: app-join-token
       secret:
