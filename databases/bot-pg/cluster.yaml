@@ -10,7 +10,7 @@ spec:
     - name: AWS_RESPONSE_CHECKSUM_VALIDATION
       value: when_required
   imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm
-  instances: 1 # bump to 3 at HA
+  instances: 2
   storage:
     size: 10Gi
     storageClass: local-path

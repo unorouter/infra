@@ -26,11 +26,21 @@ spec:
     metadata:
       labels: { app: unorouter }
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: unorouter }
+                topologyKey: kubernetes.io/hostname
       imagePullSecrets:
         - name: ghcr-pull
       containers:
         - name: unorouter
           image: ghcr.io/unorouter/unorouter:latest
+          resources:
+            requests: { memory: 512Mi, cpu: 200m }
           envFrom:
             - secretRef: { name: unorouter-env }
           ports:
