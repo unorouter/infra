@@ -121,6 +121,11 @@ runcmd:
   - |
     PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
     export INSTALL_K3S_EXEC="server \
+      --cluster-init \
+      --token '${k3s_token}' \
+      --node-ip=10.100.1.1 \
+      --node-external-ip=$PUBLIC_IP \
+      --advertise-address=10.100.1.1 \
       --flannel-backend=none \
       --disable-network-policy \
       --disable=traefik \

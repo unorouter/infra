@@ -69,6 +69,24 @@ Cloudflare DNS).
 The CAX31 node + disk, k3s + etcd, ALL local-path PVs (CNPG PGDATA, Vault raft, Teleport
 SQLite, ArgoCD), every pod.
 
+## 3-NODE DR NOTES (2026-07-23 audit; template fixes committed, NOT live-tested -- the
+## single-node flow was tested twice, the 3-node deltas below are paper-verified)
+
+- `tofu apply` now creates all THREE nodes. node1's cloud-init self-initializes etcd
+  (`--cluster-init --token <fixed> --node-ip/--advertise-address 10.100.1.1`); node2/3 join
+  via the fixed token (TF_VAR_k3s_token in tofu/.env + OpenBao secret/cluster). Joiners
+  retry until node1's apiserver is up -- a few minutes of join errors at boot are normal.
+- node1 has `lifecycle.ignore_changes[user_data]`: template edits NEVER replace the live
+  node; they apply on genuine rebuild only.
+- CNPG `instances: 3` + `bootstrap.recovery`: restores the primary from S3 first, then
+  builds both replicas from it automatically. Same lineage-bump rule as before.
+- New IPs after rebuild: teleport externalIPs + grey-cloud A record need ONLY node1's IP.
+  node2/3 IPs matter to nothing external (tunnel is outbound).
+- PRE-DESTROY additions for a LIVE cluster (unlike the don-era tests, k3s now serves
+  production): scale writers to 0 (new-api master+slaves, bot), `SELECT pg_switch_wal()`
+  + verify the segment archived, force a fresh OpenBao snapshot, THEN destroy. Skipping
+  the WAL flush loses the last <=5min of writes.
+
 ## The 3 steps
 
 ### 1. Recreate the node (ZERO-TOUCH bootstrap)
