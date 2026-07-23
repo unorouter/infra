@@ -2,13 +2,14 @@
 
 ## TOPOLOGY SINCE 2026-07-23: 3-node etcd HA (multi-DC)
 
-- node1 cx33 fsn1 (116.202.14.228, 10.100.1.1) + node2 cpx22 nbg1 (10.100.1.2) + node4
-  cx23 hel1 (89.167.21.83, 10.100.1.4). All k3s SERVERS, embedded etcd -- quorum survives
-  a full DC outage. Private net 10.100.0.0/16 carries etcd/vxlan/apiserver-kubelet (all
-  servers run `--advertise-address=<private>`; without it remotedialer dials public
-  :6443 = firewalled). (node3 cpx22 retired 2026-07-23 ~15:15, see swap procedure below;
-  node numbering is cattle -- k3s node names are baked at registration, so replacements
-  get the next number instead of reusing the old one.)
+- node1 cx33 fsn1 (116.202.14.228, 10.100.1.1) + node4 cx23 hel1 (89.167.21.83,
+  10.100.1.4) + node5 cx23 nbg1 (178.104.78.126, 10.100.1.3). All k3s SERVERS, embedded
+  etcd -- quorum survives a full DC outage. Private net 10.100.0.0/16 carries
+  etcd/vxlan/apiserver-kubelet (all servers run `--advertise-address=<private>`; without
+  it remotedialer dials public :6443 = firewalled). (Interim cpx22 node2/node3 retired
+  2026-07-23 via sniped-swap procedure below; node numbering is cattle -- k3s node names
+  are baked at registration, so replacements get the next number instead of reusing the
+  old one. COST MISSION COMPLETE: servers EUR19.47/mo, tofu var ha_node_type removed.)
 - k3s join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
 - Cilium `k8sServiceHost: 127.0.0.1` is VALID only because every node is a server. Adding
   an AGENT node requires changing that first. After changing any node's --node-ip, restart
@@ -75,8 +76,16 @@ window; hand-incorporated per the rules above. This is the CANONICAL single-node
    inline network block or provider booleans -- expect `+ network` as update-in-place;
    abort if the plan says replace/destroy). Final `tofu plan` = No changes.
 
-Gotcha: tailscale authkey in tofu/.env was expired (interactive-login prompt) -- node4 has
-NO tailscale; rotate the key and join it later. SSH via public IP works (firewall port 22).
+Gotcha: tailscale authkey in tofu/.env was expired (interactive-login prompt) -- node4/node5
+have NO tailscale; rotate the key and join them later. SSH via public IP works (firewall 22).
+
+Node2 swap (same day, ~16:10-16:30, -> node5): identical procedure, ONE delta -- node2
+carried singletons (new-api-master, unorouter-bot, cilium-operator). After cordon, evict
+singletons FIRST as individual `kubectl delete pod` (reschedule elsewhere, wait Ready +
+endpoint 200 between each), THEN drain the rest. Master reschedule was seconds (slaves keep
+serving); bot = one Discord gateway reconnect, deploy-grade. Also: Hetzner recycled the
+destroyed node3's private IP (10.100.1.3) for the new spare -- auto-assigned IPs reuse the
+lowest free address, harmless, keep whatever the spare got.
 
 
 Full node loss -> back online with the smallest manual intervention. The node is disposable
