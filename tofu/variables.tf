@@ -42,7 +42,7 @@ variable "node_type" {
 variable "ha_node_type" {
   description = "server type for the joining HA nodes"
   type    = string
-  default = "cx33"
+  default = "cx22"
 }
 
 variable "k3s_token" {
