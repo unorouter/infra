@@ -8,17 +8,23 @@ Stack: k3s + Cilium (CNI, no kube-proxy) + ArgoCD (app-of-apps) + CloudNativePG 
 plugin -> Hetzner S3 PITR) + OpenBao + ESO + cloudflared tunnel + Teleport. Secrets: SOPS/age
 in git + OpenBao at runtime. TLS: Cloudflare (tunnel + Origin cert, no cert-manager ACME).
 
-## DNS (wildcard-only, 2026-07-23)
+## DNS (wildcard-only, 2026-07-23) !PREFER WILDCARD
+
+**RULE: always prefer the wildcard. Never add a per-host DNS record for an app/ops subdomain.**
+Per-host records are the trap that caused an outage-grade 404 hunt (a hostname rename touched
+cloudflared + Teleport but not the manual DNS row). Managing them by hand is banned.
 
 `*.unorouter.com` CNAME -> the k3s cloudflared tunnel (proxied). ALL app + ops hostnames
-resolve through it - there are NO per-host DNS records anymore. To add/rename a hostname:
-add a `hostname:` rule to [cloudflared.yaml](infra/infra/cloudflared/cloudflared.yaml),
-commit, push (ArgoCD syncs). No Cloudflare dashboard, no DNS record. cloudflared's `404`
-catch-all handles anything without a rule.
+resolve through it - there are NO per-host DNS records. To add/rename a hostname: add a
+`hostname:` rule to [cloudflared.yaml](infra/infra/cloudflared/cloudflared.yaml), commit,
+push (ArgoCD syncs). No Cloudflare dashboard, no DNS record. cloudflared's `404` catch-all
+handles anything without a rule.
 
-Records that CANNOT be the wildcard (keep explicit): apex `unorouter.com` (wildcard skips
-root), `teleport` (grey-cloud A record, raw-TLS ALPN passthrough - not proxied), `media`
-(R2 bucket-managed), MX/TXT (email/DKIM). Everything else is the wildcard.
+ONLY exceptions that cannot be the wildcard (keep explicit, do not add more): apex
+`unorouter.com` (wildcard skips root), `teleport` (grey-cloud A record, raw-TLS ALPN
+passthrough - not proxied), `media` (R2 bucket-managed), MX/TXT (email/DKIM). Everything
+else is the wildcard - if you find yourself creating a proxied CNAME to the tunnel, stop:
+the wildcard already covers it, just add the cloudflared rule.
 
 ## Ops UIs (Teleport SSO-gated)
 
