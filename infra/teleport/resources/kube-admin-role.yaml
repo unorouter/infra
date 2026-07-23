@@ -1,0 +1,17 @@
+# Kubectl access role. Maps the Teleport user into the k8s group `system:masters` (cluster-admin)
+# when they `tsh kube login`. kubernetes_labels '*: *' = every registered kube cluster (we have one).
+# Scope down kubernetes_groups later if a read-only tier is wanted. Applied via tctl create -f.
+kind: role
+version: v7
+metadata:
+  name: kube-admin
+spec:
+  allow:
+    kubernetes_labels:
+      "*": "*"
+    kubernetes_groups: ["system:masters"]
+    kubernetes_resources:
+      - kind: "*"
+        name: "*"
+        namespace: "*"
+        verbs: ["*"]
