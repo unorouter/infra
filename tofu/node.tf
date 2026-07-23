@@ -19,7 +19,14 @@ resource "hcloud_server" "node1" {
   user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
     k3s_version       = var.k3s_version
     tailscale_authkey = var.tailscale_authkey
+    k3s_token         = var.k3s_token
   })
+
+  # live node1 was hand-migrated to etcd (--cluster-init etc.); template updates must NOT
+  # replace the production node -- they take effect only on a genuine DR rebuild
+  lifecycle {
+    ignore_changes = [user_data]
+  }
 
   depends_on = [hcloud_network_subnet.nodes]
 }
