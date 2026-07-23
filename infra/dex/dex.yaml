@@ -63,12 +63,12 @@ data:
       - id: argocd
         name: ArgoCD
         redirectURIs:
-          - https://argocd-tp.unorouter.com/auth/callback
+          - https://argocd.unorouter.com/auth/callback
         secret: "{{ .Env.ARGOCD_CLIENT_SECRET }}"
       - id: openbao
         name: OpenBao
         redirectURIs:
-          - https://openbao-tp.unorouter.com/ui/vault/auth/oidc/oidc/callback
+          - https://openbao.unorouter.com/ui/vault/auth/oidc/oidc/callback
           - http://localhost:8250/oidc/callback
         secret: "{{ .Env.OPENBAO_CLIENT_SECRET }}"
 ---
