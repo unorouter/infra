@@ -38,3 +38,16 @@ variable "node_type" {
   type    = string
   default = "cx43"
 }
+
+variable "ha_node_type" {
+  description = "server type for the joining HA nodes"
+  type    = string
+  default = "cx32"
+}
+
+variable "k3s_token" {
+  description = "cluster join token (node1 /var/lib/rancher/k3s/server/token); also in OpenBao"
+  type      = string
+  sensitive = true
+  default   = ""
+}
