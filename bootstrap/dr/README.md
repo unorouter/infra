@@ -2,10 +2,13 @@
 
 ## TOPOLOGY SINCE 2026-07-23: 3-node etcd HA (multi-DC)
 
-- node1 cx33 fsn1 (116.202.14.228, 10.100.1.1) + node2 cpx32 nbg1 (10.100.1.2) + node3
-  cpx32 hel1 (10.100.1.3). All k3s SERVERS, embedded etcd -- quorum survives a full DC
-  outage. Private net 10.100.0.0/16 carries etcd/vxlan/apiserver-kubelet (all servers run
-  `--advertise-address=<private>`; without it remotedialer dials public :6443 = firewalled).
+- node1 cx33 fsn1 (116.202.14.228, 10.100.1.1) + node2 cpx22 nbg1 (10.100.1.2) + node4
+  cx23 hel1 (89.167.21.83, 10.100.1.4). All k3s SERVERS, embedded etcd -- quorum survives
+  a full DC outage. Private net 10.100.0.0/16 carries etcd/vxlan/apiserver-kubelet (all
+  servers run `--advertise-address=<private>`; without it remotedialer dials public
+  :6443 = firewalled). (node3 cpx22 retired 2026-07-23 ~15:15, see swap procedure below;
+  node numbering is cattle -- k3s node names are baked at registration, so replacements
+  get the next number instead of reusing the old one.)
 - k3s join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
 - Cilium `k8sServiceHost: 127.0.0.1` is VALID only because every node is a server. Adding
   an AGENT node requires changing that first. After changing any node's --node-ip, restart
@@ -48,6 +51,32 @@ RULES (cost of learning them: 34min of revenue downtime):
 Current HA nodes after incident: 2x cpx22 (4GB, EUR19.49 -- overpriced AMD, only stock).
 Target stays 2x cx22 (EUR4.49) when Intel returns; swap MANUALLY with plan-review, one node
 per apply, primaries checked first.
+
+### SWAP EXECUTED 2026-07-23 ~14:55-15:20: node3 cpx22 -> node4 cx23 (zero downtime)
+
+Sniper (`scripts/hetzner-snipe.sh`) grabbed a cx23 (EUR5.49) during a ~1min hel1 stock
+window; hand-incorporated per the rules above. This is the CANONICAL single-node swap:
+
+1. Preflight: both CNPG primaries confirmed on node1 (rule 5), argocd 14/14 green, WAL
+   archiving True on both clusters, old node's disk usage fits the new type, ssh to spare ok.
+2. JOIN-FIRST: spare renamed unorouter-node4 (API + hostnamectl), k3s server installed with
+   the exact cloud-init-join flags (token from tofu/.env; pin INSTALL_K3S_VERSION to the
+   fleet version) -> 4th etcd member. Quorum never dips below tolerate-1 at any point.
+   Verify BEFORE proceeding: 4 Ready, /readyz/etcd ok, journalctl tunnels to 10.100.x,
+   cilium-health 4/4 from node1's AND the new node's agent (probe cycle ~2min, wait it out).
+3. Drain old node (cordon+drain); its pg replica PVCs are local-path-pinned -> pods go
+   Pending: delete PVC + pod, CNPG rebuilds replicas on the new node (~6min). Wait 3/3+2/2.
+4. Remove: systemctl stop+disable k3s on old node FIRST, kubectl delete node, then
+   `tofu plan -destroy -target=hcloud_server.nodeX -out=f` -- READ (exactly 1 destroy) --
+   `tofu apply f`. Plan-file apply = the reviewed plan is the executed plan.
+5. Import: node.tf block for the new node (hardcoded server_type, lifecycle ignore_changes
+   [user_data, ssh_keys] -- hand-built server, template is DR-rebuild-only),
+   `tofu import`, then apply the small in-place reconcile (import does NOT capture the
+   inline network block or provider booleans -- expect `+ network` as update-in-place;
+   abort if the plan says replace/destroy). Final `tofu plan` = No changes.
+
+Gotcha: tailscale authkey in tofu/.env was expired (interactive-login prompt) -- node4 has
+NO tailscale; rotate the key and join it later. SSH via public IP works (firewall port 22).
 
 
 Full node loss -> back online with the smallest manual intervention. The node is disposable
