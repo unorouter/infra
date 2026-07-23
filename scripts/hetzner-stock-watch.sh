@@ -16,7 +16,9 @@ types={t['id']:t['name'] for t in get("https://api.hetzner.cloud/v1/server_types
 watch={'cx33','cx32','cax21','cx22','cax11'}
 hits=[]
 for dc in get("https://api.hetzner.cloud/v1/datacenters")['datacenters']:
-    if dc['name'] not in ('nbg1-dc3','hel1-dc2'): continue
+    # eu-central only: private network (etcd + DB replication) is zone-bound; nodes must
+    # share node1's zone. Covers Falkenstein/Nuremberg/Helsinki -- all 3 usable DCs.
+    if dc['location']['network_zone'] != 'eu-central': continue
     avail={types.get(i,'') for i in dc['server_types']['available']}
     hits += [f"{t}@{dc['name']}" for t in sorted(watch & avail)]
 print(",".join(hits))
@@ -29,7 +31,7 @@ if [ -n "$HITS" ]; then
   DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus \
     notify-send -u critical "Hetzner stock!" "$HITS  -- swap manually per DR runbook" 2>/dev/null || true
 else
-  echo "$(date -Is) no stock (watched: cx33 cx32 cax21 cx22 cax11 in nbg1/hel1)"
+  echo "$(date -Is) no stock (watched: cx33 cx32 cax21 cx22 cax11 in fsn1/nbg1/hel1)"
 fi
 sleep 60
 done
