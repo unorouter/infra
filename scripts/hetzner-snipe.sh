@@ -15,8 +15,8 @@ API="https://api.hetzner.cloud/v1"
 SSH_KEY=115608845          # unorouter-operator
 NETWORK=12478474           # unorouter-cluster (10.100.0.0/16)
 FIREWALL=11352641          # unorouter-node
-SPARE_IP=10.100.1.10       # parked spare private IP (outside node1-3's .1-.3)
-SPARE_NAME=unorouter-spare
+SPARE_IP=10.100.1.5        # informational; Hetzner auto-assigns, k3s joins with whatever it got
+SPARE_NAME=unorouter-spare2   # spare1 became node4 (2026-07-23); this one replaces node2
 PREF="cx23 cx33 cx22 cax11 cax21"   # try in this order
 
 hc(){ curl -s -H "Authorization: Bearer $TOK" "$@"; }
