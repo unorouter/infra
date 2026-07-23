@@ -59,15 +59,23 @@ Live-verified 2026-07-23. Bump check: `curl -s https://api.github.com/repos/<org
 | Velero | 12.1.0 (app 1.18.1) + aws-plugin 1.12.1 | apps/velero.yaml |
 | dex | v2.45.1 | cluster OIDC IdP |
 
-## Access
+## Access (3 tiers, use in order)
+
+**1. Teleport (primary, audited)** - default kubectl context `teleport.unorouter.com-unorouter`:
 
 ```sh
-export KUBECONFIG=$PWD/kubeconfig
-kubectl get nodes
+tsh login --proxy=teleport.unorouter.com   # GitHub SSO
+tsh kube login unorouter
+kubectl -n services logs deploy/new-api-master --tail 100
 kubectl -n databases exec newapi-pg-1 -c postgres -- psql -U postgres -d newapi -c "<sql>"
 ```
 
-Node SSH: `ssh root@<public-ip>` (IPs in `tofu` outputs). Secrets: `bao kv`. DR: `bootstrap/dr/README.md`.
+**2. Direct kubeconfig (backup, Teleport down)** - context `unorouter-direct` in `~/.kube/config`,
+or `export KUBECONFIG=$PWD/kubeconfig`.
+
+**3. Node SSH (break-glass, apiserver down)** - `ssh root@<public-ip>` (IPs in `tofu` outputs).
+
+Secrets: `bao kv`. DR: `bootstrap/dr/README.md`.
 
 ## One-time prerequisites
 
