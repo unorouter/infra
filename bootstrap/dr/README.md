@@ -197,6 +197,17 @@ Then: `tsh login --proxy=teleport.unorouter.com` (Teleport CA regenerated -> re-
 
 Break-glass (age key lost): unseal keys are in Bitwarden -> `bao operator unseal` by hand.
 
+OIDC gotchas (found 2026-07-23 during the ops-subdomain rename; both bit because they are
+NOT reconciled from git):
+- **Dex loads config only at boot -- no hot-reload.** After ANY change to `dex-config`
+  (e.g. a redirect-URI rename), `kubectl -n dex rollout restart deploy/dex` or logins fail
+  with "Bad Request: Unregistered redirect_uri". The configmap can look correct while the
+  running Dex serves the old one.
+- **OpenBao's OIDC role redirect is a runtime `bao write`, not a manifest.** On DR (fresh
+  raft) or any hostname change, re-set it:
+  `bao write auth/oidc/role/admin allowed_redirect_uris='https://openbao.unorouter.com/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback'`
+  (plus user_claim=email, token_policies=admin, bound_audiences=openbao, oidc_scopes=openid,profile,email,groups, groups_claim=groups). Dex must ALSO allow that callback (dex.yaml staticClients).
+
 ### DR test learnings (2026-07-22, all folded into the steps above)
 
 1. Bucket is in its OWN tofu state (`tofu/storage/`) so `make destroy` (plain `tofu destroy`)
