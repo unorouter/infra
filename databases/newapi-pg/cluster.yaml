@@ -66,3 +66,8 @@ spec:
       - hostssl newapi reader all cert
     parameters:
       max_connections: "200"
+      # 3.3GB model_status_pings + 2.3M logs: default 128MB shared_buffers thrashed disk
+      # on every status-page aggregation (83 SLOW SQL / 2h, user-visible page hangs)
+      shared_buffers: "512MB"
+      work_mem: "12MB"
+      effective_cache_size: "3GB"
