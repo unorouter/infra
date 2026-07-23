@@ -22,7 +22,10 @@ EOF
 )
 
 if [ -n "$HITS" ]; then
+  echo "$(date -Is) HIT: $HITS"
   echo "$(date -Is) HIT: $HITS" >> /home/zero/.local/state/hetzner-stock-hits.log
   DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus \
     notify-send -u critical "Hetzner stock!" "$HITS  -- swap manually per DR runbook" 2>/dev/null || true
+else
+  echo "$(date -Is) no stock (watched: cx33 cx32 cax21 cx22 cax11 in nbg1/hel1)"
 fi
