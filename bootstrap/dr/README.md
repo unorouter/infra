@@ -172,6 +172,13 @@ Lesson: don compose files inject env vars beyond .env -- when migrating a servic
 `docker inspect <c> .Config.Env` against the k8s secret, not just the .env file.
 Lesson 2: no alerting = 8h silent frontend outage. healthchecks.io/ntfy is next.
 
+Also 2026-07-23: don's new-api ZOMBIE-RESPAWNED ~40min after cutover -- a repo push
+triggered the old "Docker Prod" workflow (self-hosted runner, `docker stack deploy`
+restores compose replicas). Ran 11h in parallel (own stale DB, same provider keys ->
+burned shared upstream rate limits). Fix: "Docker Prod" workflows DISABLED in all three
+repos (new-api / unorouter-bot / unorouter); GHCR image builds stay active. k3s deploy
+after image build = manual `kubectl rollout restart` for now (no image updater yet).
+
 ### Cutover procedure (minutes, not a freeze-window)
 1. Stop don writers: `docker service scale newapi_newapi-master=0 newapi_newapi-slave=0`
    + stop don bot container.
