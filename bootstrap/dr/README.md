@@ -207,6 +207,12 @@ NOT reconciled from git):
   raft) or any hostname change, re-set it:
   `bao write auth/oidc/role/admin allowed_redirect_uris='https://openbao.unorouter.com/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback'`
   (plus user_claim=email, token_policies=admin, bound_audiences=openbao, oidc_scopes=openid,profile,email,groups, groups_claim=groups). Dex must ALSO allow that callback (dex.yaml staticClients).
+- **OpenBao UI defaults to the Token method** unless OIDC is surfaced:
+  `bao auth tune -listing-visibility=unauth oidc/` makes OIDC the login default (re-apply on
+  DR). OpenBao 2.6.0 has NO `sys/config/ui/login/default-auth` (Vault 1.20+ only), so this is
+  the best available -- KNOWN caveat (vault#10816): after logout/expiry the UI snaps back to
+  the Token tab. Bookmark `openbao.unorouter.com/ui/vault/auth?with=oidc%2F` to always land on
+  OIDC. Login: method OIDC, role blank (default=admin), Sign In -> GitHub.
 
 ### DR test learnings (2026-07-22, all folded into the steps above)
 
