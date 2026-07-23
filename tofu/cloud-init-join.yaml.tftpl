@@ -1,0 +1,33 @@
+#cloud-config
+# Joining k3s SERVER (embedded etcd HA). No auto-deploy manifests here -- node1 owns
+# cilium/argocd/root-app; a second copy would fight it.
+package_update: true
+packages:
+  - curl
+  - open-iscsi
+
+runcmd:
+  - curl -fsSL https://tailscale.com/install.sh | sh
+%{ if tailscale_authkey != "" ~}
+  - tailscale up --authkey='${tailscale_authkey}' --hostname=${node_name}
+%{ endif ~}
+  - |
+    PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
+    export INSTALL_K3S_EXEC="server \
+      --server https://10.100.1.1:6443 \
+      --token '${k3s_token}' \
+      --node-ip ${private_ip} \
+      --node-external-ip $PUBLIC_IP \
+      --flannel-backend=none \
+      --disable-network-policy \
+      --disable=traefik \
+      --disable=servicelb \
+      --disable-kube-proxy \
+      --tls-san=$PUBLIC_IP \
+      --write-kubeconfig-mode 644"
+%{ if k3s_version != "" ~}
+    export INSTALL_K3S_VERSION="${k3s_version}"
+%{ else ~}
+    export INSTALL_K3S_CHANNEL="stable"
+%{ endif ~}
+    curl -sfL https://get.k3s.io | sh -
