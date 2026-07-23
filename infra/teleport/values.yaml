@@ -32,7 +32,7 @@ auth:
         audit_sessions_uri: "s3://unorouter-pg-backups/teleport-recordings?endpoint=fsn1.your-objectstorage.com&region=fsn1"
     auth_service:
       tokens:
-        - "app,db:/etc/teleport-join/token"
+        - "app,db,kube:/etc/teleport-join/token"
   extraVolumes:
     - name: app-join-token
       secret:
