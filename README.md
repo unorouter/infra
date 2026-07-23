@@ -8,6 +8,15 @@ Stack: k3s + Cilium (CNI, no kube-proxy) + ArgoCD (app-of-apps) + CloudNativePG 
 plugin -> Hetzner S3 PITR) + OpenBao + ESO + cloudflared tunnel + Teleport. Secrets: SOPS/age
 in git + OpenBao at runtime. TLS: Cloudflare (tunnel + Origin cert, no cert-manager ACME).
 
+## Ops UIs (Teleport SSO-gated)
+
+Log into [teleport.unorouter.com](https://teleport.unorouter.com) (GitHub SSO), then the app
+tiles. Direct hits 404 without a session by design (Teleport sets the cookie via the launcher).
+
+- [argocd.unorouter.com](https://argocd.unorouter.com) - GitOps deploy dashboard
+- [hubble.unorouter.com](https://hubble.unorouter.com) - Cilium network flow observability
+- [openbao.unorouter.com](https://openbao.unorouter.com) - secrets vault UI
+
 ## Pinned versions
 
 Live-verified 2026-07-23. Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest | jq .tag_name`.
