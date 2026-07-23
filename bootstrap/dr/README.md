@@ -94,8 +94,8 @@ window; hand-incorporated per the rules above. This is the CANONICAL single-node
    inline network block or provider booleans -- expect `+ network` as update-in-place;
    abort if the plan says replace/destroy). Final `tofu plan` = No changes.
 
-Gotcha: tailscale authkey in tofu/.env was expired (interactive-login prompt) -- node4/node5
-have NO tailscale; rotate the key and join them later. SSH via public IP works (firewall 22).
+Note: nodes reach each other over the private net (10.100.x); node SSH is public-IP + firewall
+(port 22). Tailscale is not used on the current fleet -- it's a future/optional overlay only.
 
 Node2 swap (same day, ~16:10-16:30, -> node5): identical procedure, ONE delta -- node2
 carried singletons (new-api-master, unorouter-bot, cilium-operator). After cordon, evict
