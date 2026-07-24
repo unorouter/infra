@@ -19,9 +19,40 @@
   through the firewall).
 - CNPG: newapi-pg instances 3 (one per DC), bot-pg 2. spec.instances is GIT-owned (the old
   ignoreDifferences entry deliberately removed).
-- Still node1-affine (local-path PVs / fixed IP): openbao, teleport (+grey-cloud DNS),
-  argocd, redis, mcp, new-api-master. Node1 loss = those restart cold on another node
-  minus their PVs -> follow the DR restore path for openbao; teleport is stateless-by-design.
+- Still node1-affine (local-path PVs / fixed IP): openbao, argocd, redis, mcp. Node1 loss =
+  those restart cold on another node minus their PVs -> follow the DR restore path for
+  openbao. (teleport entry + new-api-master now live off node1; see the node swaps below.)
+- **node7-affine: the whole monitoring stack** (Prometheus/Grafana/Alertmanager PVCs, pinned
+  by nodeSelector because local-path binds a PVC to one node forever). Swapping node7 =
+  delete those 3 PVCs and lose metric history. NO prod impact, nothing to restore, the stack
+  rebuilds empty. Do not treat it as a blocker during a node swap.
+### Monitoring (added 2026-07-25) -- CHECK THIS FIRST IN AN INCIDENT
+
+`grafana.unorouter.com` (Teleport tile -> dex SSO). Prometheus/Alertmanager/Grafana run in
+namespace `monitoring`, pinned to node7. Alerts fire to Discord.
+
+During an incident, the fastest triage order is: Grafana node/pod dashboards -> firing alerts
+in Alertmanager -> then the CLI checks below. Metrics retain 15d, so a post-mortem no longer
+depends on catching the box red-handed (the 24h RAM incident had to be diagnosed live because
+`kubectl top` only shows now).
+
+Rules live in `infra/monitoring/extras/rules-unorouter.yaml` and are derived from the real
+failures in this runbook -- memory/OOM cascade, etcd slow-apply -> NodeNotReady, crashloops,
+**backup silently never running**, in-cluster probes of the public URLs (the hairpin path),
+PVC/disk. Each rule's annotation names the incident it exists for.
+
+Non-obvious wiring, all of it load-bearing:
+- **etcd**: needs `--etcd-expose-metrics=true` on every k3s server unit (`:2381` is otherwise
+  localhost-only). Scrape targets are a STATIC IP list in `extras/scrape-etcd.yaml` --
+  **update it on every node swap** or the etcd alerts silently go blind.
+- **backup freshness**: `cnpg_collector_last_available_backup_timestamp` is permanently 0 with
+  the Barman Cloud PLUGIN, so it is NOT used. kube-state-metrics `customResourceState` exposes
+  the CNPG `Backup` CRs and the alert reads those. Verified live: both clusters ~19h.
+- **Alertmanager routing** is an `AlertmanagerConfig` CRD, not the chart's inline `config:` --
+  only the CRD's `discordConfigs.apiURL` takes a Secret ref, keeping the webhook out of git
+  (inline `webhook_url_file` is not in the discordConfig schema at v0.33.1).
+- Adding a dex OIDC client requires `kubectl -n dex rollout restart deploy/dex`.
+
 ### Cluster access hierarchy (kubectl)
 
 1. **Teleport (primary, audited)**: `tsh login --proxy=teleport.unorouter.com --auth=github`
@@ -357,7 +388,11 @@ Fixes (all in git/OpenBao):
 
 Lesson: don compose files inject env vars beyond .env -- when migrating a service, diff
 `docker inspect <c> .Config.Env` against the k8s secret, not just the .env file.
-Lesson 2: no alerting = 8h silent frontend outage. healthchecks.io/ntfy is next.
+Lesson 2: no alerting = 8h silent frontend outage. RESOLVED 2026-07-25: kube-prometheus-stack
++ Alertmanager -> Discord, with rules written from this and every other past incident (see
+"Monitoring" below). STILL OPEN: an EXTERNAL dead-man switch (healthchecks.io ping fed by the
+always-firing Watchdog alert) -- in-cluster alerting cannot report its own death, which is
+exactly the whole-cluster-down case.
 
 Also 2026-07-23: don's new-api ZOMBIE-RESPAWNED ~40min after cutover -- a repo push
 triggered the old "Docker Prod" workflow (self-hosted runner, `docker stack deploy`

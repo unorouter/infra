@@ -33,9 +33,41 @@ tiles. Direct hits 404 without a session by design (Teleport sets the cookie via
 
 - [argocd.unorouter.com](https://argocd.unorouter.com) - GitOps deploy dashboard
 - [openbao.unorouter.com](https://openbao.unorouter.com) - secrets vault UI
+- [grafana.unorouter.com](https://grafana.unorouter.com) - metrics + alert dashboards
 
 Network flows: no UI (removed 2026-07-23). Use the CLI when debugging:
 `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --follow`.
+
+## Monitoring + alerting
+
+kube-prometheus-stack in namespace `monitoring`, **pinned to node7** (`local-path` PVCs bind to
+one node; swapping node7 means deleting the Prometheus/Grafana/Alertmanager PVCs and losing
+history - no prod impact). Alerts go to Discord via Alertmanager.
+
+Alert rules (`infra/monitoring/extras/rules-unorouter.yaml`) are written from the actual
+incident history rather than a generic starter pack, and weight **silent** failures highest -
+three times something was broken for hours with no signal at all:
+
+| Group | Watches | Incident it would have caught |
+| --- | --- | --- |
+| memory | node/container mem, OOMKill (exit 137), absolute free | 8h frontend outage; 24h RAM pressure |
+| etcd | slow applies, WAL fsync p99, leader changes, NodeNotReady | 1000+ slow-applies/2h that flapped nodes 4x/hr |
+| services | 0 ready replicas, restart rate, CrashLoopBackOff | 13 restarts with nobody notified |
+| backups | base-backup age, stuck-in-started, WAL archive failures, Velero | base backups 0 bytes and never run while WAL looked fine |
+| postgres | CNPG health, replica count, replication lag | - |
+| ingress | in-cluster probes of the PUBLIC urls, cert expiry, tunnel HA | the hairpin path CF dropped mid-TLS-handshake |
+| cluster | PVC/disk full, Cilium unreachable nodes | local-path means a full PVC is a node problem |
+
+Gotchas worth knowing:
+- **etcd metrics need `--etcd-expose-metrics=true`** on every k3s server (set on all 3 nodes);
+  without it :2381 is localhost-only. Targets are a static list in
+  `infra/monitoring/extras/scrape-etcd.yaml` - **update the IPs when a node is swapped**.
+- **CNPG's own backup timestamp metrics stay at 0** with the Barman Cloud *plugin* method, so
+  backup freshness is read from the `Backup` CRs via kube-state-metrics `customResourceState`.
+  Do not "fix" the alert back to `cnpg_collector_last_available_backup_timestamp`.
+- Grafana logs in through dex (same IdP as argocd/openbao); `unorouter:admins` maps to Admin.
+  Adding a dex client **requires `kubectl -n dex rollout restart deploy/dex`** - dex reads its
+  config only at boot.
 
 ## Pinned versions
 
@@ -58,6 +90,8 @@ Live-verified 2026-07-23. Bump check: `curl -s https://api.github.com/repos/<org
 | Teleport (+ kube-agent) | 18.10.1 | apps/teleport.yaml |
 | Velero | 12.1.0 (app 1.18.1) + aws-plugin 1.12.1 | apps/velero.yaml |
 | dex | v2.45.1 | cluster OIDC IdP |
+| kube-prometheus-stack | 87.19.1 | apps/monitoring.yaml |
+| blackbox-exporter | v0.27.0 | infra/monitoring/extras/blackbox.yaml |
 
 ## Access (3 tiers, use in order)
 
