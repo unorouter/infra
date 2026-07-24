@@ -161,9 +161,11 @@ kube-state-metrics:
 
 prometheus-node-exporter:
   # DaemonSet by design: every node needs its own exporter (that is the point).
+  # CPU limit deliberately generous relative to usage: scrape bursts are short and spiky,
+  # and a tight limit throttles them into permanent CPUThrottlingHigh noise.
   resources:
     requests: { cpu: 20m, memory: 32Mi }
-    limits: { cpu: 100m, memory: 96Mi }
+    limits: { cpu: 400m, memory: 96Mi }
 
 # --- k3s reality: these control-plane components are not separately addressable ---
 # k3s runs scheduler/controller-manager/proxy inside the server process; kube-proxy is
