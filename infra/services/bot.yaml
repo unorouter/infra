@@ -30,7 +30,8 @@ spec:
         - name: bot
           image: ghcr.io/unorouter/unorouter-bot:latest
           resources:
-            requests: { memory: 128Mi, cpu: 50m }
+            requests: { memory: 256Mi, cpu: 50m }
+            limits: { memory: 768Mi }
           envFrom:
             - secretRef: { name: bot-env }
           ports:
