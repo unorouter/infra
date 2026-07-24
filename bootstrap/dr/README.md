@@ -19,6 +19,27 @@ a full DC outage. Private net 10.100.0.0/16 carries etcd/vxlan/apiserver-kubelet
   number. node2/3 (cpx22) -> node4/5 (cx23) 2026-07-23; node4 -> node6 and node5 -> node7
   (cx33 8GB, same-DC) 2026-07-24 after the RAM-pressure incident. Fleet now uniform 8+8+8.
 
+## Memory posture (what limits do and do not cover)
+
+Memory limits were set 2026-07-25 on the five revenue services (new-api master/slave,
+unorouter, bot, mcp) at ~2-3x observed peak. That caps the ONE failure from 2026-07-23: a
+single container growing unbounded until it OOM-starved the node.
+
+It does NOT cover everything, and the difference matters:
+
+- **~5.4Gi of pod memory is still uncapped** and mostly should be. Postgres (~850Mi/instance)
+  and Prometheus (~730Mi) are deliberately cache-hungry; a hard cap makes Postgres thrash disk
+  and puts Prometheus in an OOM-restart loop that loses data. ArgoCD, OpenBao, Cilium, Teleport
+  and ESO are also unlimited.
+- **k3s/etcd sits outside Kubernetes entirely** (~1.3Gi RSS, ~500Mi db). No k8s limit can touch
+  it, and it is the process that actually caused the 2026-07-24 incident: memory pressure ->
+  etcd fsync stall -> lease timeouts -> NodeNotReady flaps.
+- **No swap on any node.** Swap is the mitigation for the cases limits cannot reach: many pods
+  spiking at once, system/host processes, and reclaiming cold pages. Currently ~3.2-3.9Gi
+  available per node, so there is real headroom -- but the failure mode is a hard OOM kill with
+  no soft landing. Alert group `memory` (NodeMemoryFreeLow at <400Mi absolute) is the current
+  early warning; adding swap is the standing improvement.
+
 ## Incident triage: CHECK GRAFANA FIRST
 
 [grafana.unorouter.com](https://grafana.unorouter.com) -> firing alerts in Alertmanager -> then
