@@ -1,0 +1,53 @@
+# Alertmanager routing. Lives in the CRD (not the chart's inline `config:`) because
+# discordConfigs.apiURL accepts a Secret reference -- the webhook URL never enters git.
+# The chart's alertmanagerConfiguration.name points here.
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: unorouter-alerts
+  namespace: monitoring
+spec:
+  route:
+    receiver: discord
+    groupBy: [alertname, namespace]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    routes:
+      # Watchdog is the always-firing dead-man signal; it must NOT page Discord. It is
+      # consumed externally (healthchecks.io ping) so a dead Prometheus is detectable.
+      - receiver: "null"
+        matchers:
+          - name: alertname
+            value: Watchdog
+      - receiver: discord
+        matchers:
+          - name: severity
+            value: critical
+        groupWait: 10s
+        repeatInterval: 1h
+  receivers:
+    - name: "null"
+    - name: discord
+      discordConfigs:
+        - apiURL:
+            name: alertmanager-discord
+            key: webhook
+          sendResolved: true
+  inhibitRules:
+    # one root cause must not become an alert storm: a down node explains its pods, and
+    # etcd degradation explains the NodeNotReady it causes (incident 2026-07-24).
+    - sourceMatch:
+        - name: alertname
+          value: NodeNotReady
+      targetMatch:
+        - name: severity
+          value: warning
+      equal: [node]
+    - sourceMatch:
+        - name: severity
+          value: critical
+      targetMatch:
+        - name: severity
+          value: warning
+      equal: [alertname, namespace]

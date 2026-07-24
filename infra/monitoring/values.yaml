@@ -21,43 +21,14 @@ alertmanager:
           resources:
             requests:
               storage: 2Gi
-    # discord webhook arrives as a file (ESO -> secret alertmanager-discord); referenced by
-    # url_file in the route config below so the URL never appears in git or in the CRD.
-    secrets:
-      - alertmanager-discord
-  config:
-    global:
-      resolve_timeout: 5m
-    route:
-      receiver: discord
-      group_by: [alertname, namespace]
-      group_wait: 30s
-      group_interval: 5m
-      repeat_interval: 4h
-      routes:
-        # Watchdog is the always-firing dead-man signal; it must NOT page Discord. It is
-        # scraped externally (healthchecks.io ping) so a dead Prometheus is detectable.
-        - receiver: "null"
-          matchers: [alertname = "Watchdog"]
-        - receiver: discord
-          matchers: [severity = "critical"]
-          group_wait: 10s
-          repeat_interval: 1h
-    receivers:
-      - name: "null"
-      - name: discord
-        discord_configs:
-          - webhook_url_file: /etc/alertmanager/secrets/alertmanager-discord/webhook
-            send_resolved: true
-    inhibit_rules:
-      # one root cause must not become an alert storm: a down node explains its pods,
-      # and etcd degradation explains the NodeNotReady it causes (incident 2026-07-24).
-      - source_matchers: [alertname = "NodeDown"]
-        target_matchers: [severity =~ "warning|critical"]
-        equal: [node]
-      - source_matchers: [severity = "critical"]
-        target_matchers: [severity = "warning"]
-        equal: [alertname, namespace]
+    # Routing lives in the AlertmanagerConfig CRD (extras/alertmanager-config.yaml) rather
+    # than an inline `config:` block: the CRD's discordConfigs.apiURL takes a Secret ref, so
+    # the webhook URL stays out of git. Inline config only supports a literal webhook_url
+    # (webhook_url_file is not in the discordConfig schema at v0.33.1).
+    alertmanagerConfiguration:
+      name: unorouter-alerts
+      global:
+        resolveTimeout: 5m
 
 grafana:
   nodeSelector:
