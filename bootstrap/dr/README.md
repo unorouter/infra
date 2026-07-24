@@ -58,6 +58,33 @@ Non-obvious wiring, all of it load-bearing:
   pods serve the old config -- the symptom is a 404 on the new hostname with correct-looking
   YAML everywhere.
 
+### SSO-only posture (2026-07-25) -- no local passwords anywhere
+
+Every ops UI is GitHub-only; local username/password login is disabled across the board:
+
+| Service | Local auth | How it is disabled |
+| --- | --- | --- |
+| Teleport | off | `local_auth: false` in `infra/teleport/values.yaml` |
+| ArgoCD | off | `admin.enabled: "false"` in the cloud-init helm values |
+| Grafana | off | `auth.disable_login_form: true`; logs in from the Teleport JWT |
+| OpenBao | off | only `kubernetes/`, `oidc/`, `token/` auth methods exist (no userpass) |
+
+**Grafana does NOT prompt at all**: Teleport signs every proxied request with a JWT in the
+`Teleport-Jwt-Assertion` header, Grafana verifies it against
+`https://teleport.unorouter.com/.well-known/jwks.json` and signs the user straight in. Role
+comes from the JWT `roles` claim (a Teleport `editor` role maps to Grafana Admin). The dex
+OAuth button remains as a fallback for reaching Grafana outside the tunnel (port-forward).
+
+**BREAK-GLASS (GitHub or dex down = no ops UI at all).** This is the accepted trade; the
+recovery paths do not depend on SSO:
+1. `export KUBECONFIG=$PWD/kubeconfig` -- full cluster access, no SSO involved. This is the
+   real fallback and it is why disabling local logins is safe.
+2. `ssh root@<node-public-ip>` for the layer below k8s.
+3. OpenBao root token: `sops -d secrets/openbao-init.sops.yaml`.
+4. ArgoCD UI specifically: `kubectl -n argocd patch cm argocd-cm --type merge -p
+   '{"data":{"admin.enabled":"true"}}'` then restart `deploy/argo-cd-argocd-server`; the
+   password is still in secret `argocd-initial-admin-secret`. Revert when GitHub is back.
+
 ### Cluster access hierarchy (kubectl)
 
 1. **Teleport (primary, audited)**: `tsh login --proxy=teleport.unorouter.com --auth=github`

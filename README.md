@@ -36,6 +36,13 @@ the wildcard already covers it, just add the cloudflared rule.
 Log into [teleport.unorouter.com](https://teleport.unorouter.com) (GitHub SSO), then the app
 tiles. Direct hits 404 without a session by design (Teleport sets the cookie via the launcher).
 
+**SSO only - there are no local passwords.** Teleport (`local_auth: false`), ArgoCD
+(`admin.enabled: false`), Grafana (login form disabled) and OpenBao (no userpass method) all
+authenticate via GitHub through dex. Grafana goes further and never prompts at all: it reads
+the `Teleport-Jwt-Assertion` header Teleport signs on every proxied request, so the launcher
+drops you straight into the dashboards. If GitHub/dex is ever down, fall back to the direct
+kubeconfig (tier 2 below) - break-glass is in `bootstrap/dr/README.md`.
+
 - [argocd.unorouter.com](https://argocd.unorouter.com) - GitOps deploy dashboard
 - [openbao.unorouter.com](https://openbao.unorouter.com) - secrets vault UI
 - [grafana.unorouter.com](https://grafana.unorouter.com) - metrics + alert dashboards
