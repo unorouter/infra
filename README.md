@@ -20,6 +20,11 @@ resolve through it - there are NO per-host DNS records. To add/rename a hostname
 push (ArgoCD syncs). No Cloudflare dashboard, no DNS record. cloudflared's `404` catch-all
 handles anything without a rule.
 
+**GOTCHA: cloudflared reads its config ONLY at startup.** ArgoCD syncing the configmap is not
+enough - the running pods keep serving the old ingress list and the new hostname 404s while
+the configmap looks correct (cost a debug cycle adding grafana). After adding a rule:
+`kubectl -n cloudflared rollout restart deploy/cloudflared`. Same class of trap as dex.
+
 ONLY exceptions that cannot be the wildcard (keep explicit, do not add more): apex
 `unorouter.com` (wildcard skips root), `teleport` (grey-cloud A record, raw-TLS ALPN
 passthrough - not proxied), MX/TXT (email/DKIM). Everything

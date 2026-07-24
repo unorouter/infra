@@ -52,6 +52,11 @@ Non-obvious wiring, all of it load-bearing:
   only the CRD's `discordConfigs.apiURL` takes a Secret ref, keeping the webhook out of git
   (inline `webhook_url_file` is not in the discordConfig schema at v0.33.1).
 - Adding a dex OIDC client requires `kubectl -n dex rollout restart deploy/dex`.
+- **Exposing a new ops hostname needs TWO restarts, not just a git push**: dex (new OIDC
+  client) AND `kubectl -n cloudflared rollout restart deploy/cloudflared` (tunnel reads its
+  ingress list only at startup). ArgoCD updates both configmaps happily while the running
+  pods serve the old config -- the symptom is a 404 on the new hostname with correct-looking
+  YAML everywhere.
 
 ### Cluster access hierarchy (kubectl)
 
