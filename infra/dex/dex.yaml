@@ -1,5 +1,5 @@
 # Dex -- the cluster's mini OIDC IdP (wraps GitHub OAuth into real OIDC).
-# argocd + openbao point their OIDC login at it => one GitHub session, no app passwords.
+# argocd + openbao + grafana point their OIDC login at it => one GitHub session, no app passwords.
 # Public via the tunnel at dex.unorouter.com (IdPs are meant to be public; auth happens at
 # GitHub, org-gated to unorouter/admins). Stateless (memory storage): restart = re-click,
 # nothing to back up, nothing extra on DR.
@@ -31,6 +31,8 @@ spec:
       remoteRef: { key: dex-sso, property: argocdClientSecret }
     - secretKey: OPENBAO_CLIENT_SECRET
       remoteRef: { key: dex-sso, property: openbaoClientSecret }
+    - secretKey: GRAFANA_CLIENT_SECRET
+      remoteRef: { key: dex-sso, property: grafanaClientSecret }
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -71,6 +73,11 @@ data:
           - https://openbao.unorouter.com/ui/vault/auth/oidc/oidc/callback
           - http://localhost:8250/oidc/callback
         secret: "{{ .Env.OPENBAO_CLIENT_SECRET }}"
+      - id: grafana
+        name: Grafana
+        redirectURIs:
+          - https://grafana.unorouter.com/login/generic_oauth
+        secret: "{{ .Env.GRAFANA_CLIENT_SECRET }}"
 ---
 apiVersion: apps/v1
 kind: Deployment
