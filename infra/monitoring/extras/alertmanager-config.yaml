@@ -8,24 +8,35 @@ metadata:
   namespace: monitoring
 spec:
   route:
-    receiver: discord
+    # DEFAULT IS DROP. Only warning/critical opt in below. Making discord the default
+    # receiver spammed the channel with severity=none plumbing alerts (Watchdog,
+    # InfoInhibitor) whose own descriptions say they belong in a null receiver.
+    receiver: "null"
     groupBy: [alertname, namespace]
     groupWait: 30s
     groupInterval: 5m
     repeatInterval: 4h
     routes:
-      # Watchdog is the always-firing dead-man signal; it must NOT page Discord. It is
-      # consumed externally (healthchecks.io ping) so a dead Prometheus is detectable.
+      # keep the internal signals explicit so it is obvious they are intentionally silent:
+      # Watchdog is the always-firing dead-man (consumed externally via healthchecks.io),
+      # InfoInhibitor exists only to suppress info alerts.
       - receiver: "null"
         matchers:
           - name: alertname
-            value: Watchdog
+            matchType: "=~"
+            value: "Watchdog|InfoInhibitor"
       - receiver: discord
         matchers:
           - name: severity
             value: critical
         groupWait: 10s
         repeatInterval: 1h
+      - receiver: discord
+        matchers:
+          - name: severity
+            value: warning
+        groupWait: 5m
+        repeatInterval: 12h
   receivers:
     - name: "null"
     - name: discord
@@ -34,6 +45,14 @@ spec:
             name: alertmanager-discord
             key: webhook
           sendResolved: true
+          # default template dumps every label, the full description paragraph, the runbook
+          # URL and an unreadable Source: query link -- a screen of text per alert. Keep it
+          # to what you act on: what broke, where, and the one-line summary.
+          title: '{{ if eq .Status "firing" }}[{{ .CommonLabels.severity | toUpper }}]{{ else }}[RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
+          message: |-
+            {{ range .Alerts -}}
+            {{ .Annotations.summary }}
+            {{ end -}}
   inhibitRules:
     # one root cause must not become an alert storm: a down node explains its pods, and
     # etcd degradation explains the NodeNotReady it causes (incident 2026-07-24).
