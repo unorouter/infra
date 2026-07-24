@@ -42,8 +42,12 @@ exists for. Load-bearing wiring:
   (tunnel reads its ingress list only at startup). Both serve stale config while the configmaps
   look correct -- symptom is a 404 with correct-looking YAML everywhere.
 
-STILL OPEN: external dead-man switch (healthchecks.io ping from the Watchdog alert).
-In-cluster alerting cannot report its own death.
+**Dead-man switch (live 2026-07-25)**: the always-firing `Watchdog` alert is routed to a webhook
+receiver that POSTs healthchecks.io every 5m. If the cluster, Prometheus or Alertmanager dies
+the pings stop and healthchecks emails after a 15m grace -- the one failure mode in-cluster
+alerting can never report about itself. Ping URL is in OpenBao `secret/alertmanager`
+(`healthchecksPing`), delivered by ESO; check period 5m / grace 15m must stay >= the route's
+`repeatInterval` or it will false-alarm.
 
 ## Access + SSO
 
