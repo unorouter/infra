@@ -1,0 +1,176 @@
+# kube-prometheus-stack. Whole stack is PINNED TO node7: local-path PVCs bind to one node
+# forever, so pinning is explicit rather than accidental. Swapping node7 later = delete the
+# Prometheus/Grafana/Alertmanager PVCs and lose history (no prod impact); see DR runbook.
+# node1 is deliberately avoided (pg primaries + OpenBao + argocd controllers, hottest node).
+
+nameOverride: kps
+fullnameOverride: kps
+
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector:
+      kubernetes.io/hostname: unorouter-node7
+    resources:
+      requests: { cpu: 20m, memory: 64Mi }
+      limits: { cpu: 100m, memory: 128Mi }
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 2Gi
+    # discord webhook arrives as a file (ESO -> secret alertmanager-discord); referenced by
+    # url_file in the route config below so the URL never appears in git or in the CRD.
+    secrets:
+      - alertmanager-discord
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: discord
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        # Watchdog is the always-firing dead-man signal; it must NOT page Discord. It is
+        # scraped externally (healthchecks.io ping) so a dead Prometheus is detectable.
+        - receiver: "null"
+          matchers: [alertname = "Watchdog"]
+        - receiver: discord
+          matchers: [severity = "critical"]
+          group_wait: 10s
+          repeat_interval: 1h
+    receivers:
+      - name: "null"
+      - name: discord
+        discord_configs:
+          - webhook_url_file: /etc/alertmanager/secrets/alertmanager-discord/webhook
+            send_resolved: true
+    inhibit_rules:
+      # one root cause must not become an alert storm: a down node explains its pods,
+      # and etcd degradation explains the NodeNotReady it causes (incident 2026-07-24).
+      - source_matchers: [alertname = "NodeDown"]
+        target_matchers: [severity =~ "warning|critical"]
+        equal: [node]
+      - source_matchers: [severity = "critical"]
+        target_matchers: [severity = "warning"]
+        equal: [alertname, namespace]
+
+grafana:
+  nodeSelector:
+    kubernetes.io/hostname: unorouter-node7
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 384Mi }
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    size: 2Gi
+  admin:
+    existingSecret: grafana-admin
+    userKey: adminUser
+    passwordKey: adminPassword
+  # dex OIDC, same IdP argocd + openbao use: one GitHub session, org-gated to unorouter/admins.
+  # Teleport gates the outer hop (tunnel -> proxy -> app); this gates Grafana's own identity.
+  extraSecretMounts:
+    - name: grafana-dex-sso
+      secretName: grafana-dex-sso
+      mountPath: /etc/secrets/grafana-oidc
+      readOnly: true
+  grafana.ini:
+    server:
+      root_url: https://grafana.unorouter.com
+    auth:
+      disable_login_form: false
+    auth.anonymous:
+      enabled: false
+    auth.generic_oauth:
+      enabled: true
+      name: GitHub (dex)
+      allow_sign_up: true
+      client_id: grafana
+      client_secret: $__file{/etc/secrets/grafana-oidc/grafanaClientSecret}
+      scopes: openid profile email groups
+      auth_url: https://dex.unorouter.com/auth
+      token_url: https://dex.unorouter.com/token
+      api_url: https://dex.unorouter.com/userinfo
+      # analogue of argocd's `g, unorouter:admins, role:admin`
+      role_attribute_path: contains(groups[], 'unorouter:admins') && 'Admin' || 'Viewer'
+      role_attribute_strict: false
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+
+prometheus:
+  prometheusSpec:
+    nodeSelector:
+      kubernetes.io/hostname: unorouter-node7
+    retention: 15d
+    retentionSize: 16GB
+    resources:
+      requests: { cpu: 200m, memory: 700Mi }
+      limits: { cpu: 1000m, memory: 1536Mi }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 20Gi
+    # pick up ServiceMonitors/PrometheusRules from every namespace, not just ones the
+    # chart labels (CNPG + cilium ship their own in other namespaces).
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+prometheusOperator:
+  nodeSelector:
+    kubernetes.io/hostname: unorouter-node7
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+
+kube-state-metrics:
+  nodeSelector:
+    kubernetes.io/hostname: unorouter-node7
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 192Mi }
+
+prometheus-node-exporter:
+  # DaemonSet by design: every node needs its own exporter (that is the point).
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { cpu: 100m, memory: 96Mi }
+
+# --- k3s reality: these control-plane components are not separately addressable ---
+# k3s runs scheduler/controller-manager/proxy inside the server process; kube-proxy is
+# disabled entirely (Cilium replaces it). Leaving them on produces permanently-down targets
+# that train you to ignore red.
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+# etcd IS scraped, but via an explicit endpoints list (below) because k3s binds 2381 to the
+# node private IP; the chart's default selector finds nothing.
+kubeEtcd:
+  enabled: false
+
+defaultRules:
+  create: true
+  rules:
+    # disabled to match the components turned off above
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeControllerManager: false
+    kubeProxy: false
+    etcd: false

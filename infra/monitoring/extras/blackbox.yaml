@@ -1,0 +1,110 @@
+# blackbox-exporter: probes the PUBLIC urls from INSIDE the cluster.
+#
+# WHY THIS EXISTS: the 2026-07-23 8h outage ran exactly this path -- the frontend called the
+# public api hostname, the traffic hairpinned (pod -> CF edge -> tunnel -> back in), and
+# Cloudflare L3/4 auto-mitigation started dropping the node IPv4 mid-TLS-handshake for our
+# zone only. Invisible to external checks (they were fine) and invisible to in-cluster
+# service checks (those bypass the edge). Only an in-cluster probe of the public URL sees it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels: { app: blackbox-exporter }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: blackbox-exporter }
+  template:
+    metadata:
+      labels: { app: blackbox-exporter }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: unorouter-node7
+      containers:
+        - name: blackbox-exporter
+          image: quay.io/prometheus/blackbox-exporter:v0.27.0
+          args: ["--config.file=/etc/blackbox/config.yml"]
+          ports:
+            - name: http
+              containerPort: 9115
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 96Mi }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/blackbox
+              readOnly: true
+      volumes:
+        - name: config
+          configMap: { name: blackbox-exporter }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+data:
+  config.yml: |
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 10s
+        http:
+          valid_status_codes: [200, 204]
+          follow_redirects: true
+          preferred_ip_protocol: ip4
+      # the frontend root answers 307 (locale redirect) -- treat redirects as success
+      http_2xx_or_redirect:
+        prober: http
+        timeout: 10s
+        http:
+          valid_status_codes: [200, 204, 301, 302, 307, 308]
+          follow_redirects: false
+          preferred_ip_protocol: ip4
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels: { app: blackbox-exporter }
+spec:
+  selector: { app: blackbox-exporter }
+  ports:
+    - name: http
+      port: 9115
+      targetPort: 9115
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: public-endpoints
+  namespace: monitoring
+spec:
+  interval: 60s
+  module: http_2xx
+  prober:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      static:
+        - https://api.unorouter.com/api/status
+        - https://teleport.unorouter.com/webapi/ping
+        - https://dex.unorouter.com/.well-known/openid-configuration
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: public-frontend
+  namespace: monitoring
+spec:
+  interval: 60s
+  module: http_2xx_or_redirect
+  prober:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      static:
+        - https://unorouter.com
+        - https://www.unorouter.com

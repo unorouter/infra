@@ -1,0 +1,230 @@
+# Alert rules derived from ACTUAL past incidents, not a generic starter pack. Every group
+# cites the failure it would have caught. The bias is toward SILENT failures: three separate
+# times something was broken for hours with zero signal (backups never running, etcd stalling,
+# Velero stuck), and those are the rules that matter most here.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: unorouter-incidents
+  namespace: monitoring
+spec:
+  groups:
+    # A. memory / OOM cascade -- 2026-07-23 8h frontend outage (OOMKill -> crashloop -> 502)
+    # and the 2026-07-24 24h RAM-pressure incident.
+    - name: unorouter.memory
+      rules:
+        - alert: NodeMemoryHigh
+          expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.85
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} memory >85%"
+            description: "Node memory {{ $value | humanizePercentage }}. The RAM-pressure incident began here and ended in etcd stalls + NodeNotReady flaps."
+        - alert: NodeMemoryCritical
+          expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.92
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.instance }} memory >92%"
+            description: "Node memory {{ $value | humanizePercentage }}. node4/node5 sat at 92.5%/88.7% during the 2026-07-24 incident."
+        # percentage alone lied during the 8h outage (node showed 60% but only 233Mi free)
+        - alert: NodeMemoryFreeLow
+          expr: node_memory_MemAvailable_bytes < 400 * 1024 * 1024
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} has <400Mi available"
+            description: "Only {{ $value | humanize1024 }}B available. Percentage can look fine while absolute headroom is gone."
+        - alert: ContainerOOMKilled
+          expr: increase(kube_pod_container_status_restarts_total[10m]) > 0
+            and on(namespace, pod, container) kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Container hit exit 137 (kernel OOM). This is exactly what killed both unorouter replicas for 8 hours."
+        - alert: ContainerMemoryNearLimit
+          expr: (container_memory_working_set_bytes{container!="",container!="POD"}
+            / on(namespace, pod, container) kube_pod_container_resource_limits{resource="memory"}) > 0.90
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} >90% of memory limit"
+            description: "Early warning before the OOMKill."
+
+    # B. etcd degradation -> NodeNotReady cascade -- 2026-07-24. 1000+ slow-apply warnings per
+    # 2h were completely invisible; they stalled lease renewals and evicted pods.
+    - name: unorouter.etcd
+      rules:
+        - alert: EtcdSlowApplies
+          expr: rate(etcd_server_slow_apply_total[15m]) * 60 > 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "etcd slow applies {{ $value | printf \"%.1f\" }}/min on {{ $labels.instance }}"
+            description: "Peaked at 5.4/min during the incident. Leads to lease renewal timeouts and NodeNotReady."
+        - alert: EtcdHighFsyncLatency
+          expr: histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket[10m])) > 0.1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "etcd WAL fsync p99 {{ $value | humanizeDuration }} on {{ $labels.instance }}"
+            description: "Above etcd's own 100ms SLA. Usually memory pressure stealing page cache."
+        - alert: EtcdLeaderChanges
+          expr: increase(etcd_server_leader_changes_seen_total[15m]) > 2
+          labels: { severity: warning }
+          annotations:
+            summary: "etcd leader changed {{ $value }}x in 15m"
+        - alert: EtcdMembersDown
+          expr: count(up{job="etcd"} == 1) < 3
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "etcd has fewer than 3 reachable members"
+            description: "Quorum tolerates one loss only. Two = the 34min DB-write outage of 2026-07-23."
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 3m
+          labels: { severity: critical, node: "{{ $labels.node }}" }
+          annotations:
+            summary: "{{ $labels.node }} NotReady"
+            description: "node5 flapped 4x in one hour, silently, during the 2026-07-24 incident."
+
+    # C. prod service down -- the 8h outage reached 13 restarts per pod with no alert.
+    - name: unorouter.services
+      rules:
+        - alert: DeploymentNoReplicas
+          expr: kube_deployment_status_replicas_available{namespace="services"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.deployment }} has ZERO ready replicas"
+            description: "Revenue service is down."
+        - alert: PodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total[15m]) > 3
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} restarting repeatedly"
+            description: "{{ $value | printf \"%.0f\" }} restarts in 15m. Catches the crashloop BEFORE it becomes an outage."
+        - alert: PodCrashLoopBackOff
+          expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} == 1
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} in CrashLoopBackOff"
+
+    # D. backups silently broken -- THE WORST past failure. Base backups were 0 bytes and had
+    # never run while WAL archiving looked healthy; PITR was impossible and nothing said so.
+    - name: unorouter.backups
+      rules:
+        - alert: CNPGNoRecentBaseBackup
+          expr: (time() - cnpg_collector_last_available_backup_timestamp) > 26 * 3600
+          for: 30m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} base backup older than 26h"
+            description: "Catches BOTH 'never ran' and 'hung in BackupStarted'. Without a base backup, WAL archives alone cannot restore anything."
+        - alert: CNPGWalArchiveFailing
+          expr: cnpg_pg_stat_archiver_last_failed_time > cnpg_pg_stat_archiver_last_archived_time
+          for: 15m
+          labels: { severity: critical }
+          annotations:
+            summary: "WAL archiving failing on {{ $labels.pod }}"
+            description: "Runbook hard gate: WAL archiving must stay green or PITR silently rots."
+        - alert: CNPGWalArchiveFailures
+          expr: increase(cnpg_pg_stat_archiver_failed_count[1h]) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value | printf \"%.0f\" }} WAL archive failures on {{ $labels.pod }} in 1h"
+            description: "5 failures self-recovered unnoticed on 2026-07-22."
+        - alert: VeleroBackupStale
+          expr: (time() - velero_backup_last_successful_timestamp) > 26 * 3600
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "Velero schedule {{ $labels.schedule }} has no success in 26h"
+        - alert: VeleroDown
+          expr: up{job=~".*velero.*"} == 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Velero not scrapeable"
+            description: "Velero sat stuck in ContainerCreating on a missing secret for 16min on 2026-07-22 with backups simply not happening."
+
+    # E. CNPG cluster health
+    - name: unorouter.postgres
+      rules:
+        - alert: CNPGClusterUnhealthy
+          expr: cnpg_collector_up == 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "CNPG collector down for {{ $labels.namespace }}/{{ $labels.pod }}"
+        - alert: CNPGReplicaMissing
+          expr: cnpg_collector_pg_replication_streaming_replicas < cnpg_collector_pg_replication_expected_replicas
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }}: fewer streaming replicas than expected"
+        - alert: CNPGReplicationLagHigh
+          expr: cnpg_pg_replication_lag > 30
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Replication lag {{ $value }}s on {{ $labels.pod }}"
+
+    # F. ingress / external path -- the hairpin + CF-mitigation chain of the 8h outage.
+    - name: unorouter.ingress
+      rules:
+        - alert: PublicEndpointDown
+          expr: probe_success == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "Public endpoint {{ $labels.instance }} failing from inside the cluster"
+            description: "This is the exact hairpin path Cloudflare began dropping mid-TLS-handshake. External checks looked fine at the time."
+        - alert: PublicEndpointSlow
+          expr: probe_duration_seconds > 5
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} slow ({{ $value | humanizeDuration }})"
+            description: "The 5s health-endpoint hang is what tripped the liveness probe and killed the pods."
+        - alert: TLSCertExpiringSoon
+          expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "Certificate for {{ $labels.instance }} expires in <14d"
+        - alert: CloudflaredDegraded
+          expr: kube_deployment_status_replicas_available{namespace="cloudflared"} < 2
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "cloudflared HA degraded ({{ $value }}/2 up)"
+            description: "Tunnel is the ONLY ingress path for app traffic."
+
+    # G. cluster basics. local-path PVCs live on the node disk, so a full PVC is a node problem.
+    - name: unorouter.cluster
+      rules:
+        - alert: PVCAlmostFull
+          expr: (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.85
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} >85% full"
+        - alert: NodeDiskAlmostFull
+          expr: (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}
+            / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) > 0.85
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} root disk >85% full"
+            description: "local-path PVCs (pg data, prometheus) all live here."
+        - alert: CiliumUnreachableNodes
+          expr: cilium_unreachable_nodes > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Cilium reports {{ $value }} unreachable node(s)"
