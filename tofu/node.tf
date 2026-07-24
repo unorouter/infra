@@ -39,7 +39,7 @@ resource "hcloud_server" "node5" {
   name         = "unorouter-node5"
   server_type  = "cx23"
   image        = "ubuntu-24.04"
-  location     = "nbg1" # 3-DC spread with fsn1 (node1) + hel1 (node4): quorum survives a DC outage
+  location     = "nbg1" # 3-DC spread with fsn1 (node1) + hel1 (node6): quorum survives a DC outage
   ssh_keys     = [hcloud_ssh_key.operator.id]
   firewall_ids = [hcloud_firewall.node.id]
 
@@ -63,12 +63,13 @@ resource "hcloud_server" "node5" {
   depends_on = [hcloud_network_subnet.nodes]
 }
 
-# Sniped budget replacement for the cpx22-era node3 (2026-07-23): created via raw API
-# during a stock window, hand-joined, then tofu-imported. user_data below is the
-# DR-rebuild path only -- the live server was built without cloud-init.
-resource "hcloud_server" "node4" {
-  name         = "unorouter-node4"
-  server_type  = "cx23"
+# Sniped 8GB upgrade of the cx23 node4 (2026-07-24): cx33 grabbed during a hel1 stock
+# window, hand-joined, then tofu-imported. Same DC as the node it replaced (hel1) so the
+# 3-DC quorum spread is preserved. user_data below is the DR-rebuild path only -- the live
+# server was built without cloud-init.
+resource "hcloud_server" "node6" {
+  name         = "unorouter-node6"
+  server_type  = "cx33"
   image        = "ubuntu-24.04"
   location     = "hel1"
   ssh_keys     = [hcloud_ssh_key.operator.id]
@@ -76,15 +77,15 @@ resource "hcloud_server" "node4" {
 
   network {
     network_id = hcloud_network.cluster.id
-    ip         = "10.100.1.4"
+    ip         = "10.100.1.2"
   }
 
   user_data = templatefile("${path.module}/cloud-init-join.yaml.tftpl", {
     k3s_version       = var.k3s_version
     tailscale_authkey = var.tailscale_authkey
     k3s_token         = var.k3s_token
-    node_name         = "unorouter-node4"
-    private_ip        = "10.100.1.4"
+    node_name         = "unorouter-node6"
+    private_ip        = "10.100.1.2"
   })
 
   lifecycle {

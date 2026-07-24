@@ -2,14 +2,16 @@
 
 ## TOPOLOGY SINCE 2026-07-23: 3-node etcd HA (multi-DC)
 
-- node1 cx33 fsn1 (<node1-public-ip>, 10.100.1.1) + node4 cx23 hel1 (<retired-node4-public-ip>,
-  10.100.1.4) + node5 cx23 nbg1 (<retired-node5-public-ip>, 10.100.1.3). All k3s SERVERS, embedded
+- node1 cx33 fsn1 (<node1-public-ip>, 10.100.1.1) + node6 cx33 hel1 (<node6-public-ip>,
+  10.100.1.2) + node5 cx23 nbg1 (<retired-node5-public-ip>, 10.100.1.3). All k3s SERVERS, embedded
   etcd -- quorum survives a full DC outage. Private net 10.100.0.0/16 carries
   etcd/vxlan/apiserver-kubelet (all servers run `--advertise-address=<private>`; without
   it remotedialer dials public :6443 = firewalled). (Interim cpx22 node2/node3 retired
-  2026-07-23 via sniped-swap procedure below; node numbering is cattle -- k3s node names
-  are baked at registration, so replacements get the next number instead of reusing the
-  old one. COST MISSION COMPLETE: servers EUR19.47/mo, tofu var ha_node_type removed.)
+  2026-07-23 via sniped-swap procedure below; node4 cx23 hel1 upgraded to node6 cx33 8GB
+  2026-07-24 same-DC after the 24h RAM-pressure incident; node numbering is cattle -- k3s
+  node names are baked at registration, so replacements get the next number instead of
+  reusing the old one. Fleet now 8+8+4 GB: both heavy nodes (node1 pg primaries, node6
+  singletons) on 8GB, near-idle nbg1 leaf stays 4GB.)
 - k3s join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
 - Cilium `k8sServiceHost: 127.0.0.1` is VALID only because every node is a server. Adding
   an AGENT node requires changing that first. After changing any node's --node-ip, restart
@@ -104,6 +106,19 @@ endpoint 200 between each), THEN drain the rest. Master reschedule was seconds (
 serving); bot = one Discord gateway reconnect, deploy-grade. Also: Hetzner recycled the
 destroyed node3's private IP (10.100.1.3) for the new spare -- auto-assigned IPs reuse the
 lowest free address, harmless, keep whatever the spare got.
+
+Node4 swap (2026-07-24, ~16:43-17:15, -> node6): SAME-DC 8GB upgrade, not a cost swap --
+sniper retargeted `PREF="cx33"` (8GB) and grabbed a cx33 in hel1 (node4's own DC), so the
+3-DC spread held. node4 carried BOTH singletons + teleport-app-access-0 (StatefulSet) + both
+pg REPLICAS (newapi-pg-2, bot-pg-2). Same singleton-evict-first delta as node2, plus: evict
+the teleport agent pod too (entry externalIP is on node5, so zero ops-access impact -- just a
+reconnect). pg replicas rebuilt ONE CLUSTER AT A TIME (delete PVC+pod, CNPG `-join` bootstrap
+clones from primary on node1, ~1-2min each; wait 3/3 then 2/2). GOTCHA: `kubectl delete node`
+failed mid-swap with `dial 10.43.0.1:443 connection refused` -- the Teleport kube context
+routes through the in-cluster apiserver Service, which briefly lost its node4 endpoint when
+k3s stopped there; switch to the DIRECT kubeconfig (`export KUBECONFIG=$PWD/kubeconfig`) to
+finish `delete node` + tofu destroy, Teleport reconverges on its own once etcd is back to 3.
+Also recycled a stale SSH host key (destroyed-node IP reused) -> `ssh-keygen -R <ip>`.
 
 
 Full node loss -> back online with the smallest manual intervention. The node is disposable

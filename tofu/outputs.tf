@@ -6,8 +6,8 @@ output "node5_ipv4" {
   value = hcloud_server.node5.ipv4_address
 }
 
-output "node4_ipv4" {
-  value = hcloud_server.node4.ipv4_address
+output "node6_ipv4" {
+  value = hcloud_server.node6.ipv4_address
 }
 
 output "s3_endpoint" {
