@@ -28,6 +28,22 @@ hubble:
 
 operator:
   replicas: 1
+  prometheus:
+    enabled: true
+
+# agent + operator metrics for the CiliumAgentMissing / network alerts. serviceMonitor is
+# left off: the kube-prometheus-stack Prometheus selects all ServiceMonitors anyway and
+# enabling it here requires the CRDs to exist at Cilium install time (they do not on a DR
+# rebuild, where Cilium comes up before ArgoCD).
+prometheus:
+  enabled: true
+
+# a restart must touch ONE node at a time: eBPF programs live in the kernel and keep
+# forwarding while an agent is down (bpffs is mounted), but pod creation and policy updates
+# stall on that node meanwhile. Default maxUnavailable=2 would take 2 of 3 at once.
+updateStrategy:
+  rollingUpdate:
+    maxUnavailable: 1
 
 # NOTE: these values are ALSO inlined in tofu/cloud-init.yaml.tftpl (the k3s auto-deploy
 # HelmChart) because bootstrap can't reference git before ArgoCD exists. Keep the two in

@@ -49,6 +49,13 @@ write_files:
               enabled: false
           operator:
             replicas: 1
+            prometheus:
+              enabled: true
+          prometheus:
+            enabled: true
+          updateStrategy:
+            rollingUpdate:
+              maxUnavailable: 1
 
   # ArgoCD install (upstream manifest) + root app-of-apps -> reconciles everything from git.
   - path: /var/lib/rancher/k3s/server/manifests/argocd.yaml
