@@ -3,15 +3,15 @@
 ## TOPOLOGY SINCE 2026-07-23: 3-node etcd HA (multi-DC)
 
 - node1 cx33 fsn1 (<node1-public-ip>, 10.100.1.1) + node6 cx33 hel1 (<node6-public-ip>,
-  10.100.1.2) + node5 cx23 nbg1 (<retired-node5-public-ip>, 10.100.1.3). All k3s SERVERS, embedded
+  10.100.1.2) + node7 cx33 nbg1 (46.224.153.131, 10.100.1.4). All k3s SERVERS, embedded
   etcd -- quorum survives a full DC outage. Private net 10.100.0.0/16 carries
   etcd/vxlan/apiserver-kubelet (all servers run `--advertise-address=<private>`; without
   it remotedialer dials public :6443 = firewalled). (Interim cpx22 node2/node3 retired
   2026-07-23 via sniped-swap procedure below; node4 cx23 hel1 upgraded to node6 cx33 8GB
-  2026-07-24 same-DC after the 24h RAM-pressure incident; node numbering is cattle -- k3s
-  node names are baked at registration, so replacements get the next number instead of
-  reusing the old one. Fleet now 8+8+4 GB: both heavy nodes (node1 pg primaries, node6
-  singletons) on 8GB, near-idle nbg1 leaf stays 4GB.)
+  2026-07-24 same-DC after the 24h RAM-pressure incident; node5 cx23 nbg1 upgraded to node7
+  cx33 8GB 2026-07-24 same-DC; node numbering is cattle -- k3s node names are baked at
+  registration, so replacements get the next number instead of reusing the old one. Fleet
+  now UNIFORM cx33 8+8+8 GB across fsn1/hel1/nbg1.)
 - k3s join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
 - Cilium `k8sServiceHost: 127.0.0.1` is VALID only because every node is a server. Adding
   an AGENT node requires changing that first. After changing any node's --node-ip, restart
@@ -120,6 +120,24 @@ k3s stopped there; switch to the DIRECT kubeconfig (`export KUBECONFIG=$PWD/kube
 finish `delete node` + tofu destroy, Teleport reconverges on its own once etcd is back to 3.
 Also recycled a stale SSH host key (destroyed-node IP reused) -> `ssh-keygen -R <ip>`.
 
+Node5 swap (2026-07-24, ~23:15-23:40, -> node7): SAME-DC 8GB upgrade (sniper pinned
+`ONLY_LOC="nbg1"`, grabbed a cx33 in nbg1), completing the fleet at uniform cx33 8+8+8. THE
+NEW DELTA vs every prior swap: **node5 was the Teleport sacrificial ENTRY node** (svc
+`externalIPs` + the grey-cloud `teleport.unorouter.com` A record both = node5's public IP).
+So the swap added a GRACEFUL ENTRY CUTOVER done BEFORE draining (no prior swap needed it):
+(1) add node7's IP ALONGSIDE node5's in `infra/teleport/values.yaml` externalIPs, commit+push
+main, ArgoCD self-heals it in (~90s) -> Cilium answers on BOTH nodes (verify each with
+`curl --resolve teleport.unorouter.com:443:<ip> .../webapi/ping` = 200); (2) PATCH the
+grey-cloud A record to node7 via CF API (record id `<cf-record-id>`, zone
+`<cf-zone-id>`, Bearer `cfat_` token -- NOTE the old CLAUDE.md zone id +
+global key were BOTH stale/dead, fixed there); (3) verify public `teleport.unorouter.com`
+resolves to node7 + pings 200 BEFORE touching node5 (node5 IP still listed = fallback); THEN
+drain. After node5 gone, drop its IP from externalIPs (push main). Lighter than node4: only
+ONE pg replica here (newapi-pg-3; bot-pg was already node1+node6), no singletons (they live on
+node6 now). Drove the whole swap from the DIRECT kubeconfig (the node4-swap `delete node`
+gotcha). pg-3 rebuilt on node7 via delete-PVC+pod -> CNPG `-join` pg_basebackup (~5min for the
+full clone). SSH host key recycled again -> `ssh-keygen -R 46.224.153.131`.
+
 
 Full node loss -> back online with the smallest manual intervention. The node is disposable
 cattle; all durable state lives OFF-node (Hetzner S3, git, SOPS-in-git, age key, Bitwarden,
@@ -182,10 +200,10 @@ If the new node IP differs from the old, update the Cloudflare A records (grey-c
 `teleport.unorouter.com`; proxied for the rest) and the firewall `operator_cidr` if yours changed.
 
 Teleport entry IP: the `teleport.unorouter.com` A record AND the teleport svc `externalIPs`
-(infra/teleport/values.yaml) both point at **node5** (<retired-node5-public-ip>) on purpose -- the
+(infra/teleport/values.yaml) both point at **node7** (46.224.153.131) on purpose -- the
 published/DDoSable IP must be a sacrificial node, never node1 (DB primaries, OpenBao). The
 two MUST stay in sync: Cilium only answers an externalIP on the node that owns it, mismatch =
-connection refused (bit us 2026-07-23). If node5 is replaced, update both together; ops access
+connection refused (bit us 2026-07-23). If node7 is replaced, update both together; ops access
 falls back to the direct kubeconfig meanwhile.
 
 ### 2. Bump the CNPG serverName lineage (the ONE unavoidable edit)

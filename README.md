@@ -1,7 +1,7 @@
 # infra
 
 Config-as-code for the unorouter revenue stack. 3-node k3s HA on Hetzner (node1 cx33 fsn1 +
-node6 cx33 hel1 + node5 cx23 nbg1, embedded etcd, one node per DC = survives a DC outage).
+node6 cx33 hel1 + node7 cx33 nbg1, embedded etcd, one node per DC = survives a DC outage).
 Private net 10.100.0.0/16. Migrated off don + decommissioned 2026-07-23.
 
 Stack: k3s + Cilium (CNI, no kube-proxy) + ArgoCD (app-of-apps) + CloudNativePG (Barman Cloud

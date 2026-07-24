@@ -16,9 +16,9 @@ SSH_KEY=115608845          # unorouter-operator
 NETWORK=12478474           # unorouter-cluster (10.100.0.0/16)
 FIREWALL=11352641          # unorouter-node
 SPARE_IP=10.100.1.5        # informational; Hetzner auto-assigns, k3s joins with whatever it got
-SPARE_NAME=unorouter-spare3   # 8GB headroom for node1 (both pg primaries + openbao/argocd/redis/teleport)
-PREF="cx33"                # 8GB only; this snipe is a node1 upgrade, not a leaf swap
-ONLY_LOC=""                # any eu-central DC (fsn1/nbg1/hel1); cx33 8GB is scarce, take it anywhere
+SPARE_NAME=unorouter-spare5   # nbg1 8GB to upgrade node5 same-DC -> 8+8+8, 3-DC spread intact
+PREF="cx33"                # 8GB only; this snipe is the node5 leaf upgrade
+ONLY_LOC="nbg1"            # nbg1 ONLY: node5's DC. hel1/fsn1 spare would break the 3-DC quorum spread
 
 hc(){ curl -s -H "Authorization: Bearer $TOK" "$@"; }
 
