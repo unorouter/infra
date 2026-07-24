@@ -114,6 +114,50 @@ kube-state-metrics:
   resources:
     requests: { cpu: 20m, memory: 64Mi }
     limits: { cpu: 200m, memory: 192Mi }
+  # CNPG's own backup timestamp metrics stay at 0 when backups run through the Barman Cloud
+  # PLUGIN (cnpg_collector_last_available_backup_timestamp is only populated by the in-tree
+  # method), so base-backup freshness is not observable from them. Read the Backup CRs
+  # directly instead -- this is what makes the "backups silently never ran" alert real.
+  rbac:
+    extraRules:
+      - apiGroups: [postgresql.cnpg.io]
+        resources: [backups, scheduledbackups]
+        verbs: [list, watch]
+  extraArgs:
+    - --custom-resource-state-only=false
+  customResourceState:
+    enabled: true
+    config:
+      spec:
+        resources:
+          - groupVersionKind:
+              group: postgresql.cnpg.io
+              version: v1
+              kind: Backup
+            metricNamePrefix: cnpg_backup
+            metrics:
+              - name: completion_time
+                help: "CNPG Backup stopped-at timestamp"
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, stoppedAt]
+                    valueFrom: []
+                labelsFromPath:
+                  name: [metadata, name]
+                  cluster: [spec, cluster, name]
+                  phase: [status, phase]
+              - name: phase_info
+                help: "CNPG Backup phase"
+                each:
+                  type: Info
+                  info:
+                    path: [status]
+                    labelsFromPath:
+                      phase: [phase]
+                labelsFromPath:
+                  name: [metadata, name]
+                  cluster: [spec, cluster, name]
 
 prometheus-node-exporter:
   # DaemonSet by design: every node needs its own exporter (that is the point).

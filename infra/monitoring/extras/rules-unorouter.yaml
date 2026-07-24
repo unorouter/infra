@@ -118,13 +118,26 @@ spec:
     # never run while WAL archiving looked healthy; PITR was impossible and nothing said so.
     - name: unorouter.backups
       rules:
+        # NOTE: cnpg_collector_last_available_backup_timestamp is NOT usable here -- CNPG leaves
+        # it (and cluster.status.lastSuccessfulBackup) at zero when backups run via the Barman
+        # Cloud PLUGIN, which is our method. Freshness is read from the Backup CRs instead, via
+        # kube-state-metrics customResourceState.
         - alert: CNPGNoRecentBaseBackup
-          expr: (time() - cnpg_collector_last_available_backup_timestamp) > 26 * 3600
+          expr: >
+            (time() - max by (cluster) (cnpg_backup_completion_time{phase="completed"})) > 26 * 3600
+            or absent(cnpg_backup_completion_time{phase="completed"})
           for: 30m
           labels: { severity: critical }
           annotations:
-            summary: "{{ $labels.namespace }}/{{ $labels.pod }} base backup older than 26h"
-            description: "Catches BOTH 'never ran' and 'hung in BackupStarted'. Without a base backup, WAL archives alone cannot restore anything."
+            summary: "{{ $labels.cluster }} base backup older than 26h (or none at all)"
+            description: "Catches BOTH 'never ran' and 'hung in BackupStarted'. Without a base backup, WAL archives alone cannot restore anything -- exactly the 2026-07-22 state where base backups were 0 bytes while WAL looked healthy."
+        - alert: CNPGBackupStuck
+          expr: cnpg_backup_phase_info{phase=~"started|running"} == 1
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "CNPG backup {{ $labels.name }} stuck in {{ $labels.phase }} >1h"
+            description: "barman hangs here indefinitely with no error and no completion (CNPG #5420); the 2026-07-22 backups sat in this state until killed."
         - alert: CNPGWalArchiveFailing
           expr: cnpg_pg_stat_archiver_last_failed_time > cnpg_pg_stat_archiver_last_archived_time
           for: 15m
