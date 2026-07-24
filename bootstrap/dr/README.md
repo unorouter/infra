@@ -1,447 +1,253 @@
 # Disaster Recovery runbook
 
-## TOPOLOGY SINCE 2026-07-23: 3-node etcd HA (multi-DC)
+## Topology
 
-- node1 cx33 fsn1 (<node1-public-ip>, 10.100.1.1) + node6 cx33 hel1 (<node6-public-ip>,
-  10.100.1.2) + node7 cx33 nbg1 (46.224.153.131, 10.100.1.4). All k3s SERVERS, embedded
-  etcd -- quorum survives a full DC outage. Private net 10.100.0.0/16 carries
-  etcd/vxlan/apiserver-kubelet (all servers run `--advertise-address=<private>`; without
-  it remotedialer dials public :6443 = firewalled). (Interim cpx22 node2/node3 retired
-  2026-07-23 via sniped-swap procedure below; node4 cx23 hel1 upgraded to node6 cx33 8GB
-  2026-07-24 same-DC after the 24h RAM-pressure incident; node5 cx23 nbg1 upgraded to node7
-  cx33 8GB 2026-07-24 same-DC; node numbering is cattle -- k3s node names are baked at
-  registration, so replacements get the next number instead of reusing the old one. Fleet
-  now UNIFORM cx33 8+8+8 GB across fsn1/hel1/nbg1.)
-- k3s join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
-- Cilium `k8sServiceHost: 127.0.0.1` is VALID only because every node is a server. Adding
-  an AGENT node requires changing that first. After changing any node's --node-ip, restart
-  the cilium daemonset (agents cache node IPs; stale public IP breaks cross-node vxlan
-  through the firewall).
-- CNPG: newapi-pg instances 3 (one per DC), bot-pg 2. spec.instances is GIT-owned (the old
-  ignoreDifferences entry deliberately removed).
-- Still node1-affine (local-path PVs / fixed IP): openbao, argocd, redis, mcp. Node1 loss =
-  those restart cold on another node minus their PVs -> follow the DR restore path for
-  openbao. (teleport entry + new-api-master now live off node1; see the node swaps below.)
-- **node7-affine: the whole monitoring stack** (Prometheus/Grafana/Alertmanager PVCs, pinned
-  by nodeSelector because local-path binds a PVC to one node forever). Swapping node7 =
-  delete those 3 PVCs and lose metric history. NO prod impact, nothing to restore, the stack
-  rebuilds empty. Do not treat it as a blocker during a node swap.
-### Monitoring (added 2026-07-25) -- CHECK THIS FIRST IN AN INCIDENT
+node1 cx33 fsn1 (<node1-public-ip>, 10.100.1.1) + node6 cx33 hel1 (<node6-public-ip>, 10.100.1.2) +
+node7 cx33 nbg1 (46.224.153.131, 10.100.1.4). All k3s SERVERS, embedded etcd -- quorum survives
+a full DC outage. Private net 10.100.0.0/16 carries etcd/vxlan/apiserver-kubelet.
 
-`grafana.unorouter.com` (Teleport tile -> dex SSO). Prometheus/Alertmanager/Grafana run in
-namespace `monitoring`, pinned to node7. Alerts fire to Discord.
+- Join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
+- Cilium `k8sServiceHost: 127.0.0.1` is valid ONLY because every node is a server; adding an
+  AGENT requires changing that first. After changing any `--node-ip`, restart the cilium
+  daemonset (cached IPs break cross-node vxlan through the firewall).
+- CNPG: newapi-pg 3 instances (one per DC), bot-pg 2. `spec.instances` is git-owned.
+- **node1-affine** (local-path PVs): openbao, argocd, redis, mcp. Node1 loss = those restart
+  cold minus their PVs -> OpenBao needs the restore path below.
+- **node7-affine**: the monitoring stack. Swapping node7 = delete its 3 PVCs, lose metric
+  history. No prod impact, rebuilds empty, not a blocker.
+- Node numbering is cattle: k3s bakes names at registration, so replacements take the next
+  number. node2/3 (cpx22) -> node4/5 (cx23) 2026-07-23; node4 -> node6 and node5 -> node7
+  (cx33 8GB, same-DC) 2026-07-24 after the RAM-pressure incident. Fleet now uniform 8+8+8.
 
-During an incident, the fastest triage order is: Grafana node/pod dashboards -> firing alerts
-in Alertmanager -> then the CLI checks below. Metrics retain 15d, so a post-mortem no longer
-depends on catching the box red-handed (the 24h RAM incident had to be diagnosed live because
-`kubectl top` only shows now).
+## Incident triage: CHECK GRAFANA FIRST
 
-Rules live in `infra/monitoring/extras/rules-unorouter.yaml` and are derived from the real
-failures in this runbook -- memory/OOM cascade, etcd slow-apply -> NodeNotReady, crashloops,
-**backup silently never running**, in-cluster probes of the public URLs (the hairpin path),
-PVC/disk. Each rule's annotation names the incident it exists for.
+[grafana.unorouter.com](https://grafana.unorouter.com) -> firing alerts in Alertmanager -> then
+the CLI checks below. 15d retention, so post-mortems no longer need the box caught red-handed.
 
-Non-obvious wiring, all of it load-bearing:
-- **etcd**: needs `--etcd-expose-metrics=true` on every k3s server unit (`:2381` is otherwise
-  localhost-only). Scrape targets are a STATIC IP list in `extras/scrape-etcd.yaml` --
-  **update it on every node swap** or the etcd alerts silently go blind.
-- **backup freshness**: `cnpg_collector_last_available_backup_timestamp` is permanently 0 with
-  the Barman Cloud PLUGIN, so it is NOT used. kube-state-metrics `customResourceState` exposes
-  the CNPG `Backup` CRs and the alert reads those. Verified live: both clusters ~19h.
-- **Alertmanager routing** is an `AlertmanagerConfig` CRD, not the chart's inline `config:` --
-  only the CRD's `discordConfigs.apiURL` takes a Secret ref, keeping the webhook out of git
-  (inline `webhook_url_file` is not in the discordConfig schema at v0.33.1).
-- Adding a dex OIDC client requires `kubectl -n dex rollout restart deploy/dex`.
-- **Exposing a new ops hostname needs TWO restarts, not just a git push**: dex (new OIDC
-  client) AND `kubectl -n cloudflared rollout restart deploy/cloudflared` (tunnel reads its
-  ingress list only at startup). ArgoCD updates both configmaps happily while the running
-  pods serve the old config -- the symptom is a 404 on the new hostname with correct-looking
-  YAML everywhere.
+Rules: `infra/monitoring/extras/rules-unorouter.yaml`, each annotated with the incident it
+exists for. Load-bearing wiring:
 
-### SSO-only posture (2026-07-25) -- no local passwords anywhere
+- **etcd** needs `--etcd-expose-metrics=true` on every k3s server unit (else :2381 is
+  localhost-only). Targets are a STATIC IP list in `extras/scrape-etcd.yaml` -- **update on
+  every node swap** or etcd alerts go silently blind.
+- **Backup freshness** reads the CNPG `Backup` CRs via kube-state-metrics.
+  `cnpg_collector_last_available_backup_timestamp` is permanently 0 with the Barman PLUGIN --
+  do not "fix" the alert back to it.
+- **Alertmanager routing** is an `AlertmanagerConfig` CRD, not the chart's inline `config:`
+  (only the CRD's `discordConfigs.apiURL` takes a Secret ref, keeping the webhook out of git).
+  Root receiver is `null`; only critical/warning reach Discord. Making `discord` the root
+  spams the channel with `Watchdog`/`InfoInhibitor`.
+- **A new ops hostname needs TWO restarts, not just a push**: `kubectl -n dex rollout restart
+  deploy/dex` (new OIDC client) AND `kubectl -n cloudflared rollout restart deploy/cloudflared`
+  (tunnel reads its ingress list only at startup). Both serve stale config while the configmaps
+  look correct -- symptom is a 404 with correct-looking YAML everywhere.
 
-Every ops UI is GitHub-only; local username/password login is disabled across the board:
+STILL OPEN: external dead-man switch (healthchecks.io ping from the Watchdog alert).
+In-cluster alerting cannot report its own death.
 
-| Service | Local auth | How it is disabled |
-| --- | --- | --- |
-| Teleport | off | `local_auth: false` in `infra/teleport/values.yaml` |
-| ArgoCD | off | `admin.enabled: "false"` in the cloud-init helm values |
-| Grafana | off | `auth.disable_login_form: true`; logs in from the Teleport JWT |
-| OpenBao | off | only `kubernetes/`, `oidc/`, `token/` auth methods exist (no userpass) |
+## Access + SSO
 
-**Grafana does NOT prompt at all**: Teleport signs every proxied request with a JWT in the
-`Teleport-Jwt-Assertion` header, Grafana verifies it against
-`https://teleport.unorouter.com/.well-known/jwks.json` and signs the user straight in. Role
-comes from the JWT `roles` claim (a Teleport `editor` role maps to Grafana Admin). The dex
-OAuth button remains as a fallback for reaching Grafana outside the tunnel (port-forward).
+1. **Teleport** (primary, audited): `tsh login --proxy=teleport.unorouter.com --auth=github`
+   -> `tsh kube login unorouter`. Agent runs `roles: app,db,kube` + `kubeClusterName: unorouter`;
+   the `kube-admin` role grants `kubernetes_groups: [system:masters]`, mapped to the GH
+   `unorouter/admins` team. Role/connector applied via tctl (connector needs client_secret from
+   OpenBao `secret/teleport-github`). **GOTCHA**: `tsh login` reusing a valid cert keeps the OLD
+   roles -- after any connector change, `tsh logout` THEN login.
+2. **Direct kubeconfig**: `kubectl --context unorouter-direct` or
+   `export KUBECONFIG=$PWD/kubeconfig` (hits node1 :6443).
+3. **Raw SSH**: `ssh root@<node-public-ip>` -- for the layer BELOW k8s (etcd/quorum recovery,
+   k3s install/stop, disk/journal) when the kube API itself is dead.
 
-**BREAK-GLASS (GitHub or dex down = no ops UI at all).** This is the accepted trade; the
-recovery paths do not depend on SSO:
-1. `export KUBECONFIG=$PWD/kubeconfig` -- full cluster access, no SSO involved. This is the
-   real fallback and it is why disabling local logins is safe.
-2. `ssh root@<node-public-ip>` for the layer below k8s.
-3. OpenBao root token: `sops -d secrets/openbao-init.sops.yaml`.
-4. ArgoCD UI specifically: `kubectl -n argocd patch cm argocd-cm --type merge -p
-   '{"data":{"admin.enabled":"true"}}'` then restart `deploy/argo-cd-argocd-server`; the
-   password is still in secret `argocd-initial-admin-secret`. Revert when GitHub is back.
+**No local passwords anywhere**: Teleport `local_auth: false`, ArgoCD `admin.enabled: false`
+(cloud-init helm values), Grafana login form disabled, OpenBao has only kubernetes/oidc/token.
+Grafana never prompts -- Teleport signs each proxied request with a JWT
+(`Teleport-Jwt-Assertion`), verified against `/.well-known/jwks.json`; the `roles` claim maps a
+Teleport `editor` to Grafana Admin.
 
-### Cluster access hierarchy (kubectl)
+**BREAK-GLASS (GitHub/dex down = no ops UI).** Recovery does not depend on SSO: tiers 2 and 3
+above, OpenBao root token via `sops -d secrets/openbao-init.sops.yaml`, and for ArgoCD
+specifically `kubectl -n argocd patch cm argocd-cm --type merge -p
+'{"data":{"admin.enabled":"true"}}'` + restart the server (password still in
+`argocd-initial-admin-secret`); revert after.
 
-1. **Teleport (primary, audited)**: `tsh login --proxy=teleport.unorouter.com --auth=github`
-   -> `tsh kube login unorouter` -> kubectl. Session-recorded, SSO, short-lived certs.
-   Context `teleport.unorouter.com-unorouter`. Set up 2026-07-23: the agent runs
-   `roles: app,db,kube` + `kubeClusterName: unorouter` (registers the kube_cluster), the
-   `kube-admin` Teleport role grants `kubernetes_groups: [system:masters]`, mapped to the
-   GH `unorouter/admins` team in the connector. Role/connector applied via tctl (connector
-   needs the client_secret from OpenBao `secret/teleport-github`); values.yaml is git/ArgoCD.
-   GOTCHA: a `tsh login` reusing a still-valid cert keeps the OLD roles -- after any
-   connector role change, `tsh logout` THEN login to re-map (else kube-admin is absent).
-2. **Direct kubeconfig (backup)**: `kubectl --context unorouter-direct ...` (hits node1
-   apiserver at :6443 directly, in `~/.kube/config`). Use when Teleport is down. Also
-   `infra/kubeconfig` in the repo as a portable copy.
-3. **Raw SSH (break-glass)**: `ssh root@<node-public-ip>` -- for the layer BELOW k8s
-   (etcd/quorum recovery, k3s install/stop, node disk/journal) when the kube API itself
-   is dead. IPs in `tofu` outputs.
+**Teleport entry IP**: the `teleport.unorouter.com` A record AND the svc `externalIPs`
+(`infra/teleport/values.yaml`) both point at **node7** on purpose -- the published/DDoSable IP
+must be a sacrificial node, never node1. The two MUST stay in sync: Cilium only answers an
+externalIP on the node that owns it, mismatch = connection refused.
 
-- DRILLS PASSED 2026-07-23: node3 drain (30/30 public probes 200), newapi-pg primary kill
-  (promotion ~70s, 25/25 probes 200, old primary auto-rejoined as replica).
+## Node swap (CANONICAL -- executed 4x, zero downtime each)
 
-### INCIDENT 2026-07-23 ~13:19-13:53 CEST: quorum loss + 34min DB-write outage (self-inflicted)
+Rules learned the hard way (see incident below). Before ANY node surgery: check where the CNPG
+primaries actually run (`kubectl get cluster -n databases`) -- drills move them.
 
-Trigger: interim node-type downswap executed with `TF_VAR_ha_node_type=cpx22 tofu apply
--replace=hcloud_server.node2`. The env override changed BOTH nodes' server_type, so the plan
-replaced node2 AND node3 -- node3 was destroyed UNDRAINED. The pg primary lived on node2
-(post-drill) and etcd lost 2 of 3 members simultaneously: quorum gone, apiserver down, CNPG
-unable to promote the surviving replica -> "Database error" for all logins/writes ~34min.
-Public reads/pages kept serving off node1 the whole time (data plane independent). ZERO data
-loss (replica was current; S3 PITR untouched).
+1. **Preflight**: both primaries confirmed, argocd green, WAL archiving True, old node's disk
+   fits the new type, ssh to spare ok (`ssh-keygen -R <ip>` first -- Hetzner recycles IPs).
+2. **JOIN FIRST**: rename spare (API + `hostnamectl`), install k3s with the exact
+   cloud-init-join flags, pinned `INSTALL_K3S_VERSION` -> 4th etcd member, quorum never dips
+   below tolerate-1. Verify BEFORE proceeding: 4 Ready, `/readyz/etcd` ok, cilium-health 4/4
+   from BOTH the old and new node's agent (probe cycle ~2min, wait it out).
+3. **Evacuate**: cordon, then evict singletons ONE at a time as individual `kubectl delete pod`
+   (wait Ready + endpoint 200 between each), THEN `drain --ignore-daemonsets
+   --delete-emptydir-data`.
+4. **pg replicas** go Pending (local-path PVCs are node-pinned): delete PVC + pod, CNPG
+   re-clones from the primary. ONE CLUSTER AT A TIME, wait 3/3 then 2/2 (~1-6min each).
+5. **Remove**: `systemctl stop && disable k3s` on the old node FIRST, then `kubectl delete
+   node`, then `tofu plan -destroy -target=hcloud_server.nodeX -out=f` -- READ it (exactly 1
+   destroy) -- `tofu apply f`. Plan-file apply = the reviewed plan is the executed plan.
+6. **Import**: add the node.tf block (hardcoded server_type, `lifecycle ignore_changes
+   [user_data, ssh_keys]` -- hand-built, template is DR-rebuild-only), `tofu import`, apply the
+   in-place reconcile (expect `+ network`; ABORT on any replace/destroy). Final plan = No changes.
 
-RULES (cost of learning them: 34min of revenue downtime):
-1. NEVER combine a var override that widens blast radius with -replace + -auto-approve.
-   ALWAYS `tofu plan` first and READ the add/change/destroy lines before any apply that
-   touches servers. One node at a time means the PLAN must show exactly one destroy.
-2. k3s quorum-loss recovery: `k3s server --cluster-reset` on the survivor -- MUST pass the
-   SAME --node-ip/--advertise-address flags as the service unit, or membership is written
-   with the PUBLIC peer URL and k3s wedges on "not a member of the etcd cluster" (the fix
-   attempt itself failed twice on this). Run it under nohup (a killed ssh mid-reset leaves
-   a broken half-state + reset-flag). Stop/disable k3s on all OTHER nodes first (their
-   join storm destabilizes the fresh single-member etcd: "too many learner members").
-3. Rejoin nodes ONE at a time with `rm -rf /var/lib/rancher/k3s/server/db` first.
-4. Replicas whose local-path PVCs lived on dead nodes: delete pod + PVC, CNPG re-provisions
-   from the primary automatically (~4min for 1GB).
-5. Before ANY node surgery: check where the CNPG primaries currently run
-   (`kubectl get cluster -n databases`) -- drills move them; assumptions rot in hours.
+**Drive the whole swap from the DIRECT kubeconfig.** The Teleport kube context routes through
+the in-cluster apiserver Service, which loses endpoints mid-swap -> `kubectl delete node` fails
+with `dial 10.43.0.1:443 connection refused`. Teleport reconverges once etcd is back to 3.
 
-Current HA nodes after incident: 2x cpx22 (4GB, EUR19.49 -- overpriced AMD, only stock).
-Target stays 2x cx22 (EUR4.49) when Intel returns; swap MANUALLY with plan-review, one node
-per apply, primaries checked first.
+Deltas seen so far, by what the old node carried:
 
-### SWAP EXECUTED 2026-07-23 ~14:55-15:20: node3 cpx22 -> node4 cx23 (zero downtime)
+| Carried | Extra step |
+| --- | --- |
+| singletons (master, bot, cilium-operator) | evict individually before the bulk drain |
+| teleport-app-access-0 | evict too; harmless reconnect |
+| pg replicas | delete PVC+pod, one cluster at a time |
+| **Teleport ENTRY node** | graceful cutover BEFORE draining, below |
 
-Sniper script (deleted after both swaps; see git history `scripts/hetzner-snipe.sh`) grabbed a cx23 (EUR5.49) during a ~1min hel1 stock
-window; hand-incorporated per the rules above. This is the CANONICAL single-node swap:
+**Entry-node cutover** (node5 -> node7 needed this; no earlier swap did): add the new IP
+ALONGSIDE the old in `infra/teleport/values.yaml` externalIPs, push, ArgoCD self-heals (~90s) ->
+verify BOTH answer (`curl --resolve teleport.unorouter.com:443:<ip> .../webapi/ping` = 200) ->
+PATCH the grey-cloud A record to the new IP (CF API; record `<cf-record-id>`,
+zone `<cf-zone-id>`, `cfat_` Bearer token) -> confirm public DNS + ping 200
+BEFORE touching the old node (its IP is still listed = fallback) -> drain -> drop the old IP.
 
-1. Preflight: both CNPG primaries confirmed on node1 (rule 5), argocd 14/14 green, WAL
-   archiving True on both clusters, old node's disk usage fits the new type, ssh to spare ok.
-2. JOIN-FIRST: spare renamed unorouter-node4 (API + hostnamectl), k3s server installed with
-   the exact cloud-init-join flags (token from tofu/.env; pin INSTALL_K3S_VERSION to the
-   fleet version) -> 4th etcd member. Quorum never dips below tolerate-1 at any point.
-   Verify BEFORE proceeding: 4 Ready, /readyz/etcd ok, journalctl tunnels to 10.100.x,
-   cilium-health 4/4 from node1's AND the new node's agent (probe cycle ~2min, wait it out).
-3. Drain old node (cordon+drain); its pg replica PVCs are local-path-pinned -> pods go
-   Pending: delete PVC + pod, CNPG rebuilds replicas on the new node (~6min). Wait 3/3+2/2.
-4. Remove: systemctl stop+disable k3s on old node FIRST, kubectl delete node, then
-   `tofu plan -destroy -target=hcloud_server.nodeX -out=f` -- READ (exactly 1 destroy) --
-   `tofu apply f`. Plan-file apply = the reviewed plan is the executed plan.
-5. Import: node.tf block for the new node (hardcoded server_type, lifecycle ignore_changes
-   [user_data, ssh_keys] -- hand-built server, template is DR-rebuild-only),
-   `tofu import`, then apply the small in-place reconcile (import does NOT capture the
-   inline network block or provider booleans -- expect `+ network` as update-in-place;
-   abort if the plan says replace/destroy). Final `tofu plan` = No changes.
+## INCIDENT 2026-07-23: quorum loss + 34min DB-write outage (self-inflicted)
 
-Note: nodes reach each other over the private net (10.100.x); node SSH is public-IP + firewall
-(port 22). Tailscale is not used on the current fleet -- it's a future/optional overlay only.
+`TF_VAR_ha_node_type=cpx22 tofu apply -replace=hcloud_server.node2` -- the env override changed
+BOTH nodes' server_type, so the plan replaced node2 AND node3; node3 was destroyed UNDRAINED.
+etcd lost 2 of 3 members: quorum gone, apiserver down, CNPG could not promote -> "Database
+error" on all logins/writes for ~34min. Public reads kept serving off node1. Zero data loss.
 
-Node2 swap (same day, ~16:10-16:30, -> node5): identical procedure, ONE delta -- node2
-carried singletons (new-api-master, unorouter-bot, cilium-operator). After cordon, evict
-singletons FIRST as individual `kubectl delete pod` (reschedule elsewhere, wait Ready +
-endpoint 200 between each), THEN drain the rest. Master reschedule was seconds (slaves keep
-serving); bot = one Discord gateway reconnect, deploy-grade. Also: Hetzner recycled the
-destroyed node3's private IP (10.100.1.3) for the new spare -- auto-assigned IPs reuse the
-lowest free address, harmless, keep whatever the spare got.
+1. NEVER combine a blast-radius-widening var override with `-replace`/`-auto-approve`. ALWAYS
+   `tofu plan` and READ the add/change/destroy lines. One node at a time = exactly one destroy.
+2. Quorum-loss recovery: `k3s server --cluster-reset` on the survivor MUST pass the SAME
+   `--node-ip`/`--advertise-address` as the service unit, or membership is written with the
+   PUBLIC peer URL and k3s wedges on "not a member of the etcd cluster". Run under `nohup`.
+   Stop/disable k3s on all OTHER nodes first (their join storm destabilizes the fresh
+   single-member etcd: "too many learner members").
+3. Rejoin nodes ONE at a time, `rm -rf /var/lib/rancher/k3s/server/db` first.
 
-Node4 swap (2026-07-24, ~16:43-17:15, -> node6): SAME-DC 8GB upgrade, not a cost swap --
-sniper retargeted `PREF="cx33"` (8GB) and grabbed a cx33 in hel1 (node4's own DC), so the
-3-DC spread held. node4 carried BOTH singletons + teleport-app-access-0 (StatefulSet) + both
-pg REPLICAS (newapi-pg-2, bot-pg-2). Same singleton-evict-first delta as node2, plus: evict
-the teleport agent pod too (entry externalIP is on node5, so zero ops-access impact -- just a
-reconnect). pg replicas rebuilt ONE CLUSTER AT A TIME (delete PVC+pod, CNPG `-join` bootstrap
-clones from primary on node1, ~1-2min each; wait 3/3 then 2/2). GOTCHA: `kubectl delete node`
-failed mid-swap with `dial 10.43.0.1:443 connection refused` -- the Teleport kube context
-routes through the in-cluster apiserver Service, which briefly lost its node4 endpoint when
-k3s stopped there; switch to the DIRECT kubeconfig (`export KUBECONFIG=$PWD/kubeconfig`) to
-finish `delete node` + tofu destroy, Teleport reconverges on its own once etcd is back to 3.
-Also recycled a stale SSH host key (destroyed-node IP reused) -> `ssh-keygen -R <ip>`.
+## INCIDENT 2026-07-23 night: frontend crashloop ~8h (site 502, API fine)
 
-Node5 swap (2026-07-24, ~23:15-23:40, -> node7): SAME-DC 8GB upgrade (sniper pinned
-`ONLY_LOC="nbg1"`, grabbed a cx33 in nbg1), completing the fleet at uniform cx33 8+8+8. THE
-NEW DELTA vs every prior swap: **node5 was the Teleport sacrificial ENTRY node** (svc
-`externalIPs` + the grey-cloud `teleport.unorouter.com` A record both = node5's public IP).
-So the swap added a GRACEFUL ENTRY CUTOVER done BEFORE draining (no prior swap needed it):
-(1) add node7's IP ALONGSIDE node5's in `infra/teleport/values.yaml` externalIPs, commit+push
-main, ArgoCD self-heals it in (~90s) -> Cilium answers on BOTH nodes (verify each with
-`curl --resolve teleport.unorouter.com:443:<ip> .../webapi/ping` = 200); (2) PATCH the
-grey-cloud A record to node7 via CF API (record id `<cf-record-id>`, zone
-`<cf-zone-id>`, Bearer `cfat_` token -- NOTE the old CLAUDE.md zone id +
-global key were BOTH stale/dead, fixed there); (3) verify public `teleport.unorouter.com`
-resolves to node7 + pings 200 BEFORE touching node5 (node5 IP still listed = fallback); THEN
-drain. After node5 gone, drop its IP from externalIPs (push main). Lighter than node4: only
-ONE pg replica here (newapi-pg-3; bot-pg was already node1+node6), no singletons (they live on
-node6 now). Drove the whole swap from the DIRECT kubeconfig (the node4-swap `delete node`
-gotcha). pg-3 rebuilt on node7 via delete-PVC+pod -> CNPG `-join` pg_basebackup (~5min for the
-full clone). SSH host key recycled again -> `ssh-keygen -R 46.224.153.131`.
+`unorouter-env` was missing `INTERNAL_API_URL` (don injected it via compose, not .env) ->
+frontend server-side calls fell back to the PUBLIC api hostname (hairpin: pod -> CF edge ->
+tunnel -> back in) -> Cloudflare L3/4 auto-mitigation dropped the node's IPv4 mid-TLS-handshake
+for our zone only (v6 fine, other zones fine, external clients fine, invisible in zone security
+events) -> `/api/ops/health` hung >5s -> the liveness probe (same endpoint, 5s timeout) killed
+both replicas all night.
 
+Fixes: liveness = **tcpSocket only** (killing a pod never fixes a slow external dep), readiness
+keeps the dep check at 10s; `INTERNAL_API_URL=http://new-api.services.svc.cluster.local:3000`
+so in-cluster server-side traffic never leaves the cluster; node IP whitelisted in CF (belt).
 
-Full node loss -> back online with the smallest manual intervention. The node is disposable
-cattle; all durable state lives OFF-node (Hetzner S3, git, SOPS-in-git, age key, Bitwarden,
-Cloudflare DNS).
+Lesson: when migrating a service, diff `docker inspect <c> .Config.Env` against the k8s secret,
+not just the .env file.
 
-## What survives `tofu destroy`
+## Rebuild from total loss
 
-- **Hetzner S3** (`unorouter-pg-backups`, `prevent_destroy`): CNPG base backups + WAL (PITR),
-  Vault raft snapshots, tofu remote state.
-- **git** (this repo): every manifest + the ArgoCD app-of-apps.
-- **SOPS secrets in git**: Vault unseal keys + root token, tofu creds (decrypt with the age key).
-- **age private key**: offline on the operator laptop (`~/.config/sops/age/keys.txt`).
-- **Bitwarden**: second copy of the Vault unseal key (break-glass if the age key is lost).
-- **Cloudflare DNS**: records point at the node IP; only edit if the new node IP differs.
+The node is disposable cattle; durable state lives OFF-node.
 
-## What dies (all restorable from the above)
+**Survives `tofu destroy`**: Hetzner S3 (`unorouter-pg-backups`, `prevent_destroy` -- CNPG base
+backups + WAL, OpenBao snapshots, tofu remote state; it is in its OWN tofu state under
+`tofu/storage/` so `make destroy` cannot reach it), git, SOPS secrets in git, the age key
+(offline!), Bitwarden (2nd copy of unseal keys), Cloudflare DNS.
 
-The CAX31 node + disk, k3s + etcd, ALL local-path PVs (CNPG PGDATA, Vault raft, Teleport
-SQLite, ArgoCD), every pod.
+**Dies**: nodes + disks, k3s + etcd, ALL local-path PVs (CNPG PGDATA, OpenBao raft, Teleport
+SQLite, ArgoCD, monitoring), every pod.
 
-## 3-NODE DR NOTES (2026-07-23 audit; template fixes committed, NOT live-tested -- the
-## single-node flow was tested twice, the 3-node deltas below are paper-verified)
+**PRE-DESTROY on a live cluster**: scale writers to 0 (new-api master+slaves, bot),
+`SELECT pg_switch_wal()` + verify the segment archived, force a fresh OpenBao snapshot
+(`kubectl -n openbao create job --from=cronjob/openbao-raft-snapshot ...` -- the 6h cron can
+predate recent rotations), commit the lineage bump (step 2, create-time-only), THEN destroy.
+Skipping the WAL flush loses the last <=5min of writes.
 
-- `tofu apply` now creates all THREE nodes. node1's cloud-init self-initializes etcd
-  (`--cluster-init --token <fixed> --node-ip/--advertise-address 10.100.1.1`); node2/3 join
-  via the fixed token (TF_VAR_k3s_token in tofu/.env + OpenBao secret/cluster). Joiners
-  retry until node1's apiserver is up -- a few minutes of join errors at boot are normal.
-- node1 has `lifecycle.ignore_changes[user_data]`: template edits NEVER replace the live
-  node; they apply on genuine rebuild only.
-- CNPG `instances: 3` + `bootstrap.recovery`: restores the primary from S3 first, then
-  builds both replicas from it automatically. Same lineage-bump rule as before.
-- New IPs after rebuild: teleport externalIPs + grey-cloud A record need ONLY node1's IP.
-  node2/3 IPs matter to nothing external (tunnel is outbound).
-- PRE-DESTROY additions for a LIVE cluster (unlike the don-era tests, k3s now serves
-  production): scale writers to 0 (new-api master+slaves, bot), `SELECT pg_switch_wal()`
-  + verify the segment archived, force a fresh OpenBao snapshot, THEN destroy. Skipping
-  the WAL flush loses the last <=5min of writes.
+### 1. Recreate (zero-touch)
 
-## The 3 steps
-
-### 1. Recreate the node (ZERO-TOUCH bootstrap)
-
-```
-make apply       # tofu apply -> fresh node; cloud-init auto-deploys Cilium+ArgoCD+root-app
+```sh
+make apply    # tofu apply -> cloud-init auto-deploys Cilium + ArgoCD + root app-of-apps
 ```
 
-VERIFIED (2026-07-22, 2nd destroy test): cloud-init writes k3s auto-deploy manifests
-(`/var/lib/rancher/k3s/server/manifests/`): Cilium HelmChart (`bootstrap:true` -> installs
-before CNI-ready, node goes Ready), ArgoCD helm chart, and the root app-of-apps. So
-`tofu apply` ALONE brings up k3s + Cilium + ArgoCD + the whole app-of-apps from git. NO
-`make bootstrap` needed (that target remains as a manual fallback only). ArgoCD then
-reconciles cert-manager, CNPG operator, OpenBao, ESO, databases. CNPG `Cluster`s come up
-(initdb; flip to `bootstrap.recovery` from S3 once cut over from don). OpenBao boots SEALED +
-UNINITIALIZED (fresh raft).
+Cloud-init writes k3s auto-deploy manifests, so `tofu apply` ALONE brings up the whole stack
+from git (`make bootstrap` is a fallback only). node1 self-initializes etcd (`--cluster-init`);
+the others join on the fixed token, retrying until node1's apiserver is up -- a few minutes of
+join errors at boot is normal. node1 has `lifecycle.ignore_changes[user_data]` so template
+edits never replace the live node.
 
-Note: on a rebuilt node reusing the old IP, clear the stale SSH host key first:
-`ssh-keygen -R <node-ip>`.
-
-If the new node IP differs from the old, update the Cloudflare A records (grey-cloud for
-`teleport.unorouter.com`; proxied for the rest) and the firewall `operator_cidr` if yours changed.
-
-Teleport entry IP: the `teleport.unorouter.com` A record AND the teleport svc `externalIPs`
-(infra/teleport/values.yaml) both point at **node7** (46.224.153.131) on purpose -- the
-published/DDoSable IP must be a sacrificial node, never node1 (DB primaries, OpenBao). The
-two MUST stay in sync: Cilium only answers an externalIP on the node that owns it, mismatch =
-connection refused (bit us 2026-07-23). If node7 is replaced, update both together; ops access
-falls back to the direct kubeconfig meanwhile.
+If IPs changed: update `infra/teleport/values.yaml` externalIPs + the grey-cloud A record
+(tunnel-routed hosts follow automatically), and `operator_cidr` if yours moved.
+`ssh-keygen -R <ip>` on any reused IP.
 
 ### 2. Bump the CNPG serverName lineage (the ONE unavoidable edit)
 
-CNPG's empty-archive safety check HALTS the restored primary if it archives WAL to the same
-S3 path it restored FROM. So on every DR event, bump BOTH serverNames by one:
+CNPG HALTS a restored primary that archives WAL to the path it restored FROM. On every DR
+event bump BOTH serverNames by one, in `databases/{newapi,bot}-pg/cluster.yaml`:
+`externalClusters[].serverName` v{N} -> v{N+1}, `plugins[].serverName` v{N+1} -> v{N+2}.
+Commit + push BEFORE the apply. Do NOT set `cnpg.io/skipEmptyWalArchiveCheck` (corrupts the
+source). Verify: `kubectl -n databases get cluster newapi-pg bot-pg` -> healthy.
 
-- `databases/newapi-pg/cluster.yaml`: `externalClusters[].serverName` v{N} -> v{N+1},
-  `plugins[].serverName` v{N+1} -> v{N+2}.
-- Same for `databases/bot-pg/cluster.yaml`.
+Recover-to-latest is default; for PITR set `bootstrap.recovery.recoveryTarget.targetTime`
+before the apply, remove after.
 
-Commit + push. ArgoCD picks it up; the restore reads the old lineage, new WAL archives to the
-fresh lineage. Do NOT set `cnpg.io/skipEmptyWalArchiveCheck` (that corrupts the source).
+### 3. Restore OpenBao (fresh raft)
 
-Verify restore:
-
-```
-kubectl -n databases get cluster newapi-pg bot-pg   # wait for status: Cluster in healthy state
-```
-
-### 3. Restore OpenBao (fresh raft) -- VERIFIED SEQUENCE (2nd destroy test 2026-07-22)
-
-A fresh OpenBao has empty raft. The restore is now ONE command (temp-init -> restore snapshot
--> restart pod -> unseal with original keys -> ESO resync, all automated):
-
-```
-make restore          # == ./scripts/dr.sh restore
+```sh
+make restore    # temp-init -> restore snapshot -> restart pod -> unseal -> ESO resync
 ```
 
-Then: `tsh login --proxy=teleport.unorouter.com` (Teleport CA regenerated -> re-login).
+Then `tsh login` again (Teleport CA is regenerated). Break-glass if the age key is lost: unseal
+keys are in Bitwarden -> `bao operator unseal` by hand.
 
-Break-glass (age key lost): unseal keys are in Bitwarden -> `bao operator unseal` by hand.
+Post-restore, NOT reconciled from git:
+- **Dex reads config only at boot** -- `kubectl -n dex rollout restart deploy/dex` after any
+  change, or logins fail with "Unregistered redirect_uri" while the configmap looks correct.
+- **OpenBao's OIDC role redirect is a runtime `bao write`**, not a manifest. Re-set it on DR or
+  any hostname change -- role writes REPLACE the whole role, so send every field:
+  ```sh
+  bao write auth/oidc/role/admin \
+    allowed_redirect_uris='https://openbao.unorouter.com/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback' \
+    user_claim=email token_policies=admin bound_audiences=openbao \
+    oidc_scopes=openid,profile,email,groups groups_claim=groups \
+    token_ttl=168h token_max_ttl=768h
+  ```
+  Dex must also allow that callback. `token_ttl=168h` keeps the UI session alive a week.
+- **OpenBao UI defaults to the Token tab**: `bao auth tune -listing-visibility=unauth oidc/`
+  makes OIDC the default (re-apply on DR). Known caveat (vault#10816): it snaps back after
+  logout. Bookmark `openbao.unorouter.com/ui/vault/auth?with=oidc%2F`.
+- **Teleport is stateless by design** (fresh SQLite): reapply `infra/teleport/resources/*.yaml`
+  (github connector needs client_secret from OpenBao `teleport-github`); users `tsh login` again.
+- **Teleport db-client CA is regenerated** -> rebuild the `newapi-pg-client-ca` bundle: own CA
+  cert (first block, key unchanged in OpenBao) + fresh `tctl auth export --type=db-client`. ESO
+  resyncs, `cnpg.io/reload` reloads postgres. ca.key must be SEC1 ("BEGIN EC PRIVATE KEY") --
+  CNPG rejects PKCS8.
+- k8s auth is SELF-HEALING (kubernetes.default.svc + no token_reviewer_jwt) -- no reconfigure
+  after rebuild, just restart ESO if it cached a failure.
+- Races that self-heal: CNPG recovery jobs fail until ESO delivers the S3 secrets; velero can
+  deadlock its first sync -- clear the operation + refresh.
 
-OIDC gotchas (found 2026-07-23 during the ops-subdomain rename; both bit because they are
-NOT reconciled from git):
-- **Dex loads config only at boot -- no hot-reload.** After ANY change to `dex-config`
-  (e.g. a redirect-URI rename), `kubectl -n dex rollout restart deploy/dex` or logins fail
-  with "Bad Request: Unregistered redirect_uri". The configmap can look correct while the
-  running Dex serves the old one.
-- **OpenBao's OIDC role redirect is a runtime `bao write`, not a manifest.** On DR (fresh
-  raft) or any hostname change, re-set it:
-  `bao write auth/oidc/role/admin allowed_redirect_uris='https://openbao.unorouter.com/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback'`
-  (plus user_claim=email, token_policies=admin, bound_audiences=openbao, oidc_scopes=openid,profile,email,groups, groups_claim=groups, token_ttl=168h, token_max_ttl=768h). Dex must ALSO allow that callback (dex.yaml staticClients).
-  Role writes REPLACE the whole role -- always send every field, a partial write wipes the rest.
-  token_ttl=168h keeps the UI session alive a week (default 8h forced daily re-login); no
-  auto-submit login exists in OpenBao, long sessions are what makes it feel like ArgoCD.
-- **OpenBao UI defaults to the Token method** unless OIDC is surfaced:
-  `bao auth tune -listing-visibility=unauth oidc/` makes OIDC the login default (re-apply on
-  DR). OpenBao 2.6.0 has NO `sys/config/ui/login/default-auth` (Vault 1.20+ only), so this is
-  the best available -- KNOWN caveat (vault#10816): after logout/expiry the UI snaps back to
-  the Token tab. Bookmark `openbao.unorouter.com/ui/vault/auth?with=oidc%2F` to always land on
-  OIDC. Login: method OIDC, role blank (default=admin), Sign In -> GitHub.
-
-### DR test learnings (2026-07-22, all folded into the steps above)
-
-1. Bucket is in its OWN tofu state (`tofu/storage/`) so `make destroy` (plain `tofu destroy`)
-   physically cannot reach it -- no -target/-exclude needed. prevent_destroy guards storage/ too.
-2. Vault pod MUST be restarted after `snapshot restore -force` or unseal fails.
-3. k8s auth is now SELF-HEALING (kubernetes.default.svc host + omit token_reviewer_jwt/ca ->
-   OpenBao reads its pod SA token/CA fresh each request). NO reconfigure after rebuild. Just
-   restart ESO if it cached a failure. (VERIFIED 2nd test: ESO synced with zero manual auth steps.)
-4. Cilium + ArgoCD now auto-deploy via cloud-init (zero-touch). `make bootstrap` = fallback only.
-VERIFIED (x2): full destroy/apply recovered all 7 apps + an OpenBao DR-marker survived, with
-zero-touch bootstrap and self-healing auth (2nd test needed NO make bootstrap, NO auth reconfigure).
+VERIFIED x2 (2026-07-22 destroy -> apply -> restore): 14 apps reconciled, both CNPG clusters
+restored from S3 with WAL replay (users=8531 exact), services 200 via tunnel, SSO working, zero
+manual auth steps.
 
 ## Notes
 
-- The `options_masked` view + `reader` role + grants are schema objects -> they ride the
-  physical S3 backup and come back on their own. No post-restore SQL. (First-ever migration
-  from don applies `databases/newapi-pg/masking.sql` once; see P2.)
-- Recover-to-latest is the default (no `recoveryTarget`). For PITR, set
-  `bootstrap.recovery.recoveryTarget.targetTime` before the apply, then remove it after.
-- TEST the full destroy/apply/restore cycle on a THROWAWAY cluster before trusting it on
-  revenue (CNPG#6645 Hetzner-restore is a known sharp edge -- hard gate).
-
-## Full-DR test findings (2026-07-22, destroy -> apply -> restore, PASSED)
-
-Verified end to end: node rebuild (fsn1, new IP), zero-touch cloud-init bootstrap, 14 apps
-reconciled, OpenBao snapshot restore + unseal, ESO resync, BOTH CNPG clusters restored from
-S3 (base + WAL replay incl post-backup writes; users=8531 exact), services 200 via tunnel,
-Dex SSO, Teleport App/DB access. Extra steps the happy path needs:
-
-1. **Pre-destroy: force a fresh OpenBao snapshot** (`kubectl -n openbao create job
-   --from=cronjob/openbao-raft-snapshot ...`). The 6h cron can be older than recent
-   secret rotations; restoring a stale snapshot resurrects dead credentials.
-2. **CNPG lineage bump**: restore-from = last archive lineage, archive-to = +1 (committed
-   BEFORE destroy; bootstrap.recovery is create-time-only).
-3. **New node IP**: update `infra/teleport/values.yaml` externalIPs + the grey-cloud
-   `teleport.unorouter.com` A record. Tunnel-routed hosts follow automatically.
-4. **Teleport is stateless by design (fresh SQLite)**: reapply
-   `infra/teleport/resources/*.yaml` (github connector needs client_secret injected from
-   OpenBao `teleport-github`); users `tsh login` again.
-5. **Teleport db-client CA is regenerated** -> rebuild `newapi-pg-client-ca` bundle:
-   own CA cert (first block, key unchanged in OpenBao) + fresh
-   `tctl auth export --type=db-client`. ESO resyncs, cnpg.io/reload reloads postgres.
-   NOTE: ca.key must be SEC1 ("BEGIN EC PRIVATE KEY"); CNPG rejects PKCS8.
-6. **masking.sql** re-apply after any fresh don import (don has no RLS); after pure
-   S3 recovery it rides the backup.
-7. **Races that self-heal**: CNPG recovery jobs may fail until ESO delivers the S3
-   secrets (operator retries); velero can deadlock its first sync waiting on the
-   DaemonSet whose secret its own sync creates -- clear operation + refresh.
-8. **Hetzner Ceph**: boto3>=1.36 checksum headers hang multipart base backups
-   (AWS_*_CHECKSUM_*=when_required in Cluster.spec.env fixes; WAL unaffected).
-   A healthy 1GB backup takes ~15 min and logs NOTHING at default level (-vv shows parts).
-
-## Standing logical replication (don -> CNPG, pre-cutover)
-
-don streams every write live into the k3s clusters (subscription `don_sync` on both DBs;
-publications `k3s_pub` on don, `wal_level=logical`). Mirror lag is ~0; runs indefinitely.
-k3s new-api is PARKED (replicas 0 in git) so nothing else writes the mirrored tables.
-don is protected by `max_slot_wal_keep_size` (10GB newapi / 2GB bot): if k3s stalls longer
-than the cap, the slot is invalidated (don unaffected) -- re-init = truncate mirror tables
-(NOT secret_keys) + recreate the subscription with copy_data=true.
-
-### CUTOVER EXECUTED 2026-07-23 ~01:05-01:15 CEST (procedure below kept for reference)
-
-k3s is production now. don revenue containers are COLD (new-api scaled 0, bot stopped;
-unorouter/mcp/redis/postgres still running but receive no traffic). DNS: specific records
-api/www/status/bot/mcp + apex -> k3s tunnel; don wildcard remains for postiz/debug.
-Rollback within ~1wk = revert those DNS records + rescale don services (data written on
-k3s after cutover would be lost -- reverse-replicate first if >minutes of traffic).
-
-Gotcha hit at cutover: bot reads ONLY `DATABASE_URL` (src/lib/db.ts), the POSTGRES_* parts
-in bot-env are decoration -> added DATABASE_URL to OpenBao `secret/bot-env` pointing at
-bot-pg-rw. Sequences setval'd from don, subscriptions dropped (slots removed on don too).
-
-DON DECOMMISSIONED 2026-07-23 ~12:00: revenue containers REMOVED (new-api stack,
-unorouter a/b, mcp, bot, both postgres + redis + pgbackup/logrotate sidecars). Public DB
-ports 5439/5442 closed with them. Data volumes KEPT on don disk as cold archive (last
-state = cutover + zombie writes; restore-of-last-resort via pg dump from the volume dirs).
-postiz + debug-* + hobby stay. Rollback now = k3s DR path only (tested; S3 PITR).
-Still open: rotate don sudo password, retire Duplicati source dirs for migrated DBs.
-
-### Incident 2026-07-23 night: frontend crashloop ~8h (site 502, API unaffected)
-
-Chain: k3s unorouter-env was missing `INTERNAL_API_URL` (don injects it via compose, not
-.env -- same trap as bot's DATABASE_URL) -> frontend server-side calls fell back to public
-`https://api.unorouter.com` (hairpin: pod -> CF edge -> tunnel -> back into cluster) ->
-Cloudflare L3/4 auto-mitigation started dropping the node's IPv4 mid-TLS-handshake for our
-zone only (v6 fine, other CF zones fine, external clients fine; invisible in zone security
-events; zone IP-allow rule does NOT bypass it) -> /api/ops/health hung >5s -> liveness
-probe (same dep-checking endpoint, 5s timeout) killed both replicas in a loop all night.
-
-Fixes (all in git/OpenBao):
-1. Liveness = tcpSocket ONLY (process-local); readiness keeps the dep check, 10s timeout.
-   Killing a pod never fixes a slow external dep.
-2. `INTERNAL_API_URL=http://new-api.services.svc.cluster.local:3000` in unorouter-env,
-   `NEW_API_URL` same in bot-env: in-cluster server-side traffic NEVER leaves the cluster.
-   Browser-facing NEXT_PUBLIC_API_URL stays public (external clients unaffected by design).
-3. Node IP whitelisted in CF zone (L7 only, kept as belt).
-
-Lesson: don compose files inject env vars beyond .env -- when migrating a service, diff
-`docker inspect <c> .Config.Env` against the k8s secret, not just the .env file.
-Lesson 2: no alerting = 8h silent frontend outage. RESOLVED 2026-07-25: kube-prometheus-stack
-+ Alertmanager -> Discord, with rules written from this and every other past incident (see
-"Monitoring" below). STILL OPEN: an EXTERNAL dead-man switch (healthchecks.io ping fed by the
-always-firing Watchdog alert) -- in-cluster alerting cannot report its own death, which is
-exactly the whole-cluster-down case.
-
-Also 2026-07-23: don's new-api ZOMBIE-RESPAWNED ~40min after cutover -- a repo push
-triggered the old "Docker Prod" workflow (self-hosted runner, `docker stack deploy`
-restores compose replicas). Ran 11h in parallel (own stale DB, same provider keys ->
-burned shared upstream rate limits). Fix: "Docker Prod" workflows DISABLED in all three
-repos (new-api / unorouter-bot / unorouter); GHCR image builds stay active. k3s deploy
-after image build = manual `kubectl rollout restart` for now (no image updater yet).
-
-### Cutover procedure (minutes, not a freeze-window)
-1. Stop don writers: `docker service scale newapi_newapi-master=0 newapi_newapi-slave=0`
-   + stop don bot container.
-2. Wait lag=0 (compare `count(*) FROM logs` both sides; it converges in seconds).
-3. Sequences are NOT replicated: sync them --
-   on mirror: `SELECT format('SELECT setval(%L, %s);', S.relname, last_value) ...`
-   (script: for each sequence on don, `setval` same value on the mirror; both DBs).
-4. Drop subscriptions: `DROP SUBSCRIPTION don_sync;` (both DBs).
-5. Un-park k3s: restore replicas (master 1, slaves 2) in services/newapi.yaml, bot 1; push.
-6. Flip DNS to the tunnel: api / unorouter+www+status / mcp / bot hostnames -> tunnel CNAME
-   + add the hostnames to cloudflared ingress. Purge CF cache for unorouter.com.
-7. Watch relay success + /api/status; don stays cold-intact for instant DNS rollback.
+- **Hetzner Ceph S3**: boto3>=1.36 checksum headers hang multipart base backups
+  (`AWS_*_CHECKSUM_*=when_required` in `Cluster.spec.env` fixes it; WAL unaffected). A healthy
+  1GB backup takes ~15min and logs NOTHING at default level (`-vv` shows parts). Test-restore
+  from the REAL bucket is a HARD GATE (cnpg#6645).
+- The `options_masked` view + `reader` role ride the physical S3 backup -- no post-restore SQL.
+- Nodes reach each other on the private net; node SSH is public-IP + firewall :22. Tailscale is
+  not used on the current fleet.
+- don was decommissioned 2026-07-23 (revenue containers removed, DB ports closed, volumes kept
+  as a cold archive). Rollback is the k3s DR path only. Its "Docker Prod" workflows are DISABLED
+  in all three repos -- one zombie-respawned after cutover and ran 11h in parallel on a stale DB,
+  burning shared upstream rate limits. GHCR builds stay active; k3s deploy is a manual
+  `kubectl rollout restart` (no image updater yet).
+- Drills passed 2026-07-23: node drain (30/30 probes 200), pg primary kill (promotion ~70s,
+  25/25 probes 200, old primary auto-rejoined).

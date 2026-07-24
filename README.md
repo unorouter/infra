@@ -5,93 +5,61 @@ node6 cx33 hel1 + node7 cx33 nbg1, embedded etcd, one node per DC = survives a D
 Private net 10.100.0.0/16. Migrated off don + decommissioned 2026-07-23.
 
 Stack: k3s + Cilium (CNI, no kube-proxy) + ArgoCD (app-of-apps) + CloudNativePG (Barman Cloud
-plugin -> Hetzner S3 PITR) + OpenBao + ESO + cloudflared tunnel + Teleport. Secrets: SOPS/age
-in git + OpenBao at runtime. TLS: Cloudflare (tunnel + Origin cert, no cert-manager ACME).
+plugin -> Hetzner S3 PITR) + OpenBao + ESO + cloudflared tunnel + Teleport + kube-prometheus-stack.
+Secrets: SOPS/age in git + OpenBao at runtime. TLS: Cloudflare (tunnel + Origin cert).
 
-## DNS (wildcard-only, 2026-07-23) !PREFER WILDCARD
+Incident history, procedures, break-glass: **`bootstrap/dr/README.md`**.
 
-**RULE: always prefer the wildcard. Never add a per-host DNS record for an app/ops subdomain.**
-Per-host records are the trap that caused an outage-grade 404 hunt (a hostname rename touched
-cloudflared + Teleport but not the manual DNS row). Managing them by hand is banned.
+## DNS (wildcard-only) !PREFER WILDCARD
 
-`*.unorouter.com` CNAME -> the k3s cloudflared tunnel (proxied). ALL app + ops hostnames
-resolve through it - there are NO per-host DNS records. To add/rename a hostname: add a
-`hostname:` rule to [cloudflared.yaml](infra/infra/cloudflared/cloudflared.yaml), commit,
-push (ArgoCD syncs). No Cloudflare dashboard, no DNS record. cloudflared's `404` catch-all
-handles anything without a rule.
+**Never add a per-host DNS record for an app/ops subdomain.** `*.unorouter.com` CNAME -> the
+cloudflared tunnel covers everything. To add a hostname: add a `hostname:` rule to
+[cloudflared.yaml](infra/cloudflared/cloudflared.yaml), push, then
+`kubectl -n cloudflared rollout restart deploy/cloudflared` (**it reads config only at startup**
+- syncing the configmap alone leaves the new host 404ing).
 
-**GOTCHA: cloudflared reads its config ONLY at startup.** ArgoCD syncing the configmap is not
-enough - the running pods keep serving the old ingress list and the new hostname 404s while
-the configmap looks correct (cost a debug cycle adding grafana). After adding a rule:
-`kubectl -n cloudflared rollout restart deploy/cloudflared`. Same class of trap as dex.
+Exceptions that cannot be the wildcard: apex `unorouter.com`, `teleport` (grey-cloud A record,
+raw-TLS ALPN passthrough), MX/TXT.
 
-ONLY exceptions that cannot be the wildcard (keep explicit, do not add more): apex
-`unorouter.com` (wildcard skips root), `teleport` (grey-cloud A record, raw-TLS ALPN
-passthrough - not proxied), MX/TXT (email/DKIM). Everything
-else is the wildcard - if you find yourself creating a proxied CNAME to the tunnel, stop:
-the wildcard already covers it, just add the cloudflared rule.
-
-## Ops UIs (Teleport SSO-gated)
-
-Log into [teleport.unorouter.com](https://teleport.unorouter.com) (GitHub SSO), then the app
-tiles. Direct hits 404 without a session by design (Teleport sets the cookie via the launcher).
-
-**SSO only - there are no local passwords.** Teleport (`local_auth: false`), ArgoCD
-(`admin.enabled: false`), Grafana (login form disabled) and OpenBao (no userpass method) all
-authenticate via GitHub through dex. Grafana goes further and never prompts at all: it reads
-the `Teleport-Jwt-Assertion` header Teleport signs on every proxied request, so the launcher
-drops you straight into the dashboards. If GitHub/dex is ever down, fall back to the direct
-kubeconfig (tier 2 below) - break-glass is in `bootstrap/dr/README.md`.
+## Ops UIs
 
 - [argocd.unorouter.com](https://argocd.unorouter.com) - GitOps deploy dashboard
 - [openbao.unorouter.com](https://openbao.unorouter.com) - secrets vault UI
-- [grafana.unorouter.com](https://grafana.unorouter.com) - metrics + alert dashboards
+- [grafana.unorouter.com](https://grafana.unorouter.com) - metrics + alerts
 
-Network flows: no UI (removed 2026-07-23). Use the CLI when debugging:
-`kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --follow`.
+All gated by Teleport SSO (GitHub). Log into
+[teleport.unorouter.com](https://teleport.unorouter.com) first, then use the app tiles - a
+direct hit 404s without a session by design.
 
-## Monitoring + alerting
+**SSO only, no local passwords anywhere**: Teleport `local_auth: false`, ArgoCD
+`admin.enabled: false`, Grafana login form disabled, OpenBao has no userpass method. Grafana
+never prompts at all - it reads the `Teleport-Jwt-Assertion` header, so the launcher drops you
+straight into the dashboards. Break-glass if GitHub/dex is down: DR runbook.
 
-kube-prometheus-stack in namespace `monitoring`, **pinned to node7** (`local-path` PVCs bind to
-one node; swapping node7 means deleting the Prometheus/Grafana/Alertmanager PVCs and losing
-history - no prod impact). Alerts go to Discord via Alertmanager.
+Hubble has no UI: `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe -f`.
 
-Alert rules (`infra/monitoring/extras/rules-unorouter.yaml`) are written from the actual
-incident history rather than a generic starter pack, and weight **silent** failures highest -
-three times something was broken for hours with no signal at all:
+## Monitoring
 
-| Group | Watches | Incident it would have caught |
-| --- | --- | --- |
-| memory | node/container mem, OOMKill (exit 137), absolute free | 8h frontend outage; 24h RAM pressure |
-| etcd | slow applies, WAL fsync p99, leader changes, NodeNotReady | 1000+ slow-applies/2h that flapped nodes 4x/hr |
-| services | 0 ready replicas, restart rate, CrashLoopBackOff | 13 restarts with nobody notified |
-| backups | base-backup age, stuck-in-started, WAL archive failures, Velero | base backups 0 bytes and never run while WAL looked fine |
-| postgres | CNPG health, replica count, replication lag | - |
-| ingress | in-cluster probes of the PUBLIC urls, cert expiry, tunnel HA | the hairpin path CF dropped mid-TLS-handshake |
-| cluster | PVC/disk full, Cilium unreachable nodes | local-path means a full PVC is a node problem |
+kube-prometheus-stack in `monitoring`, **pinned to node7** (local-path PVCs bind to one node;
+swapping node7 = delete those PVCs, lose history, no prod impact). Alerts -> Discord.
 
-**Alert routing is drop-by-default.** The Alertmanager root receiver is `null`; only
-`severity=critical` (10s wait, 1h repeat) and `severity=warning` (5m wait, 12h repeat) opt in to
-Discord. Do NOT make `discord` the root receiver again - the chart ships `severity=none`
-plumbing alerts (`Watchdog`, `InfoInhibitor`) that then page on every fire/resolve cycle, which
-is exactly how the channel got spammed on day one. Messages are deliberately two lines
-(`[SEVERITY] AlertName` + the summary annotation); the default template dumps the full
-description, runbook URL and an unreadable `Source:` query link per alert.
+Rules (`infra/monitoring/extras/rules-unorouter.yaml`) cover memory/OOM, etcd latency, service
+crashloops, backup freshness, CNPG health, public-endpoint probes and disk. Each is derived
+from a real incident - the reasoning is in the DR runbook.
 
-Gotchas worth knowing:
-- **etcd metrics need `--etcd-expose-metrics=true`** on every k3s server (set on all 3 nodes);
-  without it :2381 is localhost-only. Targets are a static list in
-  `infra/monitoring/extras/scrape-etcd.yaml` - **update the IPs when a node is swapped**.
-- **CNPG's own backup timestamp metrics stay at 0** with the Barman Cloud *plugin* method, so
-  backup freshness is read from the `Backup` CRs via kube-state-metrics `customResourceState`.
-  Do not "fix" the alert back to `cnpg_collector_last_available_backup_timestamp`.
-- Grafana logs in through dex (same IdP as argocd/openbao); `unorouter:admins` maps to Admin.
-  Adding a dex client **requires `kubectl -n dex rollout restart deploy/dex`** - dex reads its
-  config only at boot.
+- **Routing is drop-by-default.** Root receiver is `null`; only `severity=critical` and
+  `warning` reach Discord. Do NOT make `discord` the root receiver - the chart's
+  `severity=none` alerts (`Watchdog`, `InfoInhibitor`) then page on every cycle.
+- **etcd needs `--etcd-expose-metrics=true`** on every k3s server, else :2381 is
+  localhost-only. Targets are a static IP list in `extras/scrape-etcd.yaml` - **update on
+  every node swap**.
+- **Backup freshness reads the `Backup` CRs** via kube-state-metrics, NOT
+  `cnpg_collector_last_available_backup_timestamp` (permanently 0 with the Barman plugin).
+- Adding a dex client needs `kubectl -n dex rollout restart deploy/dex` (config read at boot).
 
 ## Pinned versions
 
-Live-verified 2026-07-23. Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest | jq .tag_name`.
+Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest | jq .tag_name`.
 
 | Component | Pinned | Where |
 | --- | --- | --- |
@@ -115,56 +83,31 @@ Live-verified 2026-07-23. Bump check: `curl -s https://api.github.com/repos/<org
 
 ## Access (3 tiers, use in order)
 
-**1. Teleport (primary, audited)** - default kubectl context `teleport.unorouter.com-unorouter`:
+**1. Teleport** (primary, audited) - context `teleport.unorouter.com-unorouter`:
 
 ```sh
 tsh login --proxy=teleport.unorouter.com   # GitHub SSO
 tsh kube login unorouter
 
-# logs: one deploy, or aggregated across master + all slaves (--prefix tags each pod)
-kubectl -n services logs deploy/new-api-master --tail 100
 kubectl -n services logs -l app=new-api --prefix -f --tail 50
 
-# db, audited RLS reader (tsh signs per-session cert, CN=reader):
-tsh db connect newapi-pg --db-user=reader --db-name=newapi          # interactive psql
-tsh proxy db newapi-pg --db-user=reader --db-name=newapi --port 15432 --tunnel &
-psql postgres://reader@127.0.0.1:15432/newapi -c "<sql>"            # one-shot / GUI clients
-
-# db, full admin (via kube exec on the primary):
+# db as the RLS-masked reader (per-session cert, CN=reader):
+tsh db connect newapi-pg --db-user=reader --db-name=newapi
+# db as admin:
 kubectl -n databases exec newapi-pg-1 -c postgres -- psql -U postgres -d newapi -c "<sql>"
 ```
 
-**2. Direct kubeconfig (backup, Teleport down)** - context `unorouter-direct` in `~/.kube/config`,
-or `export KUBECONFIG=$PWD/kubeconfig`.
+**2. Direct kubeconfig** (Teleport down) - context `unorouter-direct`, or
+`export KUBECONFIG=$PWD/kubeconfig`.
 
-**3. Node SSH (break-glass, apiserver down)** - `ssh root@<public-ip>` (IPs in `tofu` outputs).
+**3. Node SSH** (apiserver down) - `ssh root@<public-ip>` (IPs in `tofu` outputs).
 
-Secrets: `bao kv`. DR: `bootstrap/dr/README.md`.
+Secrets: `bao kv`.
 
-## One-time prerequisites
+## tofu
 
-1. **age key** `~/.config/sops/age/keys.txt` - BACK UP OFFLINE (loss = secrets unrecoverable).
-2. **Hetzner Cloud API token** (rw) + **S3 credentials** (Object Storage, region fsn1, not api-creatable).
-3. **Tailscale** reusable authkey (ACL autoApprover for pod CIDR 10.42.0.0/16).
-4. **Cloudflare Origin cert** (SSL/TLS -> Origin Server, 15y, `*.unorouter.com`).
-
-## tofu secrets
-
-`tofu/.env` (gitignored, plaintext on disk only) exports every `TF_VAR_*`: hcloud_token,
-s3_access_key/secret_key, k3s_token (etcd join; also in OpenBao `secret/cluster`),
-operator_cidr, ssh_public_key, tailscale_authkey, node_type, location. Load before any
-tofu command:
-
-```sh
-set -a; source .env; set +a
-```
-
-## Bootstrap / DR
-
-`tofu apply` is zero-touch: cloud-init writes k3s auto-deploy manifests (Cilium + ArgoCD +
-root app-of-apps), so a fresh apply brings up the whole stack from git. Full destroy/restore
-procedure (CNPG S3 restore, OpenBao snapshot, lineage bump) + node-swap runbook + the
-2026-07-23 incident post-mortems: **`bootstrap/dr/README.md`**.
+`tofu/.env` (gitignored) exports every `TF_VAR_*`: hcloud_token, s3 keys, k3s_token,
+operator_cidr, ssh_public_key, tailscale_authkey, node_type, location.
 
 ```sh
 cd tofu && tofu init
@@ -173,16 +116,23 @@ tofu plan    # READ before apply; server ops one node at a time
 tofu apply   # manual only, never CI
 ```
 
+`tofu apply` is zero-touch: cloud-init writes k3s auto-deploy manifests (Cilium + ArgoCD +
+root app-of-apps), so a fresh apply brings the whole stack up from git.
+
+One-time prerequisites: age key `~/.config/sops/age/keys.txt` (**back up offline, loss =
+secrets unrecoverable**), Hetzner API token + S3 credentials, Tailscale authkey, Cloudflare
+Origin cert.
+
 ## Non-negotiable gotchas
 
 - All k3s nodes are SERVERS with `--advertise-address=<private-ip>` (without it remotedialer
   dials public :6443 = firewalled). Cilium `k8sServiceHost: 127.0.0.1` is valid ONLY while
   every node is a server; adding an agent needs that changed first.
-- After changing any node's `--node-ip`: restart the cilium DaemonSet (agents cache node IPs;
-  stale public IP breaks cross-node vxlan through the firewall).
-- CNPG: Barman Cloud PLUGIN (in-tree deprecated 1.26); Hetzner-S3 needs the boto3 checksum env
+- After changing any node's `--node-ip`: restart the cilium DaemonSet (stale cached IPs break
+  cross-node vxlan through the firewall).
+- CNPG: Barman Cloud PLUGIN (in-tree deprecated 1.26); Hetzner S3 needs the boto3 checksum env
   workaround + path addressing. Test-restore from the REAL bucket is a HARD GATE (cnpg#6645).
 - cert-manager ACME blocked by Cilium Opaque-secret pre-creation (cilium#45705) -> CF certs.
-- Node ops MANUAL, one node per tofu apply, plan-reviewed (a both-nodes `-replace` caused a
-  34min DB outage 2026-07-23; see DR runbook rules).
+- Node ops MANUAL, one node per apply, plan-reviewed (a both-nodes `-replace` caused a 34min
+  DB outage; see DR runbook).
 - new-api master stays replicas:1 (migration/jobs singleton). CNPG primaries live on node1.
