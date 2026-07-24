@@ -76,6 +76,10 @@ write_files:
           configs:
             cm:
               url: https://argocd.unorouter.com
+              # SSO only: the local admin account is disabled so GitHub (via dex) is the one
+              # way in. Break-glass if dex/GitHub is down: flip this to true, restart
+              # argocd-server, log in with the password in secret argocd-initial-admin-secret.
+              admin.enabled: "false"
               oidc.config: |
                 name: GitHub
                 issuer: https://dex.unorouter.com
