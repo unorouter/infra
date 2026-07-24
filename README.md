@@ -70,6 +70,14 @@ three times something was broken for hours with no signal at all:
 | ingress | in-cluster probes of the PUBLIC urls, cert expiry, tunnel HA | the hairpin path CF dropped mid-TLS-handshake |
 | cluster | PVC/disk full, Cilium unreachable nodes | local-path means a full PVC is a node problem |
 
+**Alert routing is drop-by-default.** The Alertmanager root receiver is `null`; only
+`severity=critical` (10s wait, 1h repeat) and `severity=warning` (5m wait, 12h repeat) opt in to
+Discord. Do NOT make `discord` the root receiver again - the chart ships `severity=none`
+plumbing alerts (`Watchdog`, `InfoInhibitor`) that then page on every fire/resolve cycle, which
+is exactly how the channel got spammed on day one. Messages are deliberately two lines
+(`[SEVERITY] AlertName` + the summary annotation); the default template dumps the full
+description, runbook URL and an unreadable `Source:` query link per alert.
+
 Gotchas worth knowing:
 - **etcd metrics need `--etcd-expose-metrics=true`** on every k3s server (set on all 3 nodes);
   without it :2381 is localhost-only. Targets are a static list in
