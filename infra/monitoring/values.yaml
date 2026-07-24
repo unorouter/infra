@@ -55,9 +55,28 @@ grafana:
     server:
       root_url: https://grafana.unorouter.com
     auth:
-      disable_login_form: false
+      # no second login: Teleport already authenticated the user at the tunnel edge, so the
+      # JWT below logs them straight in. The form would only be a redundant prompt.
+      disable_login_form: true
     auth.anonymous:
       enabled: false
+    # PRIMARY path. Teleport signs every proxied request with a JWT in the
+    # Teleport-Jwt-Assertion header; Grafana verifies it against the cluster's public JWKS and
+    # signs the user in. One GitHub auth at Teleport = already logged into Grafana.
+    auth.jwt:
+      enabled: true
+      header_name: Teleport-Jwt-Assertion
+      jwk_set_url: https://teleport.unorouter.com/.well-known/jwks.json
+      cache_ttl: 60m
+      username_claim: sub
+      email_claim: sub
+      auto_sign_up: true
+      # Teleport puts the user's teleport roles in the `roles` claim. Everyone reaching this
+      # app already passed the GitHub org gate (unorouter/admins -> access,editor,...).
+      role_attribute_path: contains(roles[*], 'editor') && 'Admin' || 'Viewer'
+      role_attribute_strict: false
+    # FALLBACK only: direct dex login, used when reaching Grafana outside the Teleport tunnel
+    # (e.g. port-forward during an incident where the tunnel itself is the problem).
     auth.generic_oauth:
       enabled: true
       name: GitHub (dex)
