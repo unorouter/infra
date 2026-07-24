@@ -46,6 +46,9 @@ data:
       - hostname: openbao.unorouter.com
         service: https://teleport.teleport.svc.cluster.local:443
         originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: grafana.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
       # Dex OIDC IdP: direct (no Teleport gate) -- discovery/JWKS must be publicly fetchable
       # and browser redirects land here; actual auth happens at GitHub (org-gated).
       - hostname: dex.unorouter.com

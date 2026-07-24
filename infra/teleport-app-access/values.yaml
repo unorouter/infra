@@ -56,6 +56,13 @@ apps:
     rewrite:
       redirect:
         - openbao.openbao.svc.cluster.local
+  - name: grafana
+    uri: http://monitoring-grafana.monitoring.svc.cluster.local:80
+    public_addr: grafana.unorouter.com
+    labels: { env: internal }
+    rewrite:
+      redirect:
+        - monitoring-grafana.monitoring.svc.cluster.local
 
 # single node, no HA yet
 highAvailability:
