@@ -2,9 +2,14 @@
 
 ## Topology
 
-node1 cx33 fsn1 (<node1-public-ip>, 10.100.1.1) + node6 cx33 hel1 (<node6-public-ip>, 10.100.1.2) +
-node7 cx33 nbg1 (46.224.153.131, 10.100.1.4). All k3s SERVERS, embedded etcd -- quorum survives
-a full DC outage. Private net 10.100.0.0/16 carries etcd/vxlan/apiserver-kubelet.
+node1 cx33 fsn1 (10.100.1.1) + node6 cx33 hel1 (10.100.1.2) + node7 cx33 nbg1 (10.100.1.4).
+All k3s SERVERS, embedded etcd -- quorum survives a full DC outage. Private net 10.100.0.0/16
+carries etcd/vxlan/apiserver-kubelet.
+
+Public IPs are deliberately NOT in this repo (it is public). Get them from `tofu output` or
+the Hetzner console. Only node7's is externally discoverable anyway -- it is the sacrificial
+Teleport entry node and its IP is the grey-cloud A record; node1's must stay unpublished
+because it holds the pg primaries and OpenBao.
 
 - Join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
 - Cilium `k8sServiceHost: 127.0.0.1` is valid ONLY because every node is a server; adding an
@@ -144,8 +149,8 @@ Deltas seen so far, by what the old node carried:
 **Entry-node cutover** (node5 -> node7 needed this; no earlier swap did): add the new IP
 ALONGSIDE the old in `infra/teleport/values.yaml` externalIPs, push, ArgoCD self-heals (~90s) ->
 verify BOTH answer (`curl --resolve teleport.unorouter.com:443:<ip> .../webapi/ping` = 200) ->
-PATCH the grey-cloud A record to the new IP (CF API; record `<cf-record-id>`,
-zone `<cf-zone-id>`, `cfat_` Bearer token) -> confirm public DNS + ping 200
+PATCH the grey-cloud `teleport` A record to the new IP (CF API; zone + record id and the
+`cfat_` Bearer token are in the operator's own notes, not this repo) -> confirm DNS + ping 200
 BEFORE touching the old node (its IP is still listed = fallback) -> drain -> drop the old IP.
 
 ## INCIDENT 2026-07-23: quorum loss + 34min DB-write outage (self-inflicted)
