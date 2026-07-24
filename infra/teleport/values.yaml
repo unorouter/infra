@@ -63,7 +63,6 @@ service:
     # the published IP must never hit node1 (DB primaries, OpenBao). Keep DNS + this list
     # in sync; node1's IP stays unpublished. Both IPs listed transiently during a node swap.
     externalIPs:
-      - "<retired-node5-public-ip>"
       - "46.224.153.131"
 proxy:
   # hostNetwork so :443 binds the node public IP directly (grey-cloud DNS points here)
