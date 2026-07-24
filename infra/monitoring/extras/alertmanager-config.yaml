@@ -17,14 +17,22 @@ spec:
     groupInterval: 5m
     repeatInterval: 4h
     routes:
-      # keep the internal signals explicit so it is obvious they are intentionally silent:
-      # Watchdog is the always-firing dead-man (consumed externally via healthchecks.io),
-      # InfoInhibitor exists only to suppress info alerts.
+      # DEAD-MAN SWITCH. Watchdog always fires while Prometheus+Alertmanager are alive, so
+      # re-notifying it every 5m is a heartbeat to healthchecks.io. If the cluster, Prometheus
+      # or Alertmanager dies the pings stop and healthchecks emails after its grace period --
+      # the one failure mode in-cluster alerting can never report itself.
+      - receiver: healthchecks
+        matchers:
+          - name: alertname
+            value: Watchdog
+        groupWait: 0s
+        groupInterval: 5m
+        repeatInterval: 5m
+      # InfoInhibitor exists only to suppress info alerts; it must never notify.
       - receiver: "null"
         matchers:
           - name: alertname
-            matchType: "=~"
-            value: "Watchdog|InfoInhibitor"
+            value: InfoInhibitor
       - receiver: discord
         matchers:
           - name: severity
@@ -39,6 +47,14 @@ spec:
         repeatInterval: 12h
   receivers:
     - name: "null"
+    # heartbeat target: any POST marks the check alive. sendResolved is off -- a resolved
+    # Watchdog would ping too and defeat the point.
+    - name: healthchecks
+      webhookConfigs:
+        - urlSecret:
+            name: alertmanager-discord
+            key: healthchecks
+          sendResolved: false
     - name: discord
       discordConfigs:
         - apiURL:
