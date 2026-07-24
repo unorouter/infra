@@ -121,10 +121,21 @@ write_files:
             selfHeal: true
 
 runcmd:
-  - curl -fsSL https://tailscale.com/install.sh | sh
-%{ if tailscale_authkey != "" ~}
-  - tailscale up --authkey='${tailscale_authkey}' --hostname=unorouter-node1
-%{ endif ~}
+  # HOST-ONLY swap: gives the node a soft landing instead of a hard OOM kill when memory
+  # spikes. Pods never swap (kubelet swapBehavior stays NoSwap), so etcd/postgres/prometheus
+  # latency is untouched -- only cold pages from system processes get reclaimed. swappiness=10
+  # means it engages under real pressure, not routinely. Velero cannot restore this: it is
+  # host state, below the Kubernetes API.
+  - |
+    if ! swapon --show | grep -q swapfile; then
+      fallocate -l 4G /swapfile
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo "/swapfile none swap sw 0 0" >> /etc/fstab
+      echo "vm.swappiness=10" > /etc/sysctl.d/99-swap.conf
+      sysctl -p /etc/sysctl.d/99-swap.conf
+    fi
   - |
     PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
     export INSTALL_K3S_EXEC="server \
@@ -138,6 +149,8 @@ runcmd:
       --disable=traefik \
       --disable=servicelb \
       --disable-kube-proxy \
+      --etcd-expose-metrics=true \
+      --kubelet-arg=fail-swap-on=false \
       --tls-san=$PUBLIC_IP \
       --write-kubeconfig-mode 644"
 %{ if k3s_version != "" ~}

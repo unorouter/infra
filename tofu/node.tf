@@ -18,7 +18,6 @@ resource "hcloud_server" "node1" {
 
   user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
     k3s_version       = var.k3s_version
-    tailscale_authkey = var.tailscale_authkey
     k3s_token         = var.k3s_token
   })
 
@@ -53,7 +52,6 @@ resource "hcloud_server" "node7" {
 
   user_data = templatefile("${path.module}/cloud-init-join.yaml.tftpl", {
     k3s_version       = var.k3s_version
-    tailscale_authkey = var.tailscale_authkey
     k3s_token         = var.k3s_token
     node_name         = "unorouter-node7"
     private_ip        = "10.100.1.4"
@@ -85,7 +83,6 @@ resource "hcloud_server" "node6" {
 
   user_data = templatefile("${path.module}/cloud-init-join.yaml.tftpl", {
     k3s_version       = var.k3s_version
-    tailscale_authkey = var.tailscale_authkey
     k3s_token         = var.k3s_token
     node_name         = "unorouter-node6"
     private_ip        = "10.100.1.2"

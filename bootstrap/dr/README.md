@@ -19,7 +19,7 @@ a full DC outage. Private net 10.100.0.0/16 carries etcd/vxlan/apiserver-kubelet
   number. node2/3 (cpx22) -> node4/5 (cx23) 2026-07-23; node4 -> node6 and node5 -> node7
   (cx33 8GB, same-DC) 2026-07-24 after the RAM-pressure incident. Fleet now uniform 8+8+8.
 
-## Memory posture (what limits do and do not cover)
+## Memory posture (limits + host swap)
 
 Memory limits were set 2026-07-25 on the five revenue services (new-api master/slave,
 unorouter, bot, mcp) at ~2-3x observed peak. That caps the ONE failure from 2026-07-23: a
@@ -34,11 +34,16 @@ It does NOT cover everything, and the difference matters:
 - **k3s/etcd sits outside Kubernetes entirely** (~1.3Gi RSS, ~500Mi db). No k8s limit can touch
   it, and it is the process that actually caused the 2026-07-24 incident: memory pressure ->
   etcd fsync stall -> lease timeouts -> NodeNotReady flaps.
-- **No swap on any node.** Swap is the mitigation for the cases limits cannot reach: many pods
-  spiking at once, system/host processes, and reclaiming cold pages. Currently ~3.2-3.9Gi
-  available per node, so there is real headroom -- but the failure mode is a hard OOM kill with
-  no soft landing. Alert group `memory` (NodeMemoryFreeLow at <400Mi absolute) is the current
-  early warning; adding swap is the standing improvement.
+- **HOST-ONLY swap, 4Gi per node** (added 2026-07-25, `/swapfile`, `vm.swappiness=10`, in
+  `/etc/fstab` + both cloud-init templates). This covers what limits cannot: multi-pod spikes,
+  system/host processes, and reclaiming cold pages -- the node gets a soft landing instead of a
+  hard OOM kill.
+  **Pods never swap.** k3s runs `--kubelet-arg=fail-swap-on=false` while `swapBehavior` stays
+  at its `NoSwap` default, so only host processes can use it. That is deliberate: these are
+  control-plane/etcd nodes, and letting Postgres or etcd page to disk would trade a hard failure
+  for unpredictable fsync latency -- the exact 2026-07-24 failure mode. Confirm after any k3s
+  restart with `journalctl -u k3s | grep "NoSwap is set"`.
+  swappiness=10 keeps it idle under normal load; `NodeMemoryFreeLow` (<400Mi) still alerts.
 
 ## Incident triage: CHECK GRAFANA FIRST
 
@@ -267,8 +272,7 @@ manual auth steps.
   1GB backup takes ~15min and logs NOTHING at default level (`-vv` shows parts). Test-restore
   from the REAL bucket is a HARD GATE (cnpg#6645).
 - The `options_masked` view + `reader` role ride the physical S3 backup -- no post-restore SQL.
-- Nodes reach each other on the private net; node SSH is public-IP + firewall :22. Tailscale is
-  not used on the current fleet.
+- Nodes reach each other on the private net; node SSH is public-IP + firewall :22.
 - don was decommissioned 2026-07-23 (revenue containers removed, DB ports closed, volumes kept
   as a cold archive). Rollback is the k3s DR path only. Its "Docker Prod" workflows are DISABLED
   in all three repos -- one zombie-respawned after cutover and ran 11h in parallel on a stale DB,

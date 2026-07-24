@@ -27,7 +27,6 @@ resource "hcloud_firewall" "node" {
     source_ips = [var.operator_cidr]
   }
 
-  # tailscale runs over outbound UDP 41641/3478 (no inbound rule needed; NAT traversal)
   rule {
     direction  = "in"
     protocol   = "icmp"

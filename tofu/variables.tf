@@ -12,13 +12,6 @@ variable "ssh_public_key" {
   type = string
 }
 
-variable "tailscale_authkey" {
-  description = "Reusable tailnet auth key; empty = skip tailscale join"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 variable "k3s_version" {
   description = "Pin like v1.33.4+k3s1; empty = stable channel"
   type        = string

@@ -7,10 +7,18 @@ packages:
   - open-iscsi
 
 runcmd:
-  - curl -fsSL https://tailscale.com/install.sh | sh
-%{ if tailscale_authkey != "" ~}
-  - tailscale up --authkey='${tailscale_authkey}' --hostname=${node_name}
-%{ endif ~}
+  # HOST-ONLY swap (see cloud-init.yaml.tftpl for the rationale). Pods never swap; this only
+  # buys the node a soft landing instead of a hard OOM. Not restorable by Velero -- host state.
+  - |
+    if ! swapon --show | grep -q swapfile; then
+      fallocate -l 4G /swapfile
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo "/swapfile none swap sw 0 0" >> /etc/fstab
+      echo "vm.swappiness=10" > /etc/sysctl.d/99-swap.conf
+      sysctl -p /etc/sysctl.d/99-swap.conf
+    fi
   - |
     PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
     export INSTALL_K3S_EXEC="server \
@@ -24,6 +32,8 @@ runcmd:
       --disable=traefik \
       --disable=servicelb \
       --disable-kube-proxy \
+      --etcd-expose-metrics=true \
+      --kubelet-arg=fail-swap-on=false \
       --tls-san=$PUBLIC_IP \
       --write-kubeconfig-mode 644"
 %{ if k3s_version != "" ~}

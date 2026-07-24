@@ -107,7 +107,7 @@ Secrets: `bao kv`.
 ## tofu
 
 `tofu/.env` (gitignored) exports every `TF_VAR_*`: hcloud_token, s3 keys, k3s_token,
-operator_cidr, ssh_public_key, tailscale_authkey, node_type, location.
+operator_cidr, ssh_public_key, node_type, location.
 
 ```sh
 cd tofu && tofu init
@@ -120,7 +120,7 @@ tofu apply   # manual only, never CI
 root app-of-apps), so a fresh apply brings the whole stack up from git.
 
 One-time prerequisites: age key `~/.config/sops/age/keys.txt` (**back up offline, loss =
-secrets unrecoverable**), Hetzner API token + S3 credentials, Tailscale authkey, Cloudflare
+secrets unrecoverable**), Hetzner API token + S3 credentials, Cloudflare
 Origin cert.
 
 ## Non-negotiable gotchas
