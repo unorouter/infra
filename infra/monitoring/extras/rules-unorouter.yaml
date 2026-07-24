@@ -238,10 +238,8 @@ spec:
           annotations:
             summary: "{{ $labels.instance }} root disk >85% full"
             description: "local-path PVCs (pg data, prometheus) all live here."
-        # Cilium exports NO prometheus metrics on this fleet (no prometheus block in its
-        # values), so `cilium_unreachable_nodes` never existed and the old rule could not
-        # fire. Watch the agent DaemonSet instead until metrics are enabled -- a missing
-        # agent on a node breaks that node's pod networking.
+        # a missing agent on a node breaks that node's pod networking (and pod creation
+        # stalls there even though the eBPF datapath keeps forwarding).
         - alert: CiliumAgentMissing
           expr: kube_daemonset_status_number_ready{daemonset="cilium",namespace="kube-system"}
             < kube_daemonset_status_desired_number_scheduled{daemonset="cilium",namespace="kube-system"}
@@ -250,3 +248,11 @@ spec:
           annotations:
             summary: "Cilium agent not running on every node"
             description: "{{ $value }} ready vs desired; pods on the affected node lose networking."
+        # real metric again since cilium prometheus was enabled 2026-07-25
+        - alert: CiliumUnreachableNodes
+          expr: cilium_unreachable_nodes > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Cilium reports {{ $value }} unreachable node(s) from {{ $labels.pod }}"
+            description: "Cross-node vxlan is broken; usually a stale cached node IP after a --node-ip change (restart the cilium daemonset) or a firewall change."
