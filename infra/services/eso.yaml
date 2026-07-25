@@ -16,23 +16,6 @@ spec:
     - extract:
         key: newapi-env
 ---
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
-  name: bot-env
-  namespace: services
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: bot-env
-    creationPolicy: Owner
-  dataFrom:
-    - extract:
-        key: bot-env
----
 # ghcr pull secret for the PRIVATE unorouter image (its build bakes server secrets).
 # OpenBao key ghcr-pull.dockerconfigjson = full .dockerconfigjson value (PAT read:packages).
 apiVersion: external-secrets.io/v1
