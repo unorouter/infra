@@ -31,11 +31,17 @@ spec:
     spec:
       project: apps
       source:
-        repoURL: '{{.url}}'
+        # NOT {{.url}} -- the SCM generator returns the SSH clone URL, which ArgoCD has no
+        # key for and the project's sourceRepos does not allow. Build the HTTPS URL instead.
+        repoURL: 'https://github.com/{{.organization}}/{{.repository}}.git'
         targetRevision: '{{.branch}}'
         path: k8s
       destination:
         server: https://kubernetes.default.svc
+        # A destination namespace is required even though every manifest sets its own; an
+        # empty one matches no allowed destination in the project. Manifests targeting
+        # databases/ still work -- their own metadata.namespace wins.
+        namespace: services
       syncPolicy:
         automated: { prune: true, selfHeal: true }
         # MUST match the databases app's apply mode. Adopting a CNPG Cluster under a different
