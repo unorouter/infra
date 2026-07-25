@@ -3,6 +3,9 @@ kind: ObjectStore
 metadata:
   name: newapi-pg-store
   namespace: databases
+  annotations:
+    # deleting this breaks WAL archiving and PITR for a live cluster; never prune it
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   # serverName is set via plugin parameters on the Cluster, NOT here (plugin API).
   configuration:

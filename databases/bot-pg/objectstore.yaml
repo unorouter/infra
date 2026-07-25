@@ -3,6 +3,9 @@ kind: ObjectStore
 metadata:
   name: bot-pg-store
   namespace: databases
+  annotations:
+    # deleting this breaks WAL archiving and PITR for a live cluster; never prune it
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   configuration:
     destinationPath: s3://unorouter-pg-backups/

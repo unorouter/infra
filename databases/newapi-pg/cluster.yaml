@@ -3,6 +3,11 @@ kind: Cluster
 metadata:
   name: newapi-pg
   namespace: databases
+  annotations:
+    # A resource-level Prune option overrides the Application's prune policy. Without it, a
+    # manifest that briefly leaves this app's scope (an ownership move, a bad path) is a
+    # DELETED database. Removing this is a decision, not a cleanup.
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   imageName: ghcr.io/cloudnative-pg/postgresql:15-standard-bookworm
   instances: 3

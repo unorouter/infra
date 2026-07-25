@@ -3,6 +3,10 @@ kind: Cluster
 metadata:
   name: bot-pg
   namespace: databases
+  annotations:
+    # see newapi-pg/cluster.yaml: overrides the app-level prune policy so an ownership move
+    # can never delete the database.
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   env:
     - name: AWS_REQUEST_CHECKSUM_CALCULATION
