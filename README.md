@@ -99,7 +99,10 @@ kubectl -n databases exec newapi-pg-1 -c postgres -- psql -U postgres -d newapi 
 **2. Direct kubeconfig** (Teleport down) - context `unorouter-direct`, or
 `export KUBECONFIG=$PWD/kubeconfig`.
 
-**3. Node SSH** (apiserver down) - `ssh root@<public-ip>` (IPs in `tofu` outputs).
+**3. Node SSH** (apiserver down) - `./scripts/dr.sh ips` lists every node's public IP, then
+`ssh root@<ip>`. Node IPs are NOT in git (public repo); the script reads them live from the
+Hetzner API using only `TF_VAR_hcloud_token` from `tofu/.env` - no `tofu init`, no S3 state and
+no working cluster, all of which may be gone exactly when you need this.
 
 Secrets: `bao kv`.
 

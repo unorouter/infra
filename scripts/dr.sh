@@ -1,10 +1,34 @@
 #!/usr/bin/env bash
-# One script, all DR/ops. Usage: ./scripts/dr.sh <apply|destroy|bootstrap|restore|unseal|kubeconfig>
+# One script, all DR/ops. Usage: ./scripts/dr.sh <ips|apply|destroy|bootstrap|restore|unseal|kubeconfig>
 # Full runbook context: bootstrap/dr/README.md
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-NODE_IP() { (cd tofu && tofu output -raw node_ipv4); }
+# Node IPs are deliberately NOT in git (public repo). Source of truth is the Hetzner API,
+# which needs only the token -- no tofu init, no S3 state, no working cluster. That matters:
+# every consumer of this is a break-glass path where those may all be unavailable.
+ips() {
+  set -a && . ./tofu/.env && set +a
+  curl -sf -H "Authorization: Bearer $TF_VAR_hcloud_token" 'https://api.hetzner.cloud/v1/servers' \
+    | python3 -c "
+import sys,json
+for s in json.load(sys.stdin).get('servers',[]):
+    dc=(s.get('datacenter') or {}).get('name') or (s.get('location') or {}).get('name') or '?'
+    print('%-22s %-16s %-10s %s' % (s['name'], s['public_net']['ipv4']['ip'], dc, s['status']))
+"
+}
+
+# single node's IP by name, for scripting: NODE_IP unorouter-node1
+NODE_IP() {
+  local want="${1:-unorouter-node1}"
+  set -a && . ./tofu/.env && set +a
+  curl -sf -H "Authorization: Bearer $TF_VAR_hcloud_token" "https://api.hetzner.cloud/v1/servers?name=$want" \
+    | python3 -c "
+import sys,json
+s=json.load(sys.stdin).get('servers') or sys.exit('no server named $want')
+print(s[0]['public_net']['ipv4']['ip'])
+"
+}
 SOPS_KEYS() { sops -d secrets/openbao-init.sops.yaml | grep -oP '^\s*-\s*\K\S+'; }
 SOPS_ROOT() { sops -d secrets/openbao-init.sops.yaml | grep -oP '^root_token:\s*\K\S+'; }
 export KUBECONFIG="$PWD/kubeconfig"
@@ -64,4 +88,6 @@ restore() {
   echo ">> DONE. Then: tsh login --proxy=teleport.unorouter.com"
 }
 
-"${1:?usage: dr.sh <apply|destroy|storage_apply|bootstrap|kubeconfig|unseal|restore>}"
+cmd="${1:?usage: dr.sh <ips|apply|destroy|storage_apply|bootstrap|kubeconfig|unseal|restore>}"
+shift
+"$cmd" "$@"

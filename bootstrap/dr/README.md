@@ -6,10 +6,12 @@ node1 cx33 fsn1 (10.100.1.1) + node6 cx33 hel1 (10.100.1.2) + node7 cx33 nbg1 (1
 All k3s SERVERS, embedded etcd -- quorum survives a full DC outage. Private net 10.100.0.0/16
 carries etcd/vxlan/apiserver-kubelet.
 
-Public IPs are deliberately NOT in this repo (it is public). Get them from `tofu output` or
-the Hetzner console. Only node7's is externally discoverable anyway -- it is the sacrificial
-Teleport entry node and its IP is the grey-cloud A record; node1's must stay unpublished
-because it holds the pg primaries and OpenBao.
+Public IPs are deliberately NOT in this repo (it is public). Get them with `./scripts/dr.sh ips`
+-- it queries the Hetzner API with just `TF_VAR_hcloud_token`, so it works when tofu state, S3
+and the cluster are all unavailable (`tofu output` needs all three). Hetzner console is the
+fallback if the token is lost. Only node7's is externally discoverable anyway -- it is the
+sacrificial Teleport entry node and its IP is the grey-cloud A record; node1's must stay
+unpublished because it holds the pg primaries and OpenBao.
 
 - Join token: `tofu/.env` TF_VAR_k3s_token + OpenBao `secret/cluster.k3s_join_token`.
 - Cilium `k8sServiceHost: 127.0.0.1` is valid ONLY because every node is a server; adding an
@@ -90,8 +92,9 @@ alerting can never report about itself. Ping URL is in OpenBao `secret/alertmana
    roles -- after any connector change, `tsh logout` THEN login.
 2. **Direct kubeconfig**: `kubectl --context unorouter-direct` or
    `export KUBECONFIG=$PWD/kubeconfig` (hits node1 :6443).
-3. **Raw SSH**: `ssh root@<node-public-ip>` -- for the layer BELOW k8s (etcd/quorum recovery,
-   k3s install/stop, disk/journal) when the kube API itself is dead.
+3. **Raw SSH**: `ssh root@$(./scripts/dr.sh NODE_IP unorouter-node1)` (or `dr.sh ips` to list
+   all) -- for the layer BELOW k8s (etcd/quorum recovery, k3s install/stop, disk/journal) when
+   the kube API itself is dead.
 
 **No local passwords anywhere**: Teleport `local_auth: false`, ArgoCD `admin.enabled: false`
 (cloud-init helm values), Grafana login form disabled, OpenBao has only kubernetes/oidc/token.
