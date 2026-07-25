@@ -120,6 +120,37 @@ prometheus:
     probeSelectorNilUsesHelmValues: false
     scrapeConfigSelectorNilUsesHelmValues: false
 
+# Histogram buckets from the apiserver and kubelet dominate cardinality (~300k series on a
+# 3-node cluster, over half from the kubelet job alone) and grow the TSDB, the Prometheus
+# heap and the nightly Velero volume with it.
+#
+# Dropped below are buckets NO rule and NO dashboard reads -- verified before removal.
+# KEEP apiserver_request_sli_duration_seconds_bucket: the chart's apiserver SLO burn-rate
+# alerts are built on it (25 rules, 3 dashboards). Same for etcd_disk_wal_fsync_*, which the
+# etcd-degradation alerts use. Re-check with a query against the rules before adding here.
+kubeApiServer:
+  serviceMonitor:
+    metricRelabelings:
+      - sourceLabels: [__name__]
+        regex: apiserver_(request_duration_seconds|request_body_size_bytes|response_sizes|watch_list_duration_seconds|watch_cache_read_wait_seconds|watch_events_sizes)_bucket
+        action: drop
+      - sourceLabels: [__name__]
+        regex: etcd_request_duration_seconds_bucket
+        action: drop
+      - sourceLabels: [__name__]
+        regex: workqueue_(work|queue)_duration_seconds_bucket
+        action: drop
+
+kubelet:
+  serviceMonitor:
+    metricRelabelings:
+      - sourceLabels: [__name__]
+        regex: (apiserver|etcd)_request_duration_seconds_bucket
+        action: drop
+      - sourceLabels: [__name__]
+        regex: workqueue_(work|queue)_duration_seconds_bucket
+        action: drop
+
 prometheusOperator:
   nodeSelector:
     kubernetes.io/hostname: unorouter-node7
