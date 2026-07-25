@@ -128,9 +128,15 @@ prometheus:
 # KEEP apiserver_request_sli_duration_seconds_bucket: the chart's apiserver SLO burn-rate
 # alerts are built on it (25 rules, 3 dashboards). Same for etcd_disk_wal_fsync_*, which the
 # etcd-degradation alerts use. Re-check with a query against the rules before adding here.
+# NOTE: metricRelabelings REPLACES the chart default, it does not merge. The first entry
+# below is the chart's own bucket-thinning rule copied verbatim -- dropping it would ADD
+# series back. Keep it first when editing this list.
 kubeApiServer:
   serviceMonitor:
     metricRelabelings:
+      - sourceLabels: [__name__, le]
+        regex: (etcd_request|apiserver_request_slo|apiserver_request_sli|apiserver_request)_duration_seconds_bucket;(0\.15|0\.2|0\.3|0\.35|0\.4|0\.45|0\.6|0\.7|0\.8|0\.9|1\.25|1\.5|1\.75|2|3|3\.5|4|4\.5|6|7|8|9|15|20|40|45|50)(\.0)?
+        action: drop
       - sourceLabels: [__name__]
         regex: apiserver_(request_duration_seconds|request_body_size_bytes|response_sizes|watch_list_duration_seconds|watch_cache_read_wait_seconds|watch_events_sizes)_bucket
         action: drop
@@ -143,7 +149,11 @@ kubeApiServer:
 
 kubelet:
   serviceMonitor:
+    # first entry = chart default (see the kubeApiServer note above); the rest are ours.
     metricRelabelings:
+      - sourceLabels: [__name__, le]
+        regex: (csi_operations|storage_operation_duration)_seconds_bucket;(0.25|2.5|15|25|120|600)(\.0)?
+        action: drop
       - sourceLabels: [__name__]
         regex: (apiserver|etcd)_request_duration_seconds_bucket
         action: drop
