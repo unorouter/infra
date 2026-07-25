@@ -1,0 +1,50 @@
+# Repo-based service discovery: any repo in the unorouter org with a k8s/ directory becomes an
+# ArgoCD Application. Adding a service = new repo + k8s/ dir + push. No commit in this repo.
+#
+# THIS IS A DEPLOY GATE. Write access to a matching repo is write access to the cluster, bounded
+# by the `apps` AppProject (see appproject-apps.yaml). Two controls make that acceptable:
+#   - project is HARDCODED to `apps`; templating it would let a repo pick an unrestricted project
+#   - allBranches stays false (the default), so only each repo's default branch can deploy
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: services
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: [missingkey=error]
+  generators:
+    - scmProvider:
+        github:
+          organization: unorouter
+          tokenRef:
+            secretName: argocd-scm
+            key: token
+        # one filter block = AND of its conditions; separate blocks would OR
+        filters:
+          - pathsExist: [k8s]
+        # 15min: pathsExist costs an API call per repo, so do not poll aggressively
+        requeueAfterSeconds: 900
+  template:
+    metadata:
+      name: '{{.repository}}'
+    spec:
+      project: apps
+      source:
+        repoURL: '{{.url}}'
+        targetRevision: '{{.branch}}'
+        path: k8s
+      destination:
+        server: https://kubernetes.default.svc
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        # MUST match the databases app's apply mode. Adopting a CNPG Cluster under a different
+        # mode changes field ownership, and ArgoCD applies SSA with --force-conflicts, so it
+        # would stomp operator-managed spec fields and roll Postgres pods.
+        syncOptions:
+          - ServerSideApply=true
+          - RespectIgnoreDifferences=true
+      ignoreDifferences:
+        - group: external-secrets.io
+          kind: ExternalSecret
+          managedFieldsManagers: [external-secrets]
