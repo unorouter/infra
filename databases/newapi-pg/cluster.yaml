@@ -20,10 +20,9 @@ spec:
     size: 20Gi
     storageClass: local-path
 
-  # --- DR MODE: recovery is create-time-only (inert on a running cluster). On every fresh
-  # cluster create this RESTORES from S3 (latest; add recoveryTarget.targetTime for PITR).
-  # On each DR event bump the lineage PAIR: restore-from = last archive, archive-to = +1.
-  # (initdb era over: CNPG's own S3 backups are the source of truth now.)
+  # DR MODE: recovery is create-time-only (inert on a running cluster). Every fresh create
+  # RESTORES from S3 latest; add recoveryTarget.targetTime for PITR. On each DR event bump
+  # the lineage PAIR below: restore-from = last archive, archive-to = +1.
   bootstrap:
     recovery:
       source: newapi-pg-origin
@@ -42,16 +41,14 @@ spec:
         barmanObjectName: newapi-pg-store
         serverName: newapi-pg-v4 # ARCHIVE-TO lineage (current+1); MUST differ from restore-from
 
-  # Teleport-provisioned read role. Declared here so CNPG reconciles it every DR.
-  # masking = RLS policy on options (masking.sql); re-apply after fresh don imports.
+  # Teleport-provisioned read role, declared here so CNPG reconciles it on every DR.
   managed:
     roles:
       - name: reader
         login: true
-        # password from a Secret; Teleport maps the low-trust GitHub team -> this db-user.
-        # pg_read_all_data = browse all tables (users/channels/etc). Secret option VALUES are
-        # hidden by an RLS policy on `options` (masking.sql) which pg_read_all_data does NOT
-        # bypass. reader must NEVER get BYPASSRLS (that WOULD defeat it). Verified on real data.
+        # pg_read_all_data browses all tables, but secret option VALUES stay hidden by an RLS
+        # policy on `options` (masking.sql) that it does NOT bypass. reader must NEVER get
+        # BYPASSRLS -- that would defeat the masking.
         passwordSecret:
           name: newapi-pg-reader
         inRoles:

@@ -1,7 +1,6 @@
-# OpenBao (LF-governed Vault fork, MPL-2.0). Drop-in for the hashicorp/vault chart.
-# Shamir manual unseal (same model as before) -- softhsm auto-unseal is available for free
-# LATER if wanted (OpenBao unlocks it without Enterprise), but not built now (complexity).
-# Standard image (no HSM build needed for Shamir).
+# OpenBao (Vault fork, MPL-2.0). Drop-in for the hashicorp/vault chart.
+# Shamir manual unseal: every restart needs `dr.sh unseal`. Auto-unseal via softhsm is
+# possible without Enterprise if the manual step ever becomes a problem.
 server:
   image:
     registry: quay.io

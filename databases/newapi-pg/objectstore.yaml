@@ -23,8 +23,8 @@ spec:
       compression: gzip
     data:
       compression: gzip
-      # -vv: barman logs at WARNING by default = a healthy 15-min 1GB upload is SILENT and
-      # indistinguishable from a hang. Debug logging shows per-part progress.
+      # -vv: at default WARNING level a healthy 15-min 1GB upload is silent and
+      # indistinguishable from a hang. Debug shows per-part progress.
       additionalCommandArgs:
         - "-vv"
   # boto3 >=1.36 attaches x-amz-checksum headers Ceph/RadosGW rejects on MULTIPART uploads:

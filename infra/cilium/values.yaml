@@ -31,10 +31,9 @@ operator:
   prometheus:
     enabled: true
 
-# agent + operator metrics for the CiliumAgentMissing / network alerts. serviceMonitor is
-# left off: the kube-prometheus-stack Prometheus selects all ServiceMonitors anyway and
-# enabling it here requires the CRDs to exist at Cilium install time (they do not on a DR
-# rebuild, where Cilium comes up before ArgoCD).
+# agent + operator metrics for the CiliumAgentMissing / network alerts. serviceMonitor stays
+# off: it needs the Prometheus CRDs at Cilium install time, which do not exist on a DR
+# rebuild (Cilium comes up before ArgoCD). A PodMonitor in monitoring/extras covers it.
 prometheus:
   enabled: true
 
@@ -45,8 +44,7 @@ updateStrategy:
   rollingUpdate:
     maxUnavailable: 1
 
-# NOTE: these values are ALSO inlined in tofu/cloud-init.yaml.tftpl (the k3s auto-deploy
-# HelmChart) because bootstrap can't reference git before ArgoCD exists. Keep the two in
-# sync on any Cilium values change. Live changes go through node1's
-# /var/lib/rancher/k3s/server/manifests/cilium.yaml (k3s helm-controller reconciles it);
-# this file is documentation + `make bootstrap` fallback.
+# NOTE: these values are ALSO inlined in tofu/cloud-init.yaml.tftpl, because bootstrap
+# cannot reference git before ArgoCD exists. KEEP THE TWO IN SYNC.
+# Live changes go through node1's /var/lib/rancher/k3s/server/manifests/cilium.yaml
+# (helm-controller reconciles it); this file is docs + the `make bootstrap` fallback.

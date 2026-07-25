@@ -1,10 +1,6 @@
-# blackbox-exporter: probes the PUBLIC urls from INSIDE the cluster.
-#
-# WHY THIS EXISTS: the 2026-07-23 8h outage ran exactly this path -- the frontend called the
-# public api hostname, the traffic hairpinned (pod -> CF edge -> tunnel -> back in), and
-# Cloudflare L3/4 auto-mitigation started dropping the node IPv4 mid-TLS-handshake for our
-# zone only. Invisible to external checks (they were fine) and invisible to in-cluster
-# service checks (those bypass the edge). Only an in-cluster probe of the public URL sees it.
+# Probes the PUBLIC urls from INSIDE the cluster -- the hairpin path (pod -> CF edge ->
+# tunnel -> back in) that broke in the 2026-07-23 outage. External checks saw nothing (they
+# stop at the edge) and in-cluster service checks saw nothing (they skip it). Only this does.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

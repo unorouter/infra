@@ -39,9 +39,8 @@ spec:
       containers:
         - name: unorouter
           image: ghcr.io/unorouter/unorouter:latest
-          # heaviest service on the fleet (~950Mi steady, Next.js SSR). The old 512Mi request
-          # understated it by ~2x, so the scheduler packed nodes on a number that was never
-          # real. Limit ~2x peak = a runaway is capped without throttling normal traffic.
+          # heaviest service on the fleet: ~950Mi steady (Next.js SSR). Request must match
+          # that or the scheduler overpacks nodes; limit is ~2x peak.
           resources:
             requests: { memory: 1Gi, cpu: 200m }
             limits: { memory: 2Gi }
@@ -92,7 +91,6 @@ spec:
         - name: mcp
           image: node:22-alpine
           command: [npx, -y, --package=unorouter-mcp@0.2.1, unorouter-mcp-http]
-          # had neither request nor limit: invisible to the scheduler and uncapped
           resources:
             requests: { memory: 128Mi, cpu: 50m }
             limits: { memory: 256Mi }

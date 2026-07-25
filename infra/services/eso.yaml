@@ -1,5 +1,4 @@
-# Runtime env for the revenue services, sourced from OpenBao (imported from don's live
-# containers; SQL_DSN/REDIS/POSTGRES_* re-pointed at CNPG/redis ClusterIP, DEBUG=false).
+# Runtime env for the revenue services, sourced from OpenBao.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:

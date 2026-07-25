@@ -17,9 +17,9 @@ metadata:
   name: unorouter-bot
   namespace: services
 spec:
-  replicas: 1 # single Discord gateway (don bot stopped at cutover)
+  replicas: 1
   strategy:
-    type: Recreate # never two gateways during a roll
+    type: Recreate
   selector:
     matchLabels: { app: unorouter-bot }
   template:
