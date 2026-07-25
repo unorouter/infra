@@ -4,4 +4,3 @@ kind: Kustomization
 # which double-counts the child kustomization.yaml files).
 resources:
   - eso-pg-s3.yaml
-  - newapi-pg
