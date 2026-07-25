@@ -66,7 +66,6 @@ Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest |
 | k3s | v1.36.2+k3s1 | node (get.k3s.io stable) |
 | hcloud tofu provider | ~> 1.49 | tofu/providers.tf |
 | Cilium | 1.19.6 | helm --version |
-| Gateway API CRDs | v1.6.1 | applied pre-Cilium |
 | cert-manager | v1.21.0 | infra/cert-manager |
 | CNPG operator | 1.30.0 | infra/cnpg-operator |
 | Barman Cloud plugin | 0.13.0 | infra/cnpg-operator |

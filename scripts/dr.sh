@@ -21,11 +21,7 @@ kubeconfig() {
 
 # Fallback only: cloud-init auto-bootstraps Cilium+ArgoCD. Use if that path fails.
 bootstrap() {
-  local gw=v1.6.1 cil=1.19.6
-  for c in gatewayclasses gateways httproutes referencegrants grpcroutes; do
-    kubectl apply -f "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/$gw/config/crd/standard/gateway.networking.k8s.io_$c.yaml" >/dev/null
-  done
-  kubectl apply -f "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/$gw/config/crd/experimental/gateway.networking.k8s.io_tlsroutes.yaml" >/dev/null
+  local cil=1.19.6
   helm repo add cilium https://helm.cilium.io/ >/dev/null 2>&1 || true
   helm upgrade --install cilium cilium/cilium --version "$cil" -n kube-system -f infra/cilium/values.yaml
   kubectl -n kube-system rollout status ds/cilium --timeout=180s

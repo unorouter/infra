@@ -1,5 +1,5 @@
 # Cloudflare Tunnel (cloudflared) - outbound-only edge entry. Hides node IP, no inbound ports.
-# Routes internal UIs (gated by CF Access GitHub SSO) + prod apps later (-> Cilium Gateway).
+# Routes prod apps + internal UIs (ops hosts go via the Teleport proxy svc, which gates SSO).
 # Token from OpenBao via ESO. Teleport stays DIRECT grey-cloud (ALPN, can't tunnel).
 apiVersion: v1
 kind: ServiceAccount
