@@ -1,0 +1,50 @@
+# AppProject + SCM discovery credential for the Applications generated from app repos.
+#
+# This is the guardrail that makes repo-based discovery safe: with the SCM generator, write
+# access to a matching repo is effectively deploy access to the cluster. Generated apps are
+# pinned to this project, never to `default` -- `default` is unrestricted, and an Application
+# under it can edit ArgoCD's own RBAC ConfigMap and take over the cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: apps
+  namespace: argocd
+spec:
+  description: Workloads owned by app repos (discovered via a k8s/ directory)
+  sourceRepos:
+    - https://github.com/unorouter/*
+  destinations:
+    - { server: https://kubernetes.default.svc, namespace: services }
+    - { server: https://kubernetes.default.svc, namespace: databases }
+  # EMPTY on purpose: an app repo cannot create Namespaces, ClusterRoles, or a
+  # ClusterSecretStore. Cluster-scoped resources stay in this repo.
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - { group: "", kind: Service }
+    - { group: "", kind: ConfigMap }
+    - { group: apps, kind: Deployment }
+    - { group: batch, kind: CronJob }
+    - { group: external-secrets.io, kind: ExternalSecret }
+    - { group: postgresql.cnpg.io, kind: Cluster }
+    - { group: postgresql.cnpg.io, kind: ScheduledBackup }
+    - { group: barmancloud.cnpg.io, kind: ObjectStore }
+---
+# Classic PAT with ZERO scopes: it reads public repos and nothing else, which is all the SCM
+# generator needs. Its only job is the 5000/hr authenticated rate limit -- anonymous is 60/hr,
+# and pathsExist costs an API call per repo, so discovery would fail silently as repos are added.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: argocd-scm
+  namespace: argocd
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: argocd-scm
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef: { key: argocd-scm, property: token }
