@@ -2,7 +2,6 @@
 *.tfstate
 *.tfstate.*
 *.tfplan
-tofu/.terraform.lock.hcl
 kubeconfig*
 *.dec.yaml
 *.dec.env
