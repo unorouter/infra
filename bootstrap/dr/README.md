@@ -213,7 +213,16 @@ make apply    # tofu apply -> cloud-init auto-deploys Cilium + ArgoCD + root app
 ```
 
 Cloud-init writes k3s auto-deploy manifests, so `tofu apply` ALONE brings up the whole stack
-from git (`make bootstrap` is a fallback only). node1 self-initializes etcd (`--cluster-init`);
+from git (`make bootstrap` is a fallback only).
+
+**DR now spans MORE THAN THIS REPO.** This repo restores the platform (nodes, Cilium, ArgoCD,
+CNPG operator, OpenBao, ESO, Teleport, monitoring) plus the `services` ApplicationSet. The
+workloads and their databases live in the app repos and are rediscovered from there:
+`unorouter/unorouter`, `unorouter/new-api`, `unorouter/unorouter-bot` (each `k8s/`). A restore
+is only complete once those three Applications appear -- check
+`kubectl -n argocd get app` for them, and see the discovery + SCM-token notes in the root README.
+
+node1 self-initializes etcd (`--cluster-init`);
 the others join on the fixed token, retrying until node1's apiserver is up -- a few minutes of
 join errors at boot is normal. node1 has `lifecycle.ignore_changes[user_data]` so template
 edits never replace the live node.
@@ -225,7 +234,8 @@ If IPs changed: update `infra/teleport/values.yaml` externalIPs + the grey-cloud
 ### 2. Bump the CNPG serverName lineage (the ONE unavoidable edit)
 
 CNPG HALTS a restored primary that archives WAL to the path it restored FROM. On every DR
-event bump BOTH serverNames by one, in `databases/{newapi,bot}-pg/cluster.yaml`:
+event bump BOTH serverNames by one. **These manifests live in the APP repos now, not here**:
+`unorouter/new-api` -> `k8s/pg.yaml`, `unorouter/unorouter-bot` -> `k8s/pg.yaml`.
 `externalClusters[].serverName` v{N} -> v{N+1}, `plugins[].serverName` v{N+1} -> v{N+2}.
 Commit + push BEFORE the apply. Do NOT set `cnpg.io/skipEmptyWalArchiveCheck` (corrupts the
 source). Verify: `kubectl -n databases get cluster newapi-pg bot-pg` -> healthy.

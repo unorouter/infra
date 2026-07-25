@@ -10,6 +10,32 @@ Secrets: SOPS/age in git + OpenBao at runtime. TLS: Cloudflare (tunnel + Origin 
 
 Incident history, procedures, break-glass: **`bootstrap/dr/README.md`**.
 
+## Adding a service !SELF-SERVE
+
+**A repo with a `k8s/` directory deploys itself.** No commit in this repo.
+
+1. In the app repo add `k8s/` with the Deployment/Service (`namespace: services`), an
+   ExternalSecret referencing an existing OpenBao key, and optionally a CNPG `Cluster` +
+   `ObjectStore` + `ScheduledBackup` (`namespace: databases`).
+2. Push. The `services` ApplicationSet ([apps/appset-services.yaml](apps/appset-services.yaml))
+   scans the `unorouter` org and generates an ArgoCD Application within ~15min (patch the
+   ApplicationSet spec to force a rescan).
+3. Give the repo's CI a `deploy` job that seds the built SHA into its own `k8s/` and commits
+   with the built-in `GITHUB_TOKEN`. Copy the one in unorouter/new-api/unorouter-bot.
+
+**Pin the image to a git SHA, never `:latest`.** A floating tag never changes the manifest, so
+ArgoCD sees no diff and the deploy silently does not happen -- every service here was found
+running an older image than `:latest` for exactly that reason.
+
+Generated apps run under the restricted `apps` AppProject
+([apps/appproject-apps.yaml](apps/appproject-apps.yaml)): namespaced resources in `services`
+and `databases` only, and an empty `clusterResourceWhitelist` so an app repo cannot create a
+Namespace or a ClusterSecretStore. Cluster-scoped and shared secrets stay in THIS repo
+(`ClusterSecretStore/vault-backend`, `ghcr-pull`, the pg-s3 secrets).
+
+**A `k8s/` directory is a deploy gate**: write access to a matching org repo is write access to
+the cluster, bounded by that project.
+
 ## DNS (wildcard-only) !PREFER WILDCARD
 
 **Never add a per-host DNS record for an app/ops subdomain.** `*.unorouter.com` CNAME -> the
