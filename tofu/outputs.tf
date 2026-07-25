@@ -13,7 +13,3 @@ output "node6_ipv4" {
 output "s3_endpoint" {
   value = "https://fsn1.your-objectstorage.com"
 }
-
-output "kubeconfig_hint" {
-  value = "ssh root@${hcloud_server.node1.ipv4_address} cat /etc/rancher/k3s/k3s.yaml > ../kubeconfig && sed -i 's/127.0.0.1/${hcloud_server.node1.ipv4_address}/' ../kubeconfig"
-}
