@@ -97,6 +97,12 @@ grafana:
 
 prometheus:
   prometheusSpec:
+    # the TSDB is reproducible-by-waiting and grows to the 16GB retention cap; backing it
+    # up nightly cost ~9GB in the Velero repo for data nobody would restore. Grafana
+    # dashboards (a separate PVC, ~260MB) are the part that is not reproducible.
+    podMetadata:
+      annotations:
+        backup.velero.io/backup-volumes-excludes: prometheus-kps-prometheus-db
     nodeSelector:
       kubernetes.io/hostname: unorouter-node7
     retention: 15d
