@@ -152,7 +152,11 @@ spec:
             summary: "{{ $value | printf \"%.0f\" }} WAL archive failures on {{ $labels.pod }} in 1h"
             description: "5 failures self-recovered unnoticed on 2026-07-22."
         - alert: VeleroBackupStale
-          expr: (time() - velero_backup_last_successful_timestamp) > 26 * 3600
+          # velero also exports this metric WITHOUT a schedule label, aggregating one-off
+          # backups. That series never advances once an ad-hoc backup ages out, so an
+          # unfiltered expr fires every day forever. Only scheduled backups are expected
+          # to stay fresh.
+          expr: (time() - velero_backup_last_successful_timestamp{schedule!=""}) > 26 * 3600
           for: 30m
           labels: { severity: warning }
           annotations:
