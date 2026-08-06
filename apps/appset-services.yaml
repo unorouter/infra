@@ -44,6 +44,9 @@ spec:
         namespace: services
       syncPolicy:
         automated: { prune: true, selfHeal: true }
+        retry:
+          limit: 5
+          backoff: { duration: 30s, factor: 2, maxDuration: 5m }
         # MUST match the databases app's apply mode. Adopting a CNPG Cluster under a different
         # mode changes field ownership, and ArgoCD applies SSA with --force-conflicts, so it
         # would stomp operator-managed spec fields and roll Postgres pods.

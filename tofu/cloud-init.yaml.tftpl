@@ -112,6 +112,8 @@ write_files:
           repoURL: https://github.com/unorouter/infra.git
           targetRevision: main
           path: apps
+          directory:
+            recurse: true
         destination:
           server: https://kubernetes.default.svc
           namespace: argocd
@@ -119,6 +121,9 @@ write_files:
           automated:
             prune: true
             selfHeal: true
+          retry:
+            limit: 5
+            backoff: { duration: 30s, factor: 2, maxDuration: 5m }
 
 runcmd:
   # HOST-ONLY swap: gives the node a soft landing instead of a hard OOM kill when memory
@@ -152,7 +157,7 @@ runcmd:
       --etcd-expose-metrics=true \
       --kubelet-arg=fail-swap-on=false \
       --tls-san=$PUBLIC_IP \
-      --write-kubeconfig-mode 644"
+      --write-kubeconfig-mode 600"
 %{ if k3s_version != "" ~}
     export INSTALL_K3S_VERSION="${k3s_version}"
 %{ else ~}

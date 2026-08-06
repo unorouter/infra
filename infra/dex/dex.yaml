@@ -96,6 +96,9 @@ spec:
       containers:
         - name: dex
           image: ghcr.io/dexidp/dex:v2.45.1
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 256Mi }
           command: [docker-entrypoint, dex, serve, /etc/dex/cfg/config.yaml]
           envFrom:
             - secretRef: { name: dex-env }

@@ -91,6 +91,10 @@ metadata:
   namespace: cloudflared
 spec:
   replicas: 2  # HA only; do NOT autoscale (downscale breaks connections)
+  # no surge: with required anti-affinity a surge pod needs a third free node, so a
+  # rollout during a node outage would deadlock; replace-in-place keeps 1 replica up
+  strategy:
+    rollingUpdate: { maxSurge: 0, maxUnavailable: 1 }
   selector:
     matchLabels: { app: cloudflared }
   template:
@@ -99,16 +103,19 @@ spec:
     spec:
       affinity:
         podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchLabels: { app: cloudflared }
-                topologyKey: kubernetes.io/hostname
+          # required, not preferred: the tunnel is the only ingress path, and preferred
+          # can still co-locate both replicas on one node (single node loss = full outage)
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { app: cloudflared }
+              topologyKey: kubernetes.io/hostname
       serviceAccountName: cloudflared
       containers:
         - name: cloudflared
           image: cloudflare/cloudflared:2026.7.0
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 256Mi }
           args:
             - tunnel
             - --config

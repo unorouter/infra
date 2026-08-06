@@ -1,6 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# top-level: aggregate the per-DB kustomizations so ArgoCD renders one root (not recurse,
-# which double-counts the child kustomization.yaml files).
+# Shared DB plumbing only (ClusterSecretStore + pg-s3 ExternalSecrets). The CNPG
+# Cluster/ObjectStore/ScheduledBackup manifests live in the app repos (new-api,
+# unorouter-bot k8s/pg.yaml), deployed via the services ApplicationSet.
 resources:
   - eso-pg-s3.yaml

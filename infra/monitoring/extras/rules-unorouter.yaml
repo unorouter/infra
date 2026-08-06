@@ -151,6 +151,17 @@ spec:
           annotations:
             summary: "{{ $value | printf \"%.0f\" }} WAL archive failures on {{ $labels.pod }} in 1h"
             description: "5 failures self-recovered unnoticed on 2026-07-22."
+        - alert: OpenBaoSnapshotStale
+          # the 6h raft-snapshot cron is the ONLY OpenBao DR source (node loss wipes the
+          # local-path PV); a silently-dead cron is invisible until `make restore` needs it
+          expr: >
+            (time() - kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-raft-snapshot"}) > 8 * 3600
+            or absent(kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-raft-snapshot"})
+          for: 30m
+          labels: { severity: critical }
+          annotations:
+            summary: "OpenBao raft snapshot has no success in 8h (schedule is 6h)"
+            description: "latest.snap in S3 is what dr.sh restore pulls; if this cron is dead, vault DR silently rots."
         - alert: VeleroBackupStale
           # velero also exports this metric WITHOUT a schedule label, aggregating one-off
           # backups. That series never advances once an ad-hoc backup ages out, so an

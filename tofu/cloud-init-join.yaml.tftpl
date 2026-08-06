@@ -35,7 +35,7 @@ runcmd:
       --etcd-expose-metrics=true \
       --kubelet-arg=fail-swap-on=false \
       --tls-san=$PUBLIC_IP \
-      --write-kubeconfig-mode 644"
+      --write-kubeconfig-mode 600"
 %{ if k3s_version != "" ~}
     export INSTALL_K3S_VERSION="${k3s_version}"
 %{ else ~}

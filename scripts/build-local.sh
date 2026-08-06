@@ -24,7 +24,8 @@ SRC="$(cd .. && pwd)/$REPO"
 [ -f "$SRC/k8s/deployment.yaml" ] || { echo "no k8s/deployment.yaml in $SRC" >&2; exit 1; }
 
 export KUBECONFIG="$PWD/kubeconfig"
-BAO() { kubectl -n openbao exec openbao-0 -- sh -c "BAO_TOKEN=$BT $*"; }
+# token via stdin, not argv: exec args land in the apiserver audit log + pod process table
+BAO() { printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- sh -c "read -r BAO_TOKEN && export BAO_TOKEN && $*"; }
 BT=$(sops -d secrets/openbao-init.sops.yaml | grep -oP 'root_token:\s*\K\S+')
 
 echo ">> ghcr login"
@@ -36,9 +37,12 @@ BAO "bao kv get -format=json secret/ghcr-push" \
 if [ "$REPO" = "unorouter" ]; then
   # The dev server reads this same .env, so a build must not leave the developer without
   # one. Stash any existing file and put it back on exit, however we exit.
+  # backup lives OUTSIDE the repo: an in-repo .env.build-backup is not gitignored there,
+  # so an interrupted build would leave secrets git-visible
   if [ -f "$SRC/.env" ]; then
-    cp "$SRC/.env" "$SRC/.env.build-backup"
-    trap 'mv -f "$SRC/.env.build-backup" "$SRC/.env" 2>/dev/null || true' EXIT
+    ENV_BK="$(mktemp -d)/env.backup"
+    cp "$SRC/.env" "$ENV_BK"
+    trap 'mv -f "$ENV_BK" "$SRC/.env" 2>/dev/null || true' EXIT
   else
     trap 'rm -f "$SRC/.env" 2>/dev/null || true' EXIT
   fi
