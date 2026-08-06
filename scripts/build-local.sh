@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
 # Build + push a service image from this machine, for when GitHub Actions is unavailable.
-# Usage: ./scripts/build-local.sh unorouter [--deploy]
+# Usage: ./scripts/build-local.sh <unorouter|new-api|unorouter-bot> [--deploy]
 #
-# Produces the same artifact CI would: same GIT_SHA build arg, SHA tag only (never :latest,
-# which never changes the manifest and so never deploys). --deploy also pins the tag in the
-# app repo so ArgoCD rolls it out; without it the image is pushed but nothing deploys.
+# Produces the same artifact CI would: SHA tag only, never :latest (a floating tag never
+# changes the manifest, so ArgoCD sees no diff and nothing deploys). --deploy also pins the
+# tag in the app repo so ArgoCD rolls it out; without it the image is pushed and nothing else.
+#
+# Only unorouter bakes secrets into the image (Next.js inlines them at build time), so only
+# it needs the .env dance below. GIT_SHA is passed to every repo but only unorouter declares
+# the ARG; the others ignore it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 REPO="${1:?usage: build-local.sh <unorouter|new-api|unorouter-bot> [--deploy]}"
 DEPLOY="${2:-}"
+case "$REPO" in
+  unorouter|new-api|unorouter-bot) ;;
+  *) echo "unknown repo: $REPO (expected unorouter, new-api or unorouter-bot)" >&2; exit 1 ;;
+esac
 SRC="$(cd .. && pwd)/$REPO"
 [ -d "$SRC" ] || { echo "no such repo: $SRC" >&2; exit 1; }
+[ -f "$SRC/Dockerfile" ] || { echo "no Dockerfile in $SRC" >&2; exit 1; }
+[ -f "$SRC/k8s/deployment.yaml" ] || { echo "no k8s/deployment.yaml in $SRC" >&2; exit 1; }
 
 export KUBECONFIG="$PWD/kubeconfig"
 BAO() { kubectl -n openbao exec openbao-0 -- sh -c "BAO_TOKEN=$BT $*"; }
@@ -68,6 +78,13 @@ if [ "$DEPLOY" = "--deploy" ]; then
 
 Built locally (GitHub Actions unavailable)."
   git -C "$SRC" push origin main
+  # new-api pushes to a mirror (origin fetch and push URLs differ), so confirm the pin
+  # actually reached the repo the ApplicationSet reads before claiming a deploy.
+  if ! gh api "/repos/unorouter/$REPO/contents/k8s/deployment.yaml" --jq .content 2>/dev/null \
+       | base64 -d | grep -q "$SHA"; then
+    echo "!! pin is not visible on unorouter/$REPO -- ArgoCD reads that repo, so this did NOT deploy" >&2
+    exit 1
+  fi
   echo ">> pushed. ArgoCD picks it up within ~3min."
 else
   echo ">> pushed to GHCR, NOT deployed. Re-run with --deploy to pin it."
