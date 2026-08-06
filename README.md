@@ -27,6 +27,18 @@ Incident history, procedures, break-glass: **`bootstrap/dr/README.md`**.
 ArgoCD sees no diff and the deploy silently does not happen -- every service here was found
 running an older image than `:latest` for exactly that reason.
 
+**Build secrets: none live in GitHub.** The app repos hold ZERO repo secrets. A build that
+needs them (only `unorouter` does -- Next.js bakes them in) mints a GitHub OIDC JWT and
+exchanges it at `openbao-ci.unorouter.com` for a 10-minute token scoped to one KV path; see
+the `Fetch build secrets from OpenBao` step in its `ghcr.yml`. The job needs
+`permissions: id-token: write` or the runner cannot mint the JWT at all. `NEXT_PUBLIC_*` are
+NOT secrets (Next.js inlines them into the browser bundle) and live in a committed
+`.env.public`. Recreate the vault side after a from-scratch OpenBao with
+`./scripts/openbao-ci-auth.sh`.
+
+**When GitHub Actions is down**: `./scripts/build-local.sh <repo> [--deploy]` reproduces the
+same artifact from this machine, pulling secrets from OpenBao.
+
 Generated apps run under the restricted `apps` AppProject
 ([apps/appproject-apps.yaml](apps/appproject-apps.yaml)): namespaced resources in `services`
 and `databases` only, and an empty `clusterResourceWhitelist` so an app repo cannot create a

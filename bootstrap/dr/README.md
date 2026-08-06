@@ -265,6 +265,18 @@ Post-restore, NOT reconciled from git:
     token_ttl=168h token_max_ttl=768h
   ```
   Dex must also allow that callback. `token_ttl=168h` keeps the UI session alive a week.
+- **CI's GitHub-OIDC auth path is runtime state too.** The app repos hold ZERO GitHub secrets;
+  every build fetches from OpenBao by exchanging a GitHub-signed JWT. A raft snapshot restore
+  carries the mount, policy and role; a vault rebuilt WITHOUT a snapshot does not, and then
+  every image build fails at "Fetch build secrets from OpenBao" with a 403. Recreate with
+  `./scripts/openbao-ci-auth.sh` (idempotent).
+  The public endpoint it needs, `openbao-ci.unorouter.com`, IS in git (`infra/cloudflared`) --
+  it deliberately bypasses Teleport because GitHub runners cannot pass an interactive SSO
+  login. That is safe only because the role's `bound_claims` rejects any JWT whose
+  `repository` claim is not `unorouter/unorouter`; do not relax that to make another repo work.
+- **Building without GitHub Actions**: `./scripts/build-local.sh <repo> [--deploy]` pulls the
+  same secrets from OpenBao, builds, pushes to GHCR and (with `--deploy`) pins the SHA so
+  ArgoCD rolls it out. Used when Actions is down; needs `secret/ghcr-push`.
 - **OpenBao UI defaults to the Token tab**: `bao auth tune -listing-visibility=unauth oidc/`
   makes OIDC the default (re-apply on DR). Known caveat (vault#10816): it snaps back after
   logout. Bookmark `openbao.unorouter.com/ui/vault/auth?with=oidc%2F`.
