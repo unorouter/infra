@@ -49,6 +49,13 @@ data:
       - hostname: grafana.unorouter.com
         service: https://teleport.teleport.svc.cluster.local:443
         originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      # OpenBao API for CI only, bypassing the Teleport gate: GitHub runners cannot pass an
+      # interactive SSO login. Safe because it holds no standing credential -- callers must
+      # present a JWT signed by GitHub whose `repository` claim matches the jwt-github role,
+      # and the token it returns reads exactly one KV path for 10 minutes.
+      # The human UI stays on openbao.unorouter.com behind Teleport; do NOT point that here.
+      - hostname: openbao-ci.unorouter.com
+        service: http://openbao.openbao.svc.cluster.local:8200
       # Dex OIDC IdP: direct (no Teleport gate) -- discovery/JWKS must be publicly fetchable
       # and browser redirects land here; actual auth happens at GitHub (org-gated).
       - hostname: dex.unorouter.com
