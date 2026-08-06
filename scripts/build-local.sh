@@ -24,6 +24,14 @@ BAO "bao kv get -format=json secret/ghcr-push" \
 
 # unorouter bakes secrets at build time (Next.js inlines them); the others do not.
 if [ "$REPO" = "unorouter" ]; then
+  # The dev server reads this same .env, so a build must not leave the developer without
+  # one. Stash any existing file and put it back on exit, however we exit.
+  if [ -f "$SRC/.env" ]; then
+    cp "$SRC/.env" "$SRC/.env.build-backup"
+    trap 'mv -f "$SRC/.env.build-backup" "$SRC/.env" 2>/dev/null || true' EXIT
+  else
+    trap 'rm -f "$SRC/.env" 2>/dev/null || true' EXIT
+  fi
   echo ">> materialize .env from OpenBao (gitignored; .env.public holds the public half)"
   cp "$SRC/.env.public" "$SRC/.env"
   BAO "bao kv get -format=json secret/unorouter-env" | python3 -c '
@@ -49,7 +57,7 @@ docker buildx build --platform linux/amd64 \
   -t "ghcr.io/unorouter/$REPO:$SHA" \
   --push "$SRC"
 
-[ "$REPO" = "unorouter" ] && rm -f "$SRC/.env"
+# .env is restored (or removed) by the EXIT trap set above.
 
 if [ "$DEPLOY" = "--deploy" ]; then
   echo ">> pin $SHA in $REPO/k8s (ArgoCD deploys from there)"
