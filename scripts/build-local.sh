@@ -29,6 +29,9 @@ if [ "$REPO" = "unorouter" ]; then
   BAO "bao kv get -format=json secret/unorouter-env" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)["data"]["data"]
+# INTERNAL_API_URL is a ClusterIP; the SSG prerender fetches it at build time and this
+# machine is not in the cluster. Same service, public route.
+d["INTERNAL_API_URL"] = d.get("NEXT_PUBLIC_API_URL", "https://api.unorouter.com")
 # public vars already came from .env.public; only the real secrets are appended
 print("\n".join(f"{k}={v}" for k, v in sorted(d.items()) if not k.startswith("NEXT_PUBLIC_")))
 ' >> "$SRC/.env"
