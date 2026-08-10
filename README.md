@@ -95,6 +95,27 @@ from a real incident - the reasoning is in the DR runbook.
   `cnpg_collector_last_available_backup_timestamp` (permanently 0 with the Barman plugin).
 - Adding a dex client needs `kubectl -n dex rollout restart deploy/dex` (config read at boot).
 
+## Backups
+
+Two independent systems, both to Hetzner S3 `unorouter-pg-backups`:
+
+| What | Mechanism | Retention | Prefix |
+| --- | --- | --- | --- |
+| Postgres (PITR) | CNPG + Barman plugin, daily base + continuous WAL | `retentionPolicy: 30d` on each ObjectStore | `{newapi,bot}-pg-v4/` |
+| Everything else (PVs + k8s objects) | Velero + Kopia, daily 02:00 | `ttl: 336h` (14d) on the Schedule | `velero/` |
+
+- **`retentionPolicy` is what expires Barman data.** Unset means nothing is ever deleted; base
+  backups grow with the database, so the bucket compounds instead of growing linearly. It was
+  unset until 2026-08-10 and had reached 81 GiB for newapi alone.
+- **`{newapi,bot}-pg-v3/` are NOT dead.** Both live clusters name them in
+  `spec.externalClusters` as the bootstrap recovery source. Deleting them breaks a from-scratch
+  `tofu apply`, which bootstraps by restoring from `-v3`.
+- **`kubectl -n velero get backup` lists the WRONG resource.** The `backup` short name resolves
+  to CNPG's `postgresql.cnpg.io`, so it prints "No resources found" even with healthy Velero
+  backups. Use `get backup.velero.io` - during a restore that empty output reads as total loss.
+- Velero warns ~69 times per run about skipped `*-kopia-maintain-job-*` pods (phase Succeeded,
+  not running). Cosmetic.
+
 ## Pinned versions
 
 Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest | jq .tag_name`.
