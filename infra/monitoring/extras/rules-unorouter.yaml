@@ -51,6 +51,14 @@ spec:
           annotations:
             summary: "{{ $labels.namespace }}/{{ $labels.pod }} >90% of memory limit"
             description: "Early warning before the OOMKill."
+        - alert: ContainerMemoryLeaking
+          expr: predict_linear(container_memory_working_set_bytes{container!="",container!="POD"}[1h], 2*3600)
+            > on(namespace, pod, container) kube_pod_container_resource_limits{resource="memory"}
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} trending to OOM within 2h"
+            description: "Working set is climbing steadily rather than spiking. ContainerMemoryNearLimit only fires once the limit is nearly reached, which on a slow leak is minutes of warning; this catches the ramp instead."
 
     # B. etcd degradation -> NodeNotReady cascade -- 2026-07-24. 1000+ slow-apply warnings per
     # 2h were completely invisible; they stalled lease renewals and evicted pods.
