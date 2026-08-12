@@ -247,7 +247,9 @@ spec:
           # ONLY signal users see 524s: the origin still answers in-cluster checks.
           expr: sum(rate(cloudflared_tunnel_request_errors[5m])) > 1
           for: 10m
-          labels: { severity: warning }
+          # critical: this is the exact signature of the 2026-08-12 whale-impacting outage,
+          # and the origin looks healthy while it fires -- nothing else pages for it.
+          labels: { severity: critical }
           annotations:
             summary: "cloudflared shedding {{ $value | humanize }} errored req/s"
             description: "Clients abandoning stalled responses (context canceled). During the 2026-08-12 outage this signal only existed in pod logs."

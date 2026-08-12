@@ -33,7 +33,17 @@ spec:
         matchers:
           - name: alertname
             value: InfoInhibitor
+      # critical fans out to BOTH discord (continue: true falls through) and ntfy, which
+      # makes the phone ring. Discord alone failed 2026-08-12: the API degraded for 2h
+      # during Korea business hours (= our night) before anyone saw the channel.
       - receiver: discord
+        matchers:
+          - name: severity
+            value: critical
+        groupWait: 10s
+        repeatInterval: 1h
+        continue: true
+      - receiver: ntfy
         matchers:
           - name: severity
             value: critical
@@ -55,6 +65,11 @@ spec:
             name: alertmanager-discord
             key: healthchecks
           sendResolved: false
+    # phone paging via the ntfy-bridge Deployment (reformats webhook JSON for ntfy.sh)
+    - name: ntfy
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/alert
+          sendResolved: true
     - name: discord
       discordConfigs:
         - apiURL:

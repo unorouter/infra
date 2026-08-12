@@ -1,0 +1,114 @@
+# Alertmanager -> ntfy.sh bridge for phone paging. Alertmanager has no native ntfy
+# receiver and its webhook payload is raw JSON, unreadable as a phone notification, so a
+# ~40-line node server reformats it. The ntfy topic URL is the only credential (anyone who
+# knows it can read/publish) -- it lives in OpenBao, never in git.
+#
+# Why paging exists at all: the 2026-08-12 API outage started 06:00 UTC (15:00 KST, the
+# biggest customer's afternoon peak) and Discord alerts sat unread until ~08:00. The
+# cluster's whole night is Korea's business day; critical alerts must make the phone ring.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: ntfy-bridge
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: ntfy-bridge
+    creationPolicy: Owner
+  data:
+    - secretKey: NTFY_URL
+      remoteRef: { key: ntfy, property: topicUrl }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntfy-bridge
+  namespace: monitoring
+data:
+  server.mjs: |
+    import http from "node:http";
+
+    const ntfyUrl = process.env.NTFY_URL;
+
+    http.createServer((req, res) => {
+      if (req.method !== "POST") { res.writeHead(200); res.end("ok"); return; }
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", async () => {
+        try {
+          const p = JSON.parse(body);
+          const firing = p.status === "firing";
+          const name = p.commonLabels?.alertname ?? "alert";
+          const sev = (p.commonLabels?.severity ?? "alert").toUpperCase();
+          const lines = (p.alerts ?? [])
+            .map((a) => a.annotations?.summary || a.labels?.alertname)
+            .filter(Boolean);
+          const r = await fetch(ntfyUrl, {
+            method: "POST",
+            headers: {
+              Title: firing ? `[${sev}] ${name}` : `[RESOLVED] ${name}`,
+              // urgent = ntfy max priority: repeated alarm sound, overrides DND in the app
+              Priority: firing ? "urgent" : "default",
+              Tags: firing ? "rotating_light" : "white_check_mark",
+            },
+            body: lines.join("\n") || name,
+          });
+          res.writeHead(r.ok ? 200 : 502);
+          res.end();
+        } catch {
+          res.writeHead(400);
+          res.end();
+        }
+      });
+    }).listen(8080);
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy-bridge
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ntfy-bridge }
+  template:
+    metadata:
+      labels: { app: ntfy-bridge }
+    spec:
+      containers:
+        - name: bridge
+          image: node:22-alpine
+          command: [node, /app/server.mjs]
+          envFrom:
+            - secretRef: { name: ntfy-bridge }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: app
+              mountPath: /app
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+      volumes:
+        - name: app
+          configMap: { name: ntfy-bridge }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntfy-bridge
+  namespace: monitoring
+spec:
+  selector: { app: ntfy-bridge }
+  ports:
+    - port: 8080
+      targetPort: 8080
