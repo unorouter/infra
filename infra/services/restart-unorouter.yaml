@@ -44,7 +44,9 @@ metadata:
   name: restart-unorouter
   namespace: services
 spec:
-  schedule: "0 */6 * * *"
+  # 4h, not 6h: on 16.2.12 the leak still runs ~350-500Mi/h at peak, and a pod born at a
+  # 6h boundary crossed the 2560MB heap cap minutes before its next scheduled restart.
+  schedule: "0 */4 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 2
