@@ -85,9 +85,10 @@ spec:
           command: [node, /app/server.mjs]
           envFrom:
             - secretRef: { name: ntfy-bridge }
+          # node's baseline RSS alone is ~50-60Mi; 64Mi sat >90% and paged on day one
           resources:
-            requests: { cpu: 10m, memory: 32Mi }
-            limits: { memory: 64Mi }
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { memory: 160Mi }
           ports:
             - containerPort: 8080
           volumeMounts:
