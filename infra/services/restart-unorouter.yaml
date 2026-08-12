@@ -1,0 +1,70 @@
+# Stopgap for vercel/next.js#92287: Next 16.3.0 + cacheComponents + standalone retains
+# every cached streamed fetch body off-heap (~350MiB/h under normal traffic), and the fix
+# (vercel/next.js#94238) is unmerged. A graceful rolling restart every 6h keeps the pods
+# well under the ceiling; the ungraceful alternative is the kernel OOM-killing them mid
+# request, which is what 524'd the site. DELETE this once the frontend runs a Next version
+# containing that fix, or is back on 16.2.12.
+#
+# RBAC lives here and not in the app repo on purpose: the apps AppProject must not let a
+# public repo grant itself API permissions.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unorouter-restarter
+  namespace: services
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: unorouter-restarter
+  namespace: services
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [unorouter]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: unorouter-restarter
+  namespace: services
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: unorouter-restarter
+subjects:
+  - kind: ServiceAccount
+    name: unorouter-restarter
+    namespace: services
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restart-unorouter
+  namespace: services
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          serviceAccountName: unorouter-restarter
+          restartPolicy: Never
+          containers:
+            - name: restart
+              image: bitnami/kubectl:1.36
+              command:
+                - kubectl
+                - -n
+                - services
+                - rollout
+                - restart
+                - deployment/unorouter
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 64Mi }
