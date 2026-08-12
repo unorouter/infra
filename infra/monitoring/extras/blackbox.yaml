@@ -60,6 +60,20 @@ data:
           valid_status_codes: [200, 204, 301, 302, 307, 308]
           follow_redirects: false
           preferred_ip_protocol: ip4
+      # og badges must be actual PNGs: sharp's SVG loader can fail at runtime in an aged
+      # process, after which the route serves an SVG fallback (or before 2026-08-12, a
+      # silent 500). Either way the content-type stops being image/png, and that was only
+      # ever discovered by hand. Detection lags up to the badge's 1h edge cache.
+      http_png:
+        prober: http
+        timeout: 15s
+        http:
+          valid_status_codes: [200]
+          follow_redirects: true
+          preferred_ip_protocol: ip4
+          fail_if_header_not_matches:
+            - header: Content-Type
+              regexp: "^image/png"
 ---
 apiVersion: v1
 kind: Service
@@ -106,3 +120,19 @@ spec:
       static:
         - https://unorouter.com
         - https://www.unorouter.com
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: og-badges
+  namespace: monitoring
+spec:
+  interval: 120s
+  module: http_png
+  prober:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      static:
+        - https://unorouter.com/api/ops/badge/hero?locale=en&size=og&format=png
+        - https://unorouter.com/api/ops/badge/model?locale=en&size=og&format=png&model=glm-4.7

@@ -119,6 +119,9 @@ spec:
           resources:
             requests: { cpu: 10m, memory: 32Mi }
             limits: { memory: 256Mi }
+          ports:
+            - name: metrics
+              containerPort: 2000
           args:
             - tunnel
             - --config
@@ -146,3 +149,17 @@ spec:
 # - CF Access apps + the "Cloudflare Access SSO" GitHub OAuth app on these hosts are RETIRED
 #   (removed via CF API). Cloudflare here is only the tunnel (IP hiding), not the auth layer.
 # - the flat *-tp naming keeps CF free Universal SSL (*.unorouter.com) valid at the edge (no ACM).
+---
+# The tunnel is the only ingress path, and during the 2026-08-12 outage its request errors
+# (clients giving up on stalled responses) were only visible by hand-grepping pod logs.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+spec:
+  selector:
+    matchLabels: { app: cloudflared }
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
