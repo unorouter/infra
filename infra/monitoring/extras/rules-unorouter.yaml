@@ -63,32 +63,6 @@ spec:
             summary: "{{ $labels.namespace }}/{{ $labels.pod }} trending to OOM within 2h"
             description: "Working set is climbing steadily rather than spiking. ContainerMemoryNearLimit only fires once the limit is nearly reached, which on a slow leak is minutes of warning; this catches the ramp instead."
 
-    # A2. ingress + rendering health -- 2026-08-12 outage. The site 524'd for hours while
-    # every in-cluster check was green: the only ingress path (cloudflared) was shedding
-    # stalled requests, and og badges had been silently 500ing for a day. Both were found by
-    # hand-grepping logs; these make them page instead.
-    - name: unorouter.ingress
-      rules:
-        - alert: TunnelRequestErrorsHigh
-          # baseline is ~0.1/s; the 2026-08-12 outage ran at ~5/s. Requires the cloudflared
-          # PodMonitor (metrics :2000).
-          expr: sum(rate(cloudflared_tunnel_request_errors[5m])) > 1
-          for: 10m
-          labels: { severity: warning }
-          annotations:
-            summary: "cloudflared shedding {{ $value | humanize }} req/s"
-            description: "Clients are hanging up on stalled responses (context canceled). The origin usually still answers in-cluster checks, so this is often the ONLY signal that users see 524s."
-        - alert: OgBadgeNotPng
-          # http_png probe fails on non-200 or a non-PNG content-type, catching both the old
-          # silent 500 and the SVG fallback the route now serves when sharp degrades. Up to
-          # 1h lag from the badge edge cache.
-          expr: probe_success{job="probe/monitoring/og-badges"} == 0
-          for: 20m
-          labels: { severity: warning }
-          annotations:
-            summary: "og badge not serving PNG: {{ $labels.instance }}"
-            description: "sharp's SVG loader has degraded in the frontend process (or the route errors). Social embeds and directory listings lose their images. A pod restart clears it; the root cause is process aging."
-
     # B. etcd degradation -> NodeNotReady cascade -- 2026-07-24. 1000+ slow-apply warnings per
     # 2h were completely invisible; they stalled lease renewals and evicted pods.
     - name: unorouter.etcd
@@ -245,20 +219,42 @@ spec:
     # F. ingress / external path -- the hairpin + CF-mitigation chain of the 8h outage.
     - name: unorouter.ingress
       rules:
+        # og-badges excluded: a degraded badge is a warning with its own alert below, not a
+        # critical endpoint outage.
         - alert: PublicEndpointDown
-          expr: probe_success == 0
+          expr: probe_success{job!="probe/monitoring/og-badges"} == 0
           for: 2m
           labels: { severity: critical }
           annotations:
             summary: "Public endpoint {{ $labels.instance }} failing from inside the cluster"
             description: "This is the exact hairpin path Cloudflare began dropping mid-TLS-handshake. External checks looked fine at the time."
         - alert: PublicEndpointSlow
-          expr: probe_duration_seconds > 5
+          expr: probe_duration_seconds{job!="probe/monitoring/og-badges"} > 5
           for: 10m
           labels: { severity: warning }
           annotations:
             summary: "{{ $labels.instance }} slow ({{ $value | humanizeDuration }})"
             description: "The 5s health-endpoint hang is what tripped the liveness probe and killed the pods."
+        - alert: TunnelRequestErrorsHigh
+          # baseline ~0.1/s; the 2026-08-12 outage ran at ~5/s. Needs the cloudflared
+          # PodMonitor (metrics :2000). Clients hanging up on stalled responses is often the
+          # ONLY signal users see 524s: the origin still answers in-cluster checks.
+          expr: sum(rate(cloudflared_tunnel_request_errors[5m])) > 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "cloudflared shedding {{ $value | humanize }} errored req/s"
+            description: "Clients abandoning stalled responses (context canceled). During the 2026-08-12 outage this signal only existed in pod logs."
+        - alert: OgBadgeNotPng
+          # http_png probe fails on non-200 or non-PNG content-type: catches the old silent
+          # 500 and the SVG fallback served when sharp's loader degrades in an aged process.
+          # Detection lags up to the badge's 1h edge cache.
+          expr: probe_success{job="probe/monitoring/og-badges"} == 0
+          for: 20m
+          labels: { severity: warning }
+          annotations:
+            summary: "og badge not serving PNG: {{ $labels.instance }}"
+            description: "Social embeds and directory listings lose their preview images. A frontend pod restart clears it."
         - alert: TLSCertExpiringSoon
           expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
           for: 1h
