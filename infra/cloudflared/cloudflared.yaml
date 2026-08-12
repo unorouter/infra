@@ -90,7 +90,10 @@ metadata:
   name: cloudflared
   namespace: cloudflared
 spec:
-  replicas: 2  # HA only; do NOT autoscale (downscale breaks connections)
+  # 3 = one per node, the ceiling the required anti-affinity below allows. Raised from 2
+  # after a single replica carried 70+ concurrent streams while the other idled, and the
+  # site intermittently 524'd. Still do NOT autoscale (downscale breaks live connections).
+  replicas: 3
   # no surge: with required anti-affinity a surge pod needs a third free node, so a
   # rollout during a node outage would deadlock; replace-in-place keeps 1 replica up
   strategy:
