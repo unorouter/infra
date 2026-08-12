@@ -94,6 +94,12 @@ from a real incident - the reasoning is in the DR runbook.
 - **Backup freshness reads the `Backup` CRs** via kube-state-metrics, NOT
   `cnpg_collector_last_available_backup_timestamp` (permanently 0 with the Barman plugin).
 - Adding a dex client needs `kubectl -n dex rollout restart deploy/dex` (config read at boot).
+- **Rule changes not showing up live**: check the app's conditions first
+  (`kubectl -n argocd get app monitoring -o jsonpath='{.status.conditions}'`). A duplicate
+  group name in `rules-unorouter.yaml` fails the SSA diff with ComparisonError and the whole
+  monitoring app silently stops syncing; it is not "ArgoCD drift".
+- Blackbox config changes need `kubectl -n monitoring rollout restart deploy/blackbox-exporter`
+  (config read at boot). The `http_png` module guards og badges by content-type, not just 200.
 
 ## Backups
 

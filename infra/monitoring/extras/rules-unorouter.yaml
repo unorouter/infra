@@ -2,6 +2,12 @@
 # cites the failure it would have caught. The bias is toward SILENT failures: three separate
 # times something was broken for hours with zero signal (backups never running, etcd stalling,
 # Velero stuck), and those are the rules that matter most here.
+#
+# GROUP NAMES MUST BE UNIQUE. A duplicate group name breaks ArgoCD's server-side-apply diff
+# ("ComparisonError: .spec.groups: duplicate entries") and the ENTIRE monitoring app silently
+# stops syncing -- every edit after that looks applied but is not. Check
+# `kubectl -n argocd get app monitoring -o jsonpath='{.status.conditions}'` when a rule
+# change does not show up in the live PrometheusRule.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
