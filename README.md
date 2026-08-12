@@ -100,6 +100,16 @@ from a real incident - the reasoning is in the DR runbook.
   monitoring app silently stops syncing; it is not "ArgoCD drift".
 - Blackbox config changes need `kubectl -n monitoring rollout restart deploy/blackbox-exporter`
   (config read at boot). The `http_png` module guards og badges by content-type, not just 200.
+- **The monitoring app reads permanently OutOfSync** on its ExternalSecrets + `ScrapeConfig/etcd`:
+  SSA comparison artifact, live spec matches git exactly. Harmless EXCEPT it feeds a selfHeal
+  loop that races any manual `operation` patch (overwritten within seconds) while auto-sync
+  dedupes the full sync by revision. Consequence: to deploy a change, push a commit and let
+  auto-sync take it -- do NOT hand-craft sync operations, they will silently run as selective
+  syncs of the 4 drifting resources and skip your new manifests (2026-08-12).
+- **Critical alerts page the phone** via ntfy (`extras/ntfy-bridge.yaml`): Alertmanager critical
+  route fans out to Discord AND an ntfy.sh topic (max priority, breaks through DND). Topic URL
+  is the credential -- OpenBao `secret/ntfy`, never git. Test: `amtool alert add` a
+  severity=critical alert in the alertmanager pod, expect Discord + phone within ~30s.
 
 ## Backups
 
