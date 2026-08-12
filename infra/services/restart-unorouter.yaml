@@ -57,7 +57,9 @@ spec:
           restartPolicy: Never
           containers:
             - name: restart
-              image: bitnami/kubectl:1.36
+              # NOT bitnami/kubectl: Broadcom pulled the free bitnami tags, the image no
+              # longer pulls
+              image: rancher/kubectl:v1.36.2
               command:
                 - kubectl
                 - -n
