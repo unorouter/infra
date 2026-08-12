@@ -138,7 +138,7 @@ Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest |
 | OpenBao | chart 0.28.5 (app 2.6.0) | apps/openbao.yaml |
 | ArgoCD | 3.4.5 | bootstrap/argocd |
 | ESO | 2.8.0 | helm --version |
-| cloudflared | 2026.7.0 | apps/cloudflared.yaml |
+| cloudflared | 2026.7.3 | apps/cloudflared.yaml |
 | Teleport (+ kube-agent) | 18.10.1 | apps/teleport.yaml |
 | Velero | 12.1.0 (app 1.18.1) + aws-plugin 1.12.1 | apps/velero.yaml |
 | dex | v2.45.1 | cluster OIDC IdP |

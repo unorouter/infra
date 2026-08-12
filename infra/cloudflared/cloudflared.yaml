@@ -34,6 +34,12 @@ data:
     # tunnel run reads token from env; ingress rules here (locally-managed config)
     metrics: 0.0.0.0:2000
     no-autoupdate: true
+    # http2, NOT quic: in the 2026-08-12 API outage a replica's QUIC edge connections
+    # degraded silently (registered and "ready" while requests through them stalled until
+    # clients gave up), and ~50% of api.unorouter.com traffic died at the edge for 3h while
+    # the origin answered in 0.1s. QUIC rides UDP, the least reliable path on this network;
+    # http2 keeps the tunnel on TCP.
+    protocol: http2
     # Internal UIs now front through Teleport App Access (GitHub SSO), NOT CF Access.
     # All *-tp hosts point at the SAME proxy origin; Teleport routes by Host header to the app
     # whose public_addr matches. noTLSVerify: proxy serves its own teleport.unorouter.com cert
@@ -115,7 +121,7 @@ spec:
       serviceAccountName: cloudflared
       containers:
         - name: cloudflared
-          image: cloudflare/cloudflared:2026.7.0
+          image: cloudflare/cloudflared:2026.7.3
           resources:
             requests: { cpu: 10m, memory: 32Mi }
             limits: { memory: 256Mi }
@@ -163,3 +169,69 @@ spec:
   podMetricsEndpoints:
     - port: metrics
       interval: 30s
+---
+# Daily replica recycling: the 2026-08-12 outage traced to a 5-day-old replica whose edge
+# connections had degraded while still registered. Age is the common factor in every
+# degraded-process incident on this cluster; no replica gets old enough to matter. Rolling
+# (maxSurge 0 / maxUnavailable 1) so 2 of 3 replicas always serve.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudflared-restarter
+  namespace: cloudflared
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudflared-restarter
+  namespace: cloudflared
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [cloudflared]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudflared-restarter
+  namespace: cloudflared
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudflared-restarter
+subjects:
+  - kind: ServiceAccount
+    name: cloudflared-restarter
+    namespace: cloudflared
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restart-cloudflared
+  namespace: cloudflared
+spec:
+  schedule: "30 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          serviceAccountName: cloudflared-restarter
+          restartPolicy: Never
+          containers:
+            - name: restart
+              image: rancher/kubectl:v1.36.2
+              command:
+                - kubectl
+                - -n
+                - cloudflared
+                - rollout
+                - restart
+                - deployment/cloudflared
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 64Mi }
