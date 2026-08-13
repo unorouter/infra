@@ -44,9 +44,9 @@ metadata:
   name: restart-unorouter
   namespace: services
 spec:
-  # 4h, not 6h: on 16.2.12 the leak still runs ~350-500Mi/h at peak, and a pod born at a
-  # 6h boundary crossed the 2560MB heap cap minutes before its next scheduled restart.
-  schedule: "0 */4 * * *"
+  # 2h: the fetch-clone patch (unorouter@5ebd89d2) cut the leak 3-4x but the render/cache
+  # family still climbs ~700Mi/h at daytime peak; 4h-old pods hit the 3Gi limit.
+  schedule: "0 */2 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 2
