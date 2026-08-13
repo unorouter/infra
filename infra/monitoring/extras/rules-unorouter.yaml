@@ -60,14 +60,24 @@ spec:
         # max by on BOTH sides: kube_pod_container_resource_limits carries uid/node labels
         # the cadvisor series lacks, and a bare on(...) match is many-to-one, which fails
         # EVERY evaluation of the rule (surfaced only as PrometheusRuleFailures).
+        # The 60%-of-limit gate is load-bearing. predict_linear extrapolates a straight
+        # line, but a warming cache is a SATURATING curve (steep fill, then flat), so the
+        # fill-phase slope projects to the limit and the alert fires on a pod that is
+        # actually plateauing -- unorouter did this all day 2026-08-13 at ~300Mi of 3Gi
+        # while never OOMing. A real leak crosses 60% on its way up and trips this with
+        # over an hour of runway, so gating on absolute level costs no warning time.
         - alert: ContainerMemoryLeaking
-          expr: max by (namespace, pod, container) (predict_linear(container_memory_working_set_bytes{container!="",container!="POD"}[1h], 2*3600))
-            > max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="memory"})
+          expr: |
+            max by (namespace, pod, container) (predict_linear(container_memory_working_set_bytes{container!="",container!="POD"}[1h], 2*3600))
+              > max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="memory"})
+            and
+            max by (namespace, pod, container) (container_memory_working_set_bytes{container!="",container!="POD"})
+              > 0.6 * max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="memory"})
           for: 30m
           labels: { severity: warning }
           annotations:
             summary: "{{ $labels.namespace }}/{{ $labels.pod }} trending to OOM within 2h"
-            description: "Working set is climbing steadily rather than spiking. ContainerMemoryNearLimit only fires once the limit is nearly reached, which on a slow leak is minutes of warning; this catches the ramp instead."
+            description: "Working set is past 60% of the limit AND climbing steadily rather than spiking. ContainerMemoryNearLimit only fires once the limit is nearly reached, which on a slow leak is minutes of warning; this catches the ramp instead."
 
     # B. etcd degradation -> NodeNotReady cascade -- 2026-07-24. 1000+ slow-apply warnings per
     # 2h were completely invisible; they stalled lease renewals and evicted pods.
