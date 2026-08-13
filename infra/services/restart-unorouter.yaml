@@ -1,9 +1,9 @@
-# Stopgap for vercel/next.js#92287: Next 16.3.0 + cacheComponents + standalone retains
-# every cached streamed fetch body off-heap (~350MiB/h under normal traffic), and the fix
-# (vercel/next.js#94238) is unmerged. A graceful rolling restart every 6h keeps the pods
-# well under the ceiling; the ungraceful alternative is the kernel OOM-killing them mid
-# request, which is what 524'd the site. DELETE this once the frontend runs a Next version
-# containing that fix, or is back on 16.2.12.
+# Safety net for vercel/next.js#92287. Both leak families are fixed in-app (fetch-clone
+# release patch + abort-reason stack materialization in instrumentation.ts); remaining
+# growth is the bounded use-cache LRU, measured plateauing ~300MiB at 30min+ against the
+# 3Gi limit. Kept at 6h as insurance against a regression reintroducing the leak (a Next
+# bump dropping the bundle patch, or upstream changing the abort-reason path). DELETE
+# once upstream ships real fixes and a patched-free build holds a flat curve.
 #
 # RBAC lives here and not in the app repo on purpose: the apps AppProject must not let a
 # public repo grant itself API permissions.
@@ -44,9 +44,7 @@ metadata:
   name: restart-unorouter
   namespace: services
 spec:
-  # 2h: the fetch-clone patch (unorouter@5ebd89d2) cut the leak 3-4x but the render/cache
-  # family still climbs ~700Mi/h at daytime peak; 4h-old pods hit the 3Gi limit.
-  schedule: "0 */2 * * *"
+  schedule: "0 */6 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 2
