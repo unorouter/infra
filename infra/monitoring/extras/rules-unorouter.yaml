@@ -74,7 +74,12 @@ spec:
     - name: unorouter.etcd
       rules:
         - alert: EtcdSlowApplies
-          expr: rate(etcd_server_slow_apply_total[15m]) * 60 > 1
+          # Healthy baseline flaps between 1-2/min: big single applies (ArgoCD
+          # Application status updates) legitimately exceed etcd's 100ms
+          # slow-apply mark while fsync p99 stays under 6ms. Verified 2026-08-13
+          # with disk (6% busy) and node CPU healthy. 3/min separates that floor
+          # from the real incident level.
+          expr: rate(etcd_server_slow_apply_total[15m]) * 60 > 3
           for: 15m
           labels: { severity: warning }
           annotations:
