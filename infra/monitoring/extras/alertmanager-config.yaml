@@ -43,21 +43,27 @@ spec:
         groupWait: 10s
         repeatInterval: 1h
         continue: true
-      # Phone pages are for the API path (new-api, db, tunnel, nodes) and full site
-      # outages. Frontend pod-level churn (unorouter/mcp/bot OOM, crashloop, replicas)
-      # stays Discord-only: the unorouter leak makes those semi-routine and a 3am page
-      # must mean revenue is at risk. Endpoint probes carry no pod/deployment label, so
-      # PublicEndpointDown still pages even for unorouter.com.
+      # Phone pages are an explicit API-path allowlist (owner decision 2026-08-13 after a
+      # node-pressure page): only alerts that mean api.unorouter.com is failing or its
+      # database is dying ring the phone. Everything else critical stays Discord-only.
+      # The pod/deployment/instance excludes keep frontend/bot/site instances of the
+      # shared alertnames (OOMKilled, PublicEndpointDown, ...) off the phone.
       - receiver: ntfy
         matchers:
           - name: severity
             value: critical
+          - name: alertname
+            matchType: "=~"
+            value: "^(PublicEndpointDown|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing)$"
           - name: pod
             matchType: "!~"
             value: "unorouter.*"
           - name: deployment
             matchType: "!~"
             value: "unorouter.*"
+          - name: instance
+            matchType: "!~"
+            value: "https://(www\\.)?unorouter\\.com.*"
         groupWait: 10s
         repeatInterval: 1h
       - receiver: discord
