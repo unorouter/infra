@@ -1,9 +1,10 @@
-# Safety net for vercel/next.js#92287. Both leak families are fixed in-app (fetch-clone
-# release patch + abort-reason stack materialization in instrumentation.ts); remaining
-# growth is the bounded use-cache LRU, measured plateauing ~300MiB at 30min+ against the
-# 3Gi limit. Kept at 6h as insurance against a regression reintroducing the leak (a Next
-# bump dropping the bundle patch, or upstream changing the abort-reason path). DELETE
-# once upstream ships real fixes and a patched-free build holds a flat curve.
+# CONTAINMENT for vercel/next.js#92287, not just insurance. Two leak families are fixed
+# in-app (fetch-clone release patch + abort-reason stack materialization in
+# instrumentation.ts, heap-snapshot verified), but a THIRD source remains: working set
+# climbs a steady ~600MiB/h under daytime traffic with no plateau (measured 2026-08-13
+# 19:00-20:45 UTC on both pods via container_memory_working_set_bytes). From a ~650MiB
+# baseline that reaches the 3Gi limit in ~4h, so the restart MUST stay under that.
+# DELETE only once a build holds a flat working-set curve for a full day.
 #
 # RBAC lives here and not in the app repo on purpose: the apps AppProject must not let a
 # public repo grant itself API permissions.
@@ -44,7 +45,9 @@ metadata:
   name: restart-unorouter
   namespace: services
 spec:
-  schedule: "0 */6 * * *"
+  # 3h: leak rate ~600MiB/h leaves ~4h to the limit; 6h was too slow and was set on a
+  # plateau reading that later measurement disproved.
+  schedule: "0 */3 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 2
