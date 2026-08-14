@@ -45,9 +45,12 @@ metadata:
   name: restart-unorouter
   namespace: services
 spec:
-  # 3h: leak rate ~600MiB/h leaves ~4h to the limit; 6h was too slow and was set on a
-  # plateau reading that later measurement disproved.
-  schedule: "0 */3 * * *"
+  # 2h. Daytime rate measured 2026-08-14 08:30 UTC is 600-818MiB/h (higher than the
+  # evening 600), which puts the 3Gi limit ~1.1h after a pod crosses 2Gi -- 3h left only
+  # ~30min of margin on the fast pod. Raising the limit instead is NOT an option: nodes
+  # are already committed at 62-106% of allocatable, so a bigger ceiling trades a clean
+  # container restart for node-level memory pressure and evictions.
+  schedule: "0 */2 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 2
