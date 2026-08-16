@@ -181,6 +181,38 @@ no working cluster, all of which may be gone exactly when you need this.
 
 Secrets: `bao kv`.
 
+### Collaborator tiers (GitHub team = role set)
+
+Access is granted by GitHub team membership in the `unorouter` org; the Teleport GitHub
+connector maps teams to roles at login. Onboard = add to team, offboard = remove from org
+(nothing to rotate; certs expire on their own). Teams stack: a person can hold several.
+
+| GitHub team | Teleport roles | Gets |
+| --- | --- | --- |
+| admins | access, editor, auditor, newapi-db-reader, kube-admin | everything |
+| readonly | auditor, newapi-db-reader, kube-viewer | kubectl read cluster-wide (k8s Secrets excluded), pod logs, masked read-only SQL, audit log view |
+| debuggers | kube-debugger | adds exec + port-forward into `services` pods ONLY (databases/openbao/monitoring unreachable); stack on readonly |
+
+Role/RBAC definitions live in `infra/teleport/resources/` (applied via `tctl create` /
+`kubectl apply`, recorded there). Org hardening that must stay: base repo permission
+`none` and member repo creation OFF, because the ApplicationSet SCM generator deploys any
+org repo with a `k8s/` dir - an org member who can create repos could deploy to prod.
+Code contributions from non-admins go through fork PRs (teams get `pull` only; a branch
+protection rule on main would block the deploy job's GITHUB_TOKEN image-pin pushes).
+
+Collaborator setup (Windows, PowerShell):
+
+```powershell
+winget install Gravitational.Teleport Kubernetes.kubectl PostgreSQL.PostgreSQL.18
+tsh login --proxy=teleport.unorouter.com   # GitHub SSO
+tsh kube login unorouter
+tsh db connect newapi-pg --db-user=reader --db-name=newapi
+```
+
+psql needs adding to PATH after install (`C:\Program Files\PostgreSQL\18\bin`). Sessions
+last ~12h. Secret config rows returning zero rows from SQL is the RLS masking working, not
+a bug. Every kubectl call, exec session and SQL query is recorded in the Teleport audit log.
+
 ## tofu
 
 `tofu/.env` (gitignored) exports every `TF_VAR_*`: hcloud_token, s3 keys, k3s_token,
