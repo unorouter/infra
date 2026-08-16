@@ -1,0 +1,15 @@
+# Binds the Teleport-injected group to the built-in `view` ClusterRole (read
+# everything namespaced except Secrets; includes pods/log). Applied via kubectl,
+# like the tctl-applied siblings in this folder.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: teleport-viewers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: Group
+    name: teleport-viewers
+    apiGroup: rbac.authorization.k8s.io

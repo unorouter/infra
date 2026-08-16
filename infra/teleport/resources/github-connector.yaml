@@ -13,3 +13,9 @@ spec:
     - organization: unorouter
       team: admins
       roles: ["access", "editor", "auditor", "newapi-db-reader", "kube-admin"]
+    # Read-only debugging tier: kube view via kube-viewer (k8s Secrets excluded by the
+    # `view` ClusterRole), masked DB reader (secrets RLS-hidden), full audit log view.
+    # Deliberately no preset `access`/`editor`.
+    - organization: unorouter
+      team: readonly
+      roles: ["auditor", "newapi-db-reader", "kube-viewer"]
