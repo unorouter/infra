@@ -19,3 +19,9 @@ spec:
     - organization: unorouter
       team: readonly
       roles: ["auditor", "newapi-db-reader", "kube-viewer"]
+    # Exec tier stacked on readonly: shell/port-forward into services pods only
+    # (kube-debugger + kube-debugger-rbac.yaml). GitHub-side the team carries
+    # pull on unorouter for the fork-PR flow (main takes no direct pushes from it).
+    - organization: unorouter
+      team: debuggers
+      roles: ["kube-debugger"]
