@@ -90,6 +90,15 @@ spec:
               value: "on"
             - name: HTTPPROXY_LISTENING_ADDRESS
               value: :8888
+            # gluetun firewalls everything that is not the tunnel, so a proxy
+            # connection from another pod is dropped before it reaches the
+            # listener: the port answers inside the pod and hangs from outside.
+            # Both settings are needed, one to accept the port and one to route
+            # the reply back to the caller's pod rather than into the tunnel.
+            - name: FIREWALL_INPUT_PORTS
+              value: "8888"
+            - name: FIREWALL_OUTBOUND_SUBNETS
+              value: 10.42.0.0/16
             # Authenticated on purpose: an unauthenticated listener on a
             # ClusterIP lets anything in the cluster egress through the VPN.
             - name: HTTPPROXY_USER
