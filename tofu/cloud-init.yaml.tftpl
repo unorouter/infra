@@ -156,6 +156,8 @@ runcmd:
       --disable-kube-proxy \
       --etcd-expose-metrics=true \
       --kubelet-arg=fail-swap-on=false \
+      --kubelet-arg=image-gc-high-threshold=70 \
+      --kubelet-arg=image-gc-low-threshold=55 \
       --tls-san=$PUBLIC_IP \
       --write-kubeconfig-mode 600"
 %{ if k3s_version != "" ~}

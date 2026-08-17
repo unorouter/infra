@@ -181,6 +181,25 @@ no working cluster, all of which may be gone exactly when you need this.
 
 Secrets: `bao kv`.
 
+### Node disk
+
+Images are the only reclaimable chunk; everything else on a node's 75G root is live
+local-path PVC data (each pg replica ~15G, prometheus ~16G on node7). The kubelet's default
+image-GC mark is 85%, which is also where it starts EVICTING pods, so nodes sat at 78% between
+manual prunes while ~250MB of image piled up per unorouter deploy. `image-gc-high-threshold=70`
+/ `low=55` is set two places and both must stay in sync: `tofu/cloud-init*.tftpl` (as
+`--kubelet-arg`, for new/rebuilt nodes) and `/etc/rancher/k3s/config.yaml` on each live node
+(applied without reprovisioning; needs `systemctl restart k3s`, one node at a time for quorum).
+Manual prune if ever needed:
+
+```sh
+/var/lib/rancher/k3s/data/current/bin/crictl -r unix:///run/k3s/containerd/containerd.sock rmi --prune
+```
+
+Alerts: `NodeDiskFillingUp` at 75% means image GC already ran and the growth is real data.
+`NodeDiskFillingFast` / `PVCFillingFast` project the trend (24h / 3d) to catch a runaway
+writer before any threshold fires.
+
 ### Collaborator tiers (GitHub team = role set)
 
 Access is granted by GitHub team membership in the `unorouter` org; the Teleport GitHub
