@@ -309,6 +309,37 @@ spec:
           annotations:
             summary: "{{ $labels.instance }} root disk >85% full"
             description: "local-path PVCs (pg data, prometheus) all live here."
+        # 85% is where the kubelet starts evicting pods, which is too late to think.
+        # 75% is the "look at it this week" mark: kubelet image GC (high=70) has already
+        # run by then, so anything above it is real data, not build-image churn, and the
+        # levers are slow ones (prometheus retention, pg growth, bigger volume).
+        - alert: NodeDiskFillingUp
+          expr: (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}
+            / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) > 0.75
+          for: 2h
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} root disk >75% full and image GC cannot help"
+            description: "Image GC trims at 70%. Above that it is PVC data: check prometheus retention and pg size."
+        # Catches a runaway writer (log loop, WAL that stops archiving, a stuck backup)
+        # long before a threshold does: 6h of trend projected 24h ahead hits full.
+        # predict_linear on a disk is honest in a way it is not on a warming cache,
+        # because disks do not plateau on their own.
+        - alert: NodeDiskFillingFast
+          expr: predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}[6h], 24*3600) < 0
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} root disk trending full within 24h"
+            description: "Sustained growth, not a spike. Find the writer before the threshold alerts fire."
+        # Same idea one layer down: a PVC that keeps growing fills the NODE, because
+        # local-path volumes are just directories on the node disk.
+        - alert: PVCFillingFast
+          expr: predict_linear(kubelet_volume_stats_available_bytes[6h], 3*24*3600) < 0
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} trending full within 3d"
         # a missing agent on a node breaks that node's pod networking (and pod creation
         # stalls there even though the eBPF datapath keeps forwarding).
         - alert: CiliumAgentMissing
