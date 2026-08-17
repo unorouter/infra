@@ -84,8 +84,10 @@ Built locally (GitHub Actions unavailable)."
   git -C "$SRC" push origin main
   # new-api pushes to a mirror (origin fetch and push URLs differ), so confirm the pin
   # actually reached the repo the ApplicationSet reads before claiming a deploy.
+  # the contents API returns base64 wrapped at 60 chars, and `base64 -d` rejects the
+  # embedded newlines, so without stripping them this check fails on a pin that IS live
   if ! gh api "/repos/unorouter/$REPO/contents/k8s/deployment.yaml" --jq .content 2>/dev/null \
-       | base64 -d | grep -q "$SHA"; then
+       | tr -d '\n' | base64 -d | grep -q "$SHA"; then
     echo "!! pin is not visible on unorouter/$REPO -- ArgoCD reads that repo, so this did NOT deploy" >&2
     exit 1
   fi
