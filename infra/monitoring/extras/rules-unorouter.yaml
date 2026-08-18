@@ -332,14 +332,12 @@ spec:
           annotations:
             summary: "{{ $labels.instance }} root disk trending full within 24h"
             description: "Sustained growth, not a spike. Find the writer before the threshold alerts fire."
-        # Same idea one layer down: a PVC that keeps growing fills the NODE, because
-        # local-path volumes are just directories on the node disk.
-        - alert: PVCFillingFast
-          expr: predict_linear(kubelet_volume_stats_available_bytes[6h], 3*24*3600) < 0
-          for: 1h
-          labels: { severity: warning }
-          annotations:
-            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} trending full within 3d"
+        # NO PVC-level trend alert on purpose. local-path volumes are plain directories on
+        # the node disk, so kubelet_volume_stats_* reports the NODE filesystem's numbers for
+        # every PVC (all of them read 76G capacity, not their requested size) and duplicates
+        # per namespace. A trend rule on that fires once per PVC for what is really one node
+        # filling up, which NodeDiskFillingFast already covers correctly. PVCAlmostFull stays
+        # because the ratio it compares is node-level too, but only alarms when genuinely full.
         # a missing agent on a node breaks that node's pod networking (and pod creation
         # stalls there even though the eBPF datapath keeps forwarding).
         - alert: CiliumAgentMissing
