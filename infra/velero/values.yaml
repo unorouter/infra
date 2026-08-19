@@ -36,3 +36,18 @@ schedules:
       ttl: 336h  # 14 days
       defaultVolumesToFsBackup: true  # Kopia file-level for all PVCs
       storageLocation: default
+      # Velero's own kopia-maintain jobs are short-lived and hold nothing worth
+      # restoring, but defaultVolumesToFsBackup makes it try their emptyDirs anyway.
+      # A job that finishes mid-backup has its host volume paths torn down before the
+      # node-agent reads them ("expected one matching path ... got 0"), which is an
+      # ERROR, so one racing pod flips the whole run to PartiallyFailed and stalls
+      # velero_backup_last_successful_timestamp -> VeleroBackupStale fires on a backup
+      # that captured all 2163 items and all 10 PVCs (2026-08-19).
+      #
+      # Excluded by NAMESPACE, not a labelSelector: a template labelSelector is applied
+      # to every item in the backup, so requiring/excluding a label silently drops the
+      # unlabeled CRDs, Deployments and cluster objects that make up most of the 2163.
+      # Nothing in the velero namespace needs restoring -- the Helm release recreates it
+      # and the backup data itself lives in object storage.
+      excludedNamespaces:
+        - velero
