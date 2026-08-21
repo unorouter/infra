@@ -125,13 +125,24 @@ spec:
     # C. prod service down -- the 8h outage reached 13 restarts per pod with no alert.
     - name: unorouter.services
       rules:
+        # Revenue path only. uno-import is a single-replica batch importer behind a
+        # gluetun tunnel: its health check goes through a VPN exit reroll, so readiness
+        # flaps to 0 on a slow probe while nothing is actually broken, and nobody needs
+        # waking for it. Excluded here, still covered by the warning rule below.
         - alert: DeploymentNoReplicas
-          expr: kube_deployment_status_replicas_available{namespace="services"} == 0
+          expr: kube_deployment_status_replicas_available{namespace="services",deployment!~"uno-import.*"} == 0
           for: 2m
           labels: { severity: critical }
           annotations:
             summary: "{{ $labels.deployment }} has ZERO ready replicas"
             description: "Revenue service is down."
+        - alert: SideDeploymentNoReplicas
+          expr: kube_deployment_status_replicas_available{namespace="services",deployment=~"uno-import.*"} == 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.deployment }} has no ready replica for 15m"
+            description: "Non-revenue importer. 15m outlasts a tunnel reroll, so this means genuinely stuck, not flapping."
         - alert: PodCrashLooping
           expr: increase(kube_pod_container_status_restarts_total[15m]) > 3
           for: 5m
