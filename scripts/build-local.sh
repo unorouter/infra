@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build + push a service image from this machine, for when GitHub Actions is unavailable.
-# Usage: ./scripts/build-local.sh <unorouter|new-api|unorouter-bot|uno-cards> [--deploy]
+# Usage: ./scripts/build-local.sh <unorouter|new-api|unorouter-bot|uno-import> [--deploy]
 #
 # Produces the same artifact CI would: SHA tag only, never :latest (a floating tag never
 # changes the manifest, so ArgoCD sees no diff and nothing deploys). --deploy also pins the
@@ -12,11 +12,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REPO="${1:?usage: build-local.sh <unorouter|new-api|unorouter-bot|uno-cards> [--deploy]}"
+REPO="${1:?usage: build-local.sh <unorouter|new-api|unorouter-bot|uno-import> [--deploy]}"
 DEPLOY="${2:-}"
 case "$REPO" in
-  unorouter|new-api|unorouter-bot|uno-cards) ;;
-  *) echo "unknown repo: $REPO (expected unorouter, new-api, unorouter-bot or uno-cards)" >&2; exit 1 ;;
+  unorouter|new-api|unorouter-bot|uno-import) ;;
+  *) echo "unknown repo: $REPO (expected unorouter, new-api, unorouter-bot or uno-import)" >&2; exit 1 ;;
 esac
 SRC="$(cd .. && pwd)/$REPO"
 [ -d "$SRC" ] || { echo "no such repo: $SRC" >&2; exit 1; }
