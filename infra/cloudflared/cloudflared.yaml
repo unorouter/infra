@@ -76,6 +76,17 @@ data:
         service: https://eu.i.posthog.com
         originRequest: { httpHostHeader: eu.i.posthog.com, originServerName: eu.i.posthog.com }
       # ---- prod services (real hostnames since cutover) ----
+      # uno-import: the OpenAPI document ONLY, so orval can read the schema over
+      # the network like it does for api.unorouter.com. The service itself stays
+      # cluster-internal deliberately: it is a browser that fetches arbitrary
+      # URLs through a VPN exit, its rate limit keys on a caller-supplied user
+      # id, and exposing /api/jobs would make a leaked token remotely usable.
+      # Anything not matching this path falls through to the 404 rule below.
+      - hostname: cards.unorouter.com
+        path: ^/openapi/.*
+        service: http://uno-import.services.svc.cluster.local:4000
+      - hostname: cards.unorouter.com
+        service: http_status:404
       - hostname: api.unorouter.com
         service: http://new-api.services.svc.cluster.local:3000
       - hostname: unorouter.com
