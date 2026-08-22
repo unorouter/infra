@@ -18,8 +18,10 @@ case "$REPO" in
   unorouter|new-api|unorouter-bot|uno-import) ;;
   *) echo "unknown repo: $REPO (expected unorouter, new-api, unorouter-bot or uno-import)" >&2; exit 1 ;;
 esac
-SRC="$(cd .. && pwd)/$REPO"
-[ -d "$SRC" ] || { echo "no such repo: $SRC" >&2; exit 1; }
+ROOT="$(cd .. && pwd)"
+SRC="$ROOT/$REPO"
+[ -d "$SRC" ] || SRC="$ROOT/backup/$REPO"
+[ -d "$SRC" ] || { echo "no such repo: $ROOT/$REPO" >&2; exit 1; }
 [ -f "$SRC/Dockerfile" ] || { echo "no Dockerfile in $SRC" >&2; exit 1; }
 [ -f "$SRC/k8s/deployment.yaml" ] || { echo "no k8s/deployment.yaml in $SRC" >&2; exit 1; }
 
