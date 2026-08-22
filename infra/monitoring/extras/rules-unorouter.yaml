@@ -41,14 +41,26 @@ spec:
           annotations:
             summary: "{{ $labels.instance }} has <400Mi available"
             description: "Only {{ $value | humanize1024 }}B available. Percentage can look fine while absolute headroom is gone."
+        # uno-import is excluded from every CRITICAL pod rule (see also
+        # DeploymentNoReplicas / PodCrashLoopBackOff): it is a single-replica batch
+        # importer, not the revenue path, and nobody should be woken for it. It keeps a
+        # warning twin so the signal is not lost.
         - alert: ContainerOOMKilled
-          expr: increase(kube_pod_container_status_restarts_total[10m]) > 0
+          expr: increase(kube_pod_container_status_restarts_total{pod!~"uno-import.*"}[10m]) > 0
             and on(namespace, pod, container) kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
           for: 0m
           labels: { severity: critical }
           annotations:
             summary: "OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }}"
             description: "Container hit exit 137 (kernel OOM). This is exactly what killed both unorouter replicas for 8 hours."
+        - alert: SideContainerOOMKilled
+          expr: increase(kube_pod_container_status_restarts_total{pod=~"uno-import.*"}[10m]) > 0
+            and on(namespace, pod, container) kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Non-revenue importer hit its memory limit. Raise the limit or cap its batch size."
         - alert: ContainerMemoryNearLimit
           expr: (container_memory_working_set_bytes{container!="",container!="POD"}
             / on(namespace, pod, container) kube_pod_container_resource_limits{resource="memory"}) > 0.90
@@ -151,9 +163,15 @@ spec:
             summary: "{{ $labels.namespace }}/{{ $labels.pod }} restarting repeatedly"
             description: "{{ $value | printf \"%.0f\" }} restarts in 15m. Catches the crashloop BEFORE it becomes an outage."
         - alert: PodCrashLoopBackOff
-          expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} == 1
+          expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",pod!~"uno-import.*"} == 1
           for: 5m
           labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} in CrashLoopBackOff"
+        - alert: SidePodCrashLoopBackOff
+          expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",pod=~"uno-import.*"} == 1
+          for: 15m
+          labels: { severity: warning }
           annotations:
             summary: "{{ $labels.namespace }}/{{ $labels.pod }} in CrashLoopBackOff"
 
