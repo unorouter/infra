@@ -75,6 +75,11 @@ d = json.load(sys.stdin)["data"]["data"]
 print("\n".join(f"{k}={v}" for k, v in sorted(d.items())))
 ' > "$SRC/.env"
 fi
+if [ "$REPO" = "new-api-sync" ]; then
+  # bun.lock is gitignored in that repo, but the Dockerfile COPYs it and installs
+  # with --frozen-lockfile, so the worktree needs the live one.
+  cp "$LIVE/bun.lock" "$SRC/bun.lock"
+fi
 if [ "$REPO" = "unorouter" ]; then
   # .env is written into the worktree only. The live checkout's .env (which the dev
   # server reads) is never touched, so nothing needs stashing or restoring.
@@ -113,18 +118,21 @@ fi
 # The image build sets ignoreBuildErrors, so a type error ships silently unless it is
 # caught here. CI runs this as a separate job; locally it is the same gate, just inline.
 # Lint is advisory (pre-existing react-hooks errors), matching CI's continue-on-error.
-if [ -f "$SRC/package.json" ] && grep -q '"typecheck"' "$SRC/package.json"; then
+# These run in the live checkout, not the worktree: the worktree has no node_modules
+# and none of the gitignored generated declarations (next-env.d.ts, de.d.json.ts),
+# and the live tree IS the commit being built (clean, at $SHA).
+if [ -f "$LIVE/package.json" ] && grep -q '"typecheck"' "$LIVE/package.json"; then
   echo ">> typecheck"
   if [ "$REPO" = "new-api-sync" ]; then
     # tsc there also covers the web dashboard, which has known react-hook-form
     # type errors; the image ships only the CLI, so this gate is advisory.
-    (cd "$SRC" && bun run typecheck) || echo "!! typecheck reported problems (advisory for new-api-sync)"
+    (cd "$LIVE" && bun run typecheck) || echo "!! typecheck reported problems (advisory for new-api-sync)"
   else
-    (cd "$SRC" && bun run typecheck) || { echo "!! typecheck failed, not building" >&2; exit 1; }
+    (cd "$LIVE" && bun run typecheck) || { echo "!! typecheck failed, not building" >&2; exit 1; }
   fi
-  if grep -q '"lint"' "$SRC/package.json"; then
+  if grep -q '"lint"' "$LIVE/package.json"; then
     echo ">> lint (advisory)"
-    (cd "$SRC" && bun run lint) || echo "!! lint reported problems (advisory, continuing)"
+    (cd "$LIVE" && bun run lint) || echo "!! lint reported problems (advisory, continuing)"
   fi
 fi
 
@@ -233,7 +241,7 @@ for k in ("INDEXNOW_KEY",):
     fi
 
     echo ">> IndexNow"
-    (cd "$SRC" && NEXT_PUBLIC_URL=https://unorouter.com INDEXNOW_KEY="$INDEXNOW_KEY" \
+    (cd "$LIVE" && NEXT_PUBLIC_URL=https://unorouter.com INDEXNOW_KEY="$INDEXNOW_KEY" \
       bun add indexnow-submitter --no-save >/dev/null 2>&1 && bun scripts/indexnow.ts) \
       || echo "!! IndexNow failed (non-fatal)"
 
