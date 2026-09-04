@@ -156,6 +156,26 @@ for k in ("INDEXNOW_KEY",):
         print(f"export {k}={shlex.quote(d[k])}")
 ')"
 
+    # Purge the cached page HTML so nobody gets the previous build's HTML
+    # naming chunks the new pods no longer serve. By URL, never everything:
+    # a full purge also evicts the immutable chunks that already-open tabs
+    # still lazy-load. Pro-plan limit is 30 URLs per call.
+    echo ">> purge edge HTML"
+    purge_token=$(BAO "bao kv get -format=json secret/cloudflare-edge"       | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["data"].get("purge_token",""))')
+    if [ -n "$purge_token" ]; then
+      printf '%s' "$sm" | grep -oE '<loc>[^<]+</loc>' | sed -E 's#</?loc>##g'         | awk -F/ 'NF<=5' > /tmp/purge-urls.txt
+      printf 'https://unorouter.com/\n' >> /tmp/purge-urls.txt
+      purged=0; failed=0
+      while mapfile -t -n 30 batch && [ "${#batch[@]}" -gt 0 ]; do
+        body=$(printf '%s\n' "${batch[@]}" | python3 -c 'import sys,json; print(json.dumps({"files":[l.strip() for l in sys.stdin if l.strip()]}))')
+        ok=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/bc178db579d52011b4b2998da622b9e3/purge_cache"           -H "Authorization: Bearer $purge_token" -H 'Content-Type: application/json' --data "$body"           | python3 -c 'import sys,json; print("1" if json.load(sys.stdin).get("success") else "0")' 2>/dev/null || echo 0)
+        if [ "$ok" = 1 ]; then purged=$((purged+${#batch[@]})); else failed=$((failed+${#batch[@]})); fi
+      done < /tmp/purge-urls.txt
+      echo "   purged $purged urls${failed:+, failed $failed}"
+    else
+      echo "!! no purge_token in secret/cloudflare-edge; stale HTML lasts up to its s-maxage" >&2
+    fi
+
     echo ">> IndexNow"
     (cd "$SRC" && NEXT_PUBLIC_URL=https://unorouter.com INDEXNOW_KEY="$INDEXNOW_KEY" \
       bun add indexnow-submitter --no-save >/dev/null 2>&1 && bun scripts/indexnow.ts) \
