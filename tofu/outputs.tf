@@ -1,5 +1,5 @@
-output "node_ipv4" {
-  value = hcloud_server.node1.ipv4_address
+output "node10_ipv4" {
+  value = hcloud_server.node10.ipv4_address
 }
 
 output "node9_ipv4" {
