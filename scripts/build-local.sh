@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build + push a service image from this machine, for when GitHub Actions is unavailable.
-# Usage: ./scripts/build-local.sh <unorouter|new-api|unorouter-bot|uno-import|new-api-sync> [--deploy]
+# Usage: ./scripts/build-local.sh <unorouter|new-api|unorouter-bot|uno-import|new-api-sync> [--deploy] [--now]
 #
 # Produces the same artifact CI would: SHA tag only, never :latest (a floating tag never
 # changes the manifest, so ArgoCD sees no diff and nothing deploys). --deploy also pins the
@@ -66,6 +66,22 @@ fi
 BROWSER_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 
 SHA=$(git -C "$SRC" rev-parse HEAD)
+
+# Every deploy is a service worker update for every open tab and a rollout
+# window at the edge. Thirteen in one evening (2026-09-04) multiplied every
+# other bug that night. Batch: refuse a second deploy inside the gap unless
+# the caller says --now.
+MIN_DEPLOY_GAP_MIN=30
+if [ "$DEPLOY" = "--deploy" ] && [ "${3:-}" != "--now" ]; then
+  git -C "$SRC" fetch -q origin main 2>/dev/null || true
+  last=$(git -C "$SRC" log -1 --format=%ct --grep="^deploy($REPO):" origin/main 2>/dev/null || echo 0)
+  age_min=$(( ( $(date +%s) - ${last:-0} ) / 60 ))
+  if [ "${last:-0}" -gt 0 ] && [ "$age_min" -lt "$MIN_DEPLOY_GAP_MIN" ]; then
+    echo "!! last $REPO deploy was ${age_min}min ago (gap ${MIN_DEPLOY_GAP_MIN}min). Batch it, or pass --now if it is an outage fix." >&2
+    exit 1
+  fi
+fi
+
 if [ -n "$(git -C "$SRC" status --porcelain | grep -v '^?? ')" ]; then
   echo "!! working tree dirty: the image would not match commit $SHA" >&2
   exit 1
