@@ -40,8 +40,17 @@ data:
     HOLD = int(os.environ.get("EDGE_HOLD_SECONDS", "1800"))
     ALERT = os.environ.get("EDGE_ALERTNAME", "CloudflaredStreamFlood")
     API = f"https://api.cloudflare.com/client/v4/zones/{ZONE}/rulesets/phases"
-    BROWSER_HOSTS = '(http.host in {"unorouter.com" "www.unorouter.com" "status.unorouter.com"})'
-    UA_RULE = {"action": "set_config", "enabled": True, "description": "ATTACK MODE: browser hosts",
+    # Under Attack is a blunt instrument: applied to a whole host it challenges every
+    # visitor, including customers with a live session, and 2026-09-04 showed that costs
+    # real traffic for as long as the mode is on. Scope it to what a flood actually looks
+    # like -- no session, no clearance cookie, and a path the edge cache cannot serve --
+    # so returning users and cached pages ride through untouched.
+    BROWSER_HOSTS = ('(http.host in {"unorouter.com" "www.unorouter.com" "status.unorouter.com"} '
+                     'and http.cookie eq "" '
+                     'and not starts_with(http.request.uri.path, "/_next/") '
+                     'and not starts_with(http.request.uri.path, "/sw-worker/") '
+                     'and not http.request.uri.path in {"/" "/robots.txt" "/sitemap.xml" "/favicon.ico"})')
+    UA_RULE = {"action": "set_config", "enabled": True, "description": "ATTACK MODE: cookie-less browser traffic",
                "expression": BROWSER_HOSTS, "action_parameters": {"security_level": "under_attack"}}
     COOKIELESS = "frontend host: challenge cookie-less"
     RATE = {"normal": int(os.environ["EDGE_RATE_NORMAL"]), "attack": int(os.environ["EDGE_RATE_ATTACK"])}
