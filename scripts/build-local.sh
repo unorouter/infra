@@ -6,9 +6,11 @@
 # changes the manifest, so ArgoCD sees no diff and nothing deploys). --deploy also pins the
 # tag in the app repo so ArgoCD rolls it out; without it the image is pushed and nothing else.
 #
-# Only unorouter bakes secrets into the image (Next.js inlines them at build time), so only
-# it needs the .env dance below. GIT_SHA is passed to every repo but only unorouter declares
-# the ARG; the others ignore it.
+# Safe to run several at once (one per Claude Code instance): each run builds from its own
+# throwaway worktree of the commit it captured, and only the final pin/push takes a lock.
+# Any .env a Dockerfile needs is rendered from OpenBao into that worktree (unorouter bakes
+# secrets at build time; the bot merely COPYs the file). GIT_SHA is passed to every repo
+# but only unorouter declares the ARG; the others ignore it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,24 +32,52 @@ export KUBECONFIG="$PWD/kubeconfig"
 BAO() { printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- sh -c "read -r BAO_TOKEN && export BAO_TOKEN && $*"; }
 BT=$(sops -d secrets/openbao-init.sops.yaml | grep -oP 'root_token:\s*\K\S+')
 
+# Several of these can run at once (one per Claude Code instance). Everything a run
+# touches is private to it: a throwaway worktree of the exact commit being built, and
+# a scratch dir for the URL lists. The live checkout is read once for its HEAD and
+# never written, so a second run's edits, .env, or moved HEAD cannot reach this one.
+# Only the pin/push at the end shares state, and that step takes a lock.
+LIVE="$SRC"
+RUN_TMP="$(mktemp -d -t build-local.XXXXXX)"
+cleanup_run() {
+  [ -n "${WT:-}" ] && git -C "$LIVE" worktree remove --force "$WT" 2>/dev/null || true
+  rm -rf "$RUN_TMP"
+}
+trap cleanup_run EXIT
+
 echo ">> ghcr login"
 BAO "bao kv get -format=json secret/ghcr-push" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["data"]["token"])' \
   | docker login ghcr.io -u 0-don --password-stdin
 
-# unorouter bakes secrets at build time (Next.js inlines them); the others do not.
+# The commit to build is fixed here, before anything else runs. A worktree of exactly
+# that commit is what gets typechecked and built; the live checkout can move on
+# underneath (another run pinning, an editor mid-change) without changing this image.
+SHA=$(git -C "$LIVE" rev-parse HEAD)
+if [ -n "$(git -C "$LIVE" status --porcelain | grep -v '^?? ')" ]; then
+  echo "!! working tree dirty: the image would not match commit $SHA" >&2
+  exit 1
+fi
+WT="$RUN_TMP/src"
+git -C "$LIVE" worktree add -q --detach "$WT" "$SHA"
+SRC="$WT"
+
+# The build context is a clean worktree, so any .env a Dockerfile expects must be
+# written into it here; nothing can be inherited from the live checkout any more.
+# unorouter bakes secrets at build time (Next.js inlines them). The bot only COPYs
+# its .env into the image and the pod overrides every key from the bot-env secret,
+# but the COPY still fails on a missing file, so it gets the same secret rendered.
+if [ "$REPO" = "unorouter-bot" ]; then
+  echo ">> materialize .env from OpenBao (secret/bot-env)"
+  BAO "bao kv get -format=json secret/bot-env" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["data"]["data"]
+print("\n".join(f"{k}={v}" for k, v in sorted(d.items())))
+' > "$SRC/.env"
+fi
 if [ "$REPO" = "unorouter" ]; then
-  # The dev server reads this same .env, so a build must not leave the developer without
-  # one. Stash any existing file and put it back on exit, however we exit.
-  # backup lives OUTSIDE the repo: an in-repo .env.build-backup is not gitignored there,
-  # so an interrupted build would leave secrets git-visible
-  if [ -f "$SRC/.env" ]; then
-    ENV_BK="$(mktemp -d)/env.backup"
-    cp "$SRC/.env" "$ENV_BK"
-    trap 'mv -f "$ENV_BK" "$SRC/.env" 2>/dev/null || true' EXIT
-  else
-    trap 'rm -f "$SRC/.env" 2>/dev/null || true' EXIT
-  fi
+  # .env is written into the worktree only. The live checkout's .env (which the dev
+  # server reads) is never touched, so nothing needs stashing or restoring.
   echo ">> materialize .env from OpenBao (gitignored; .env.public holds the public half)"
   cp "$SRC/.env.public" "$SRC/.env"
   BAO "bao kv get -format=json secret/unorouter-env" | python3 -c '
@@ -65,26 +95,19 @@ fi
 # visitor does, so it must look like one or it is refused as a bot.
 BROWSER_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 
-SHA=$(git -C "$SRC" rev-parse HEAD)
-
 # Every deploy is a service worker update for every open tab and a rollout
 # window at the edge. Thirteen in one evening (2026-09-04) multiplied every
 # other bug that night. Batch: refuse a second deploy inside the gap unless
 # the caller says --now.
 MIN_DEPLOY_GAP_MIN=30
 if [ "$DEPLOY" = "--deploy" ] && [ "${3:-}" != "--now" ]; then
-  git -C "$SRC" fetch -q origin main 2>/dev/null || true
-  last=$(git -C "$SRC" log -1 --format=%ct --grep="^deploy($REPO):" origin/main 2>/dev/null || echo 0)
+  git -C "$LIVE" fetch -q origin main 2>/dev/null || true
+  last=$(git -C "$LIVE" log -1 --format=%ct --grep="^deploy($REPO):" origin/main 2>/dev/null || echo 0)
   age_min=$(( ( $(date +%s) - ${last:-0} ) / 60 ))
   if [ "${last:-0}" -gt 0 ] && [ "$age_min" -lt "$MIN_DEPLOY_GAP_MIN" ]; then
     echo "!! last $REPO deploy was ${age_min}min ago (gap ${MIN_DEPLOY_GAP_MIN}min). Batch it, or pass --now if it is an outage fix." >&2
     exit 1
   fi
-fi
-
-if [ -n "$(git -C "$SRC" status --porcelain | grep -v '^?? ')" ]; then
-  echo "!! working tree dirty: the image would not match commit $SHA" >&2
-  exit 1
 fi
 
 # The image build sets ignoreBuildErrors, so a type error ships silently unless it is
@@ -111,17 +134,34 @@ docker buildx build --platform linux/amd64 \
   -t "ghcr.io/unorouter/$REPO:$SHA" \
   --push "$SRC"
 
-# .env is restored (or removed) by the EXIT trap set above.
+# The worktree, and the .env inside it, are removed by the EXIT trap set above.
 
 if [ "$DEPLOY" = "--deploy" ]; then
   echo ">> pin $SHA in $REPO/k8s (ArgoCD deploys from there)"
-  F="$SRC/k8s/deployment.yaml"
+  # The one step two runs genuinely share. Serialize it, and start from origin/main
+  # inside the lock: two runs that both captured HEAD before either pinned would
+  # otherwise each commit on the same parent, and the second push is rejected (or,
+  # when the second run re-read HEAD after the first push, it pins the first run's
+  # pin commit and triggers a content-free rollout: seen twice on 2026-09-04).
+  # A pin is a one-line image swap, so replaying it on top of whatever landed
+  # meanwhile is always correct.
+  F="$LIVE/k8s/deployment.yaml"
+  exec 9>"$LIVE/.git/build-local-pin.lock"
+  flock -w 300 9 || { echo "!! could not take the pin lock within 5min" >&2; exit 1; }
+  git -C "$LIVE" fetch -q origin main
+  if [ -n "$(git -C "$LIVE" status --porcelain | grep -v '^?? ')" ]; then
+    echo "!! live checkout has uncommitted changes (another run mid-edit?); not pinning over them" >&2
+    exit 1
+  fi
+  git -C "$LIVE" checkout -q main
+  git -C "$LIVE" merge -q --ff-only origin/main
   sed -i "s|image: ghcr.io/unorouter/$REPO:.*|image: ghcr.io/unorouter/$REPO:$SHA|g" "$F"
-  git -C "$SRC" add k8s/deployment.yaml
-  git -C "$SRC" commit -m "deploy($REPO): $SHA
+  git -C "$LIVE" add k8s/deployment.yaml
+  git -C "$LIVE" commit -q -m "deploy($REPO): $SHA
 
 Built locally (GitHub Actions unavailable)."
-  git -C "$SRC" push origin main
+  git -C "$LIVE" push -q origin main
+  flock -u 9
   # new-api pushes to a mirror (origin fetch and push URLs differ), so confirm the pin
   # actually reached the repo the ApplicationSet reads before claiming a deploy.
   # the contents API returns base64 wrapped at 60 chars, and `base64 -d` rejects the
@@ -179,14 +219,14 @@ for k in ("INDEXNOW_KEY",):
     echo ">> purge edge HTML"
     purge_token=$(BAO "bao kv get -format=json secret/cloudflare-edge"       | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["data"].get("purge_token",""))')
     if [ -n "$purge_token" ]; then
-      printf '%s' "$sm" | grep -oE '<loc>[^<]+</loc>' | sed -E 's#</?loc>##g'         | awk -F/ 'NF<=5' > /tmp/purge-urls.txt
-      printf 'https://unorouter.com/\n' >> /tmp/purge-urls.txt
+      printf '%s' "$sm" | grep -oE '<loc>[^<]+</loc>' | sed -E 's#</?loc>##g'         | awk -F/ 'NF<=5' > "$RUN_TMP/purge-urls.txt"
+      printf 'https://unorouter.com/\n' >> "$RUN_TMP/purge-urls.txt"
       purged=0; failed=0
       while mapfile -t -n 30 batch && [ "${#batch[@]}" -gt 0 ]; do
         body=$(printf '%s\n' "${batch[@]}" | python3 -c 'import sys,json; print(json.dumps({"files":[l.strip() for l in sys.stdin if l.strip()]}))')
         ok=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/bc178db579d52011b4b2998da622b9e3/purge_cache"           -H "Authorization: Bearer $purge_token" -H 'Content-Type: application/json' --data "$body"           | python3 -c 'import sys,json; print("1" if json.load(sys.stdin).get("success") else "0")' 2>/dev/null || echo 0)
         if [ "$ok" = 1 ]; then purged=$((purged+${#batch[@]})); else failed=$((failed+${#batch[@]})); fi
-      done < /tmp/purge-urls.txt
+      done < "$RUN_TMP/purge-urls.txt"
       echo "   purged $purged urls${failed:+, failed $failed}"
     else
       echo "!! no purge_token in secret/cloudflare-edge; stale HTML lasts up to its s-maxage" >&2
@@ -202,12 +242,12 @@ for k in ("INDEXNOW_KEY",):
     # keeps this to the locale roots + section pages, not the ~22k model URLs.
     echo ">> warm ISR cache"
     printf '%s' "$sm" | grep -oE '<loc>[^<]+</loc>' | sed -E 's#</?loc>##g' \
-      | awk -F/ 'NF<=5' > /tmp/warm-urls.txt
-    echo "   warming $(wc -l < /tmp/warm-urls.txt) urls"
-    timeout 12m xargs -P 12 -n 1 -a /tmp/warm-urls.txt -I{} \
-      curl -s -o /dev/null -w '%{http_code} {}\n' -A "$BROWSER_UA" --max-time 15 {} > /tmp/warm-codes.txt 2>/dev/null || true
-    cut -d' ' -f1 /tmp/warm-codes.txt | sort | uniq -c
-    grep -v '^200 ' /tmp/warm-codes.txt | head -20 || true
+      | awk -F/ 'NF<=5' > "$RUN_TMP/warm-urls.txt"
+    echo "   warming $(wc -l < "$RUN_TMP/warm-urls.txt") urls"
+    timeout 12m xargs -P 12 -n 1 -a "$RUN_TMP/warm-urls.txt" -I{} \
+      curl -s -o /dev/null -w '%{http_code} {}\n' -A "$BROWSER_UA" --max-time 15 {} > "$RUN_TMP/warm-codes.txt" 2>/dev/null || true
+    cut -d' ' -f1 "$RUN_TMP/warm-codes.txt" | sort | uniq -c
+    grep -v '^200 ' "$RUN_TMP/warm-codes.txt" | head -20 || true
   fi
 else
   echo ">> pushed to GHCR, NOT deployed. Re-run with --deploy to pin it."
