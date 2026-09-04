@@ -1,0 +1,68 @@
+# OpenBao (Vault fork, MPL-2.0). Drop-in for the hashicorp/vault chart.
+# Shamir manual unseal: every restart needs `dr.sh unseal`. Auto-unseal via softhsm is
+# possible without Enterprise if the manual step ever becomes a problem.
+#
+# updateStrategyType is OnDelete, so editing this config does NOT restart the pod by
+# itself. A config change lands only when the pod is deleted, and the vault comes back
+# SEALED -- every dependent app fails until `./scripts/dr.sh unseal` runs. Never delete
+# the pod without being ready to run it immediately afterwards.
+server:
+  image:
+    registry: quay.io
+    repository: openbao/openbao
+    tag: "2.6.2"
+  ha:
+    enabled: true
+    replicas: 1
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = true
+
+        listener "tcp" {
+          address         = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_disable     = 1
+        }
+
+        storage "raft" {
+          path = "/openbao/data"
+        }
+
+        service_registration "kubernetes" {}
+
+        # Audit log. MUST be declared here: `bao audit enable` over the API returns
+        # 400 "cannot enable audit device via API" since v2.3.2, which is the fix for
+        # CVE-2025-54997 (a file audit device could be pointed at /etc/cron.d and its
+        # prefix injected, giving RCE as the bao user). Do NOT work around that with
+        # unsafe_allow_api_audit_creation -- it reopens exactly that hole.
+        #
+        # Refused reads against the vault used to exist only in container stdout, which
+        # one pod restart erases. The audit device makes that record durable and
+        # independent of pod lifetime.
+        #
+        # file_path = "stdout" deliberately, NOT a file: the PVC is 5Gi on a host that
+        # is already ~65% full, and an audit device that cannot write SEALS the vault
+        # and takes down every app depending on it. stdout hands the problem to the
+        # container runtime's log rotation instead.
+        audit "file" "to-stdout" {
+          description = "Audit log to stdout; collected as pod logs."
+          options {
+            file_path = "stdout"
+          }
+        }
+
+  dataStorage:
+    enabled: true
+    size: 5Gi
+    mountPath: /openbao/data
+
+  updateStrategyType: OnDelete
+
+ui:
+  enabled: true
+
+injector:
+  # ESO is the sync path; injector not needed
+  enabled: false

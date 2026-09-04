@@ -1,0 +1,18 @@
+# Teleport side of the exec tier. Adds group teleport-debuggers (exec/portforward
+# in services, enforced by kube-debugger-rbac.yaml) on top of whatever other roles
+# the user holds. Teleport pins the resources to the services namespace too, so
+# both layers must agree before an exec is allowed. Applied via tctl create.
+kind: role
+version: v7
+metadata:
+  name: kube-debugger
+spec:
+  allow:
+    kubernetes_labels:
+      "*": "*"
+    kubernetes_groups: ["teleport-debuggers"]
+    kubernetes_resources:
+      - kind: "pod"
+        name: "*"
+        namespace: "services"
+        verbs: ["get", "list", "watch", "exec", "portforward"]

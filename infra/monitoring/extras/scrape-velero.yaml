@@ -1,0 +1,18 @@
+# Velero metrics (:8085). Without this the VeleroBackupStale / VeleroDown rules have no series
+# to evaluate and sit permanently blind -- which is the exact failure mode they exist to catch
+# (2026-07-22: velero sat broken in ContainerCreating on a missing secret, backups silently not
+# happening). An alert with no metric is worse than no alert: it looks like coverage.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: velero
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [velero]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: velero
+  endpoints:
+    - port: http-monitoring
+      interval: 60s

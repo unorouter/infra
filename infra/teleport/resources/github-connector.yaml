@@ -1,0 +1,28 @@
+# GitHub SSO connector. client_secret comes from OpenBao (secret/teleport-github), applied
+# via tctl (not committed). teams_to_roles maps org teams -> teleport roles.
+# Client ID is public. Apply: tctl create -f (with secret injected).
+kind: github
+version: v3
+metadata:
+  name: github
+spec:
+  client_id: Ov23li6rNPrZg3tJr1v5
+  # client_secret: <from OpenBao secret/teleport-github, injected at apply time>
+  redirect_url: https://teleport.unorouter.com/v1/webapi/github/callback
+  teams_to_roles:
+    - organization: unorouter
+      team: admins
+      roles: ["access", "editor", "auditor", "newapi-db-reader", "kube-admin"]
+    # Read-only debugging tier: kube view via kube-viewer (k8s Secrets excluded by the
+    # `view` ClusterRole), DB reader with secret columns withheld by grant
+    # (databases/reader-least-privilege.sql), full audit log view.
+    # Deliberately no preset `access`/`editor`.
+    - organization: unorouter
+      team: readonly
+      roles: ["auditor", "newapi-db-reader", "kube-viewer"]
+    # Exec tier stacked on readonly: shell/port-forward into services pods only
+    # (kube-debugger + kube-debugger-rbac.yaml). GitHub-side the team carries
+    # pull on unorouter for the fork-PR flow (main takes no direct pushes from it).
+    - organization: unorouter
+      team: debuggers
+      roles: ["kube-debugger"]

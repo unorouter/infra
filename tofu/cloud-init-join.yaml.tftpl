@@ -1,0 +1,55 @@
+#cloud-config
+write_files:
+  - path: /etc/sysctl.d/90-conntrack.conf
+    content: |
+      # The default 131k conntrack table fills under a SYN flood and every service on the node stalls.
+      net.netfilter.nf_conntrack_max = 2097152
+      net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+      net.netfilter.nf_conntrack_tcp_timeout_established = 300
+      net.netfilter.nf_conntrack_tcp_timeout_close_wait = 10
+# Joining k3s SERVER (embedded etcd HA). No auto-deploy manifests here -- node1 owns
+# cilium/argocd/root-app; a second copy would fight it.
+package_update: true
+packages:
+  - curl
+  - open-iscsi
+
+runcmd:
+  # HOST-ONLY swap (see cloud-init.yaml.tftpl for the rationale). Pods never swap; this only
+  # buys the node a soft landing instead of a hard OOM. Not restorable by Velero -- host state.
+  - |
+    if ! swapon --show | grep -q swapfile; then
+      fallocate -l 4G /swapfile
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo "/swapfile none swap sw 0 0" >> /etc/fstab
+      echo "vm.swappiness=10" > /etc/sysctl.d/99-swap.conf
+      sysctl -p /etc/sysctl.d/99-swap.conf
+    fi
+  - |
+    PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
+    mkdir -p /var/lib/rancher/k3s/server/manifests && touch /var/lib/rancher/k3s/server/manifests/coredns.yaml.skip   # CoreDNS is ArgoCD-managed (infra/coredns)
+    export INSTALL_K3S_EXEC="server \
+      --server https://10.100.1.1:6443 \
+      --token '${k3s_token}' \
+      --node-ip ${private_ip} \
+      --node-external-ip $PUBLIC_IP \
+      --advertise-address=${private_ip} \
+      --flannel-backend=none \
+      --disable-network-policy \
+      --disable=traefik \
+      --disable=servicelb \
+      --disable-kube-proxy \
+      --etcd-expose-metrics=true \
+      --kubelet-arg=fail-swap-on=false \
+      --kubelet-arg=image-gc-high-threshold=70 \
+      --kubelet-arg=image-gc-low-threshold=55 \
+      --tls-san=$PUBLIC_IP \
+      --write-kubeconfig-mode 600"
+%{ if k3s_version != "" ~}
+    export INSTALL_K3S_VERSION="${k3s_version}"
+%{ else ~}
+    export INSTALL_K3S_CHANNEL="stable"
+%{ endif ~}
+    curl -sfL https://get.k3s.io | sh -

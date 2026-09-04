@@ -1,0 +1,387 @@
+# Security alerts for the new-api gateway, read from its own `logs` table.
+#
+# Why they exist: every admin action, login, key reveal, refused check and setting
+# change is written to `logs` with a source address. Left unread, that table only
+# helps after the fact. These rules turn it into paging signals for the shapes an
+# account takeover produces: a stolen personal access token acting as admin, mass
+# account edits, auth hardening being switched off, 2FA being cycled to clear a
+# secure-verification gate, and upstream provider keys being read out.
+#
+# GROUP NAMES MUST BE UNIQUE across every PrometheusRule in this namespace. A
+# duplicate breaks ArgoCD's server-side-apply diff and the ENTIRE monitoring app
+# stops syncing silently. Existing groups are unorouter.{memory,etcd,services,
+# backups,postgres,ingress,cluster} -- these use the newapi.security.* prefix.
+#
+# These depend on cnpg-security-queries.yaml being wired into the newapi-pg
+# Cluster's monitoring.customQueriesConfigMap AND enablePodMonitor: true.
+#
+# METRIC NAMING: CNPG prefixes every custom-query metric with `cnpg_`, so the
+# ConfigMap key `newapi_admin_actions` becomes `cnpg_newapi_admin_actions_count`.
+# Writing the un-prefixed name silently matches nothing and the alert never fires.
+# Confirm against a live instance before editing:
+#   kubectl -n databases exec <primary> -c postgres -- \
+#     sh -c 'wget -qO- http://127.0.0.1:9187/metrics' | grep '^cnpg_newapi_'
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: newapi-security
+  namespace: monitoring
+spec:
+  groups:
+    # A. Credential exfiltration. Upstream provider keys are the most valuable thing
+    # the admin API can hand out: once read they work directly against the provider
+    # and bill to us, outside every gateway control. Reveals are so rare that there is
+    # no benign baseline, so any occurrence pages.
+    - name: newapi.security.keyexfil
+      rules:
+        - alert: ChannelKeyRevealed
+          expr: cnpg_newapi_channel_key_reads_count > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Upstream channel key was revealed via the admin API"
+            description: >-
+              {{ $value }} channel key reveal(s) in 5m. These are the provider credentials
+              and they bypass every gateway control once stolen. Confirm the operator did
+              this, otherwise rotate the key at the provider first and investigate second.
+
+    # Discord-only reconnaissance warnings.
+    #
+    # severity=warning routes to Discord (groupWait 5m, repeat 12h) and never to
+    # ntfy, so these inform without waking anyone. The shapes below are worth seeing
+    # in a channel; paging on them would train the phone alerts to be ignored.
+    - name: newapi.security.probes
+      rules:
+        - alert: PATUsedOnSessionRoute
+          expr: cnpg_newapi_privilege_probes_pat_route_count > 0
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "Personal access token refused on a session-only route"
+            description: >-
+              {{ $value }} refusal(s) in 5m where a PAT was used on a route that requires
+              a real browser session. Credential-changing routes sit behind SessionOnly()
+              precisely so a stolen token cannot drive them; this is that gate doing its
+              job. Only the operator's own testing has ever produced these rows. Identify
+              the caller with
+              `SELECT ip, user_id, count(*) FROM logs WHERE type=3
+              AND content LIKE '%%PAT_NOT_ALLOWED%%'
+              AND created_at > extract(epoch from now())::bigint - 900 GROUP BY 1,2`.
+
+        - alert: PrivilegeEscalationAttempts
+          expr: cnpg_newapi_privilege_probes_privilege_count >= 5
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} refusals in 5m from callers reaching above their role"
+            description: >-
+              An authenticated caller repeatedly asked for something their role does not
+              allow. The dashboard does not offer controls a user cannot use, so this is
+              someone poking at endpoints directly rather than clicking around. Threshold
+              is 5 because the operator's own testing produces bursts above 100 in a
+              window; a real user produces none.
+
+        - alert: DenialsSpreadAcrossAccounts
+          expr: cnpg_newapi_denial_account_spread_max_accounts_per_ip >= 3
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "One address refused against {{ $value }} different accounts in 5m"
+            description: >-
+              Credential stuffing and session guessing look like this and neither is loud
+              enough to clear SecurityDenialBurst. Measured over 7 days a single address
+              is refused against 1 account per 5m at p95 and 2 at most, so 3 is outside
+              anything observed. Check whether the address has succeeded anywhere:
+              `SELECT type, count(*) FROM logs WHERE ip = '<ip>'
+              AND created_at > extract(epoch from now())::bigint - 3600 GROUP BY 1`.
+
+    # A new address producing refusals is the earliest signal a takeover gives: the
+    # first probes against a gate come before the gate is defeated. Volume cannot
+    # catch it (a few refusals sit far under the normal noise floor), so this keys on
+    # the address having no history rather than on the count being high.
+    - name: newapi.security.newip
+      rules:
+        - alert: DenialsFromUnknownIP
+          expr: cnpg_newapi_denials_from_new_ip_offending_ips > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Previously-unseen address producing repeated security refusals"
+            description: >-
+              {{ $value }} address(es) with no history in the last 7 days produced 3 or
+              more refusals in 5m. Identify it with
+              `SELECT ip, count(*), min(to_timestamp(created_at)) FROM logs
+              WHERE type=3 AND content LIKE 'Security check refused%%'
+              AND created_at > extract(epoch from now())::bigint - 900 GROUP BY 1`,
+              then check whether that address has any successful action since.
+
+    # A refused channel-key read is reconnaissance against a route whose baseline is
+    # genuinely zero: nobody but the operator ever asks for one, and the operator does
+    # not get refused. Recorded durably here because edge logs expire within a day.
+    - name: newapi.security.recon
+      rules:
+        - alert: ChannelKeyReadRefused
+          expr: cnpg_newapi_channel_key_denials_count > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Refused attempt to read an upstream channel key"
+            description: >-
+              {{ $value }} refused channel-key read(s) in 5m from an external client.
+              This is what a probe looks like before a gate is bypassed. Identify the
+              caller with
+              `SELECT to_timestamp(created_at), user_id, ip, content FROM logs
+              WHERE type=3 AND content LIKE '%/api/channel/%key%'
+              AND created_at > extract(epoch from now())::bigint - 900`.
+              If the actor is not you, treat the credential as compromised and revoke
+              it before the successful read follows.
+
+    # The one shape that is a takeover in progress and nothing else: the real root
+    # credential acting from a network it has never acted from. No threshold, and
+    # it pages the phone. See the metric comment for why the match is on network
+    # prefix rather than exact address.
+    - name: newapi.security.rootpat
+      rules:
+        - alert: RootPATFromUnknownNetwork
+          expr: cnpg_newapi_root_pat_from_new_network_count > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Root admin PAT used from a never-seen network ({{ $value }} actions)"
+            description: >-
+              The root account's personal access token just performed admin actions
+              from a network prefix with no history on the account in 30 days. If this
+              is not you on a new connection, revoke the PAT immediately: changing the
+              root password blanks it. Identify the address with
+              `SELECT to_timestamp(created_at), ip, content FROM logs WHERE type=3
+              AND user_id=1 AND other LIKE '%%"auth_method":"access_token"%%'
+              AND created_at > extract(epoch from now())::bigint - 900 ORDER BY 1`.
+
+    # Every invalid credential from a foreign network, as a Discord line naming the
+    # token fingerprint and the address. Warning: a rejected credential did no
+    # damage, but a stranger presenting admin-shaped tokens is worth reading about
+    # the same day, and three different tokens from one address in a minute is
+    # stuffing. See the metric for why "foreign" means "no root 2FA login".
+    - name: newapi.security.invalidcreds
+      rules:
+        - alert: InvalidCredentialFromForeignNetwork
+          expr: cnpg_newapi_invalid_credentials_count > 0
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "Invalid credential {{ $labels.fingerprint }} from {{ $labels.ip }} ({{ $value }}x in 5m)"
+            description: >-
+              A credential the gateway does not recognise was presented from a network
+              with no operator 2FA login in 30 days. See what it was aimed at with
+              `SELECT to_timestamp(created_at), ip, other::jsonb->'op'->'params'->>'method',
+              other::jsonb->'op'->'params'->>'path' FROM logs WHERE type=3
+              AND other LIKE '%%{{ $labels.fingerprint }}%%'
+              AND created_at > extract(epoch from now())::bigint - 900 ORDER BY 1`.
+              Admin routes (/api/channel/, /api/option/, /api/user/) from an address
+              with no successful history is a probe; a user route with a stale token
+              is usually a customer who rotated a key.
+
+    # Bait. The token behind this fingerprint was never issued and exists only to be
+    # found where credentials tend to leak (streams, pastes, screenshots). There is no
+    # legitimate way to hold it, so one use is the whole signal.
+    - name: newapi.security.honeytoken
+      rules:
+        - alert: HoneytokenUsed
+          expr: cnpg_newapi_honeytoken_hits_count > 0
+          for: 0m
+          # Warning, not critical: the bait does not work, so a use is intelligence
+          # about who is harvesting, not damage in progress. Discord only.
+          labels: { severity: warning }
+          annotations:
+            summary: "A bait systemAccessToken was used ({{ $value }} request(s) in 5m)"
+            description: >-
+              A credential that was never issued to anyone was just presented to the
+              gateway. Somebody harvested it and is testing whether it works. It does
+              not, but they only learn they are being watched if you tell them. Get the
+              address with
+              `SELECT to_timestamp(created_at), ip, other::jsonb->'op'->'params'->>'path'
+              FROM logs WHERE type=3 AND other LIKE '%%"credential_fingerprint"%%'
+              AND created_at > extract(epoch from now())::bigint - 900`
+              and correlate it against every other row from that ip before deciding
+              whether to block or keep watching.
+
+    # Customer API keys read by a credential that does not own them. The discriminator
+    # is OWNERSHIP, not the credential type: a user reading back their own keys with a
+    # PAT is what a PAT is for, and an earlier version that paged on any PAT reveal
+    # fired on exactly that. Across the full history every PAT reveal was of the
+    # actor's own token, so cross-user reads have a baseline of zero from evidence.
+    - name: newapi.security.tokenexfil
+      rules:
+        - alert: TokenKeyRevealedByPAT
+          expr: cnpg_newapi_token_key_reveals_pat_count > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "API key belonging to another user revealed via access token"
+            description: >-
+              {{ $value }} reveal(s) in 5m where a PAT read a key owned by a different
+              account. Self-reveals are excluded: this counts cross-user reads only, which
+              have never occurred legitimately. Treat as credential theft in progress.
+              Check
+              `SELECT l.user_id AS actor, t.user_id AS owner, l.ip, l.content FROM logs l
+              JOIN tokens t ON t.id=(l.other::jsonb->'op'->'params'->>'id')::int
+              WHERE l.type=3 AND l.other LIKE '%token.key_view%' AND t.user_id<>l.user_id
+              AND l.created_at > extract(epoch from now())::bigint - 900`,
+              then rotate every key that appears and revoke the actor's sessions.
+
+    # B. Mass account tampering. Resetting many users' passwords in a short window is
+    # how accounts get hijacked in bulk. Legitimate admin work touches a handful.
+    - name: newapi.security.accounts
+      rules:
+        - alert: MassUserEdits
+          expr: cnpg_newapi_admin_user_edits_distinct_targets > 5
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $value }} distinct accounts edited in 5 minutes"
+            description: >-
+              Bulk user-record modification. Check who and from where with
+              `SELECT ip, content FROM logs WHERE type=3 AND content LIKE 'Updated user%'`,
+              and look for logins as the edited users immediately afterwards.
+
+    # B2. Money. The Discord bot issues $0.01-$0.50 grants hundreds of times a day, so
+    # the signal is SIZE, not volume: no automated path on this platform grants $5 or
+    # more.
+    - name: newapi.security.quota
+      rules:
+        - alert: LargeQuotaGrant
+          expr: cnpg_newapi_quota_grants_large_count > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Quota grant of ${{ $value }} or more issued"
+            description: >-
+              A quota grant at or above $5 was issued in the last 5 minutes (largest:
+              ${{ with query "max(cnpg_newapi_quota_grants_max_usd)" }}{{ . | first | value }}{{ end }}).
+              Routine bot grants are $0.01-$0.50. Confirm the operator, then reconcile:
+              `SELECT to_timestamp(created_at), ip, content FROM logs WHERE type=3
+              AND content LIKE '%granted quota%' AND created_at >
+              extract(epoch from now())::bigint - 900 ORDER BY created_at DESC`
+
+    # B3. Partner money movement. These routes convert an account's own balance into
+    # value that leaves it: a gift card is a bearer code, and a grant is irreversible
+    # once it lands. They accept a PAT by design, because partners script them, so a
+    # stolen partner token is the cheapest path from a hijacked account to cash.
+    # LargeQuotaGrant does not cover any of this: it matches the Discord bot's
+    # '%granted quota%' sentence, which partner actions never write.
+    - name: newapi.security.partner
+      rules:
+        - alert: PartnerActionBurst
+          expr: cnpg_newapi_partner_actions_count >= 10
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $value }} partner mint/void/grant actions in 5 minutes"
+            description: >-
+              Partner endpoints are low-volume by nature: a reseller issues codes as
+              orders come in, not in bursts. Ten in five minutes looks like a script
+              draining a balance into codes it controls. Largest single action:
+              ${{ with query "max(cnpg_newapi_partner_actions_max_usd)" }}{{ . | first | value }}{{ end }}.
+              Identify the caller and how it authenticated with
+              `SELECT to_timestamp(created_at), user_id, ip,
+              other::jsonb->'audit_info'->>'auth_method' AS auth, content FROM logs
+              WHERE type=3 AND other LIKE '%"action":"partner.%'
+              AND created_at > extract(epoch from now())::bigint - 900
+              ORDER BY created_at DESC`.
+              An auth_method of access_token that you did not script is credential theft:
+              revoke the partner's token before the balance is gone.
+
+        - alert: PartnerGrantIssued
+          expr: cnpg_newapi_partner_actions_grants > 0
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} irreversible partner balance grant(s) in 5 minutes"
+            description: >-
+              A partner moved balance directly to another account. Nothing can reverse
+              this from our side, so it is worth an eye even when legitimate. Deliberately
+              a warning: grants are a normal part of the product. Confirm the recipient is
+              a real customer with
+              `SELECT to_timestamp(created_at), user_id AS partner, ip,
+              other::jsonb->'op'->'params'->>'recipient_id' AS recipient,
+              other::jsonb->'op'->'params'->>'quota' AS quota FROM logs
+              WHERE type=3 AND other LIKE '%"action":"partner.grant"%'
+              AND created_at > extract(epoch from now())::bigint - 900`.
+
+    # C. Auth hardening being switched off. Flipping the login captcha or the
+    # registration and verification toggles repeatedly is how an intruder gets past
+    # them while working through accounts. Nobody has a reason to do it more than once.
+    - name: newapi.security.hardening
+      rules:
+        - alert: SecuritySettingFlapping
+          expr: cnpg_newapi_security_setting_changes_count >= 3
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Auth-hardening settings changed {{ $value }}x in 5 minutes"
+            description: >-
+              Turnstile / password-login / registration / email-verification toggles are
+              being flipped rapidly. A single deliberate change does not trip this;
+              flapping does.
+
+    # D. 2FA abuse. SecureVerificationRequired() gates channel-key reads, so a PAT
+    # alone gets 403 there. The way around that gate is to enrol a fresh 2FA on the
+    # hijacked account, pass verification, then force-disable it to cover up. This
+    # alert is what turns that cycle into a signal instead of a dead end.
+    - name: newapi.security.twofa
+      rules:
+        - alert: TwoFactorChurn
+          expr: cnpg_newapi_twofa_changes_count >= 3
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $value }} 2FA enrol/disable events in 5 minutes"
+            description: >-
+              Rapid 2FA setup/enable/force-disable cycling. A real user enrols once.
+
+    # E. Refused attempts, recorded durably. Edge logs expire within a day, so new-api
+    # writes every refused auth / proof / permission check to the audit log itself;
+    # this alerts on a burst. A handful of 403s is normal (expired proofs, stale tabs);
+    # a run of them from one IP is somebody testing what a credential can reach.
+    - name: newapi.security.denials
+      rules:
+        # Denial VOLUME does not separate an intruder from the operator: measured over
+        # 7 days of external refusals, p50=2, p95=34, p99=81, max=126 per 5m bucket,
+        # and the operator's own testing peaks in the 20s. A careful intruder probes far
+        # below that, so lowering the threshold catches ordinary traffic, not them. This
+        # is a context signal for floods (scanners, automation in a retry loop); slow
+        # probing is caught by the behaviour rules above and by ChannelKeyReadRefused,
+        # which watches a route whose baseline is genuinely zero.
+        - alert: SecurityDenialBurst
+          expr: cnpg_newapi_security_denials_total_count >= 50
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} security checks refused from {{ $labels.ip }} in 5 minutes"
+            description: >-
+              Sustained auth/proof/permission refusals from a single source, above the
+              operator's own noise floor. Context, not evidence of intrusion: check the
+              behaviour alerts first. Inspect with
+              `SELECT to_timestamp(created_at), ip, other FROM logs WHERE content LIKE
+              'Security check refused%' ORDER BY created_at DESC` -- `other` carries the
+              path, the reason, whether a credential was presented and its fingerprint.
+
+    # F. The meta-alert. Every rule above depends on the CNPG custom queries being
+    # scraped. If that breaks, the alerts do not fire and the silence looks like
+    # safety.
+    - name: newapi.security.pipeline
+      rules:
+        # Watch a metric whose query has no GROUP BY: it emits a 0-valued series even
+        # when nothing is happening. The ip-labelled ones (admin_actions, admin_logins)
+        # legitimately vanish while idle, because a GROUP BY over zero rows produces no
+        # series at all -- using one of those here would page every quiet night.
+        - alert: SecurityMetricsMissing
+          expr: absent(cnpg_newapi_channel_key_reads_count) or absent(cnpg_newapi_admin_logins_total_count) or absent(cnpg_newapi_security_denials_total_count) or absent(cnpg_newapi_denials_from_new_ip_offending_ips) or absent(cnpg_newapi_privilege_probes_pat_route_count) or absent(cnpg_newapi_honeytoken_hits_count) or absent(cnpg_newapi_root_pat_from_new_network_count)
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "new-api security metrics are not being scraped"
+            description: >-
+              cnpg_newapi_channel_key_reads_count has been absent for 1h, so every security
+              alert in this file is silently dead. Check the newapi-pg podMonitor and that
+              monitoring.customQueriesConfigMap still references cnpg-newapi-security.

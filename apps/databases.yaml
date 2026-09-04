@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: databases
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
+    argocd.argoproj.io/sync-wave: "1" # after cnpg-operator (wave -1)
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/unorouter/infra.git
+    targetRevision: main
+    path: databases # shared secrets plumbing; CNPG Clusters live in the app repos' k8s/
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: databases
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+  # NOTE: Clusters stay Pending until the S3 secrets (newapi-pg-s3, bot-pg-s3) exist.
+  # Those come from ESO once OpenBao is unsealed. This app SYNCs; the DB just waits.
+  # operators default-fill their CRs via SSA (CNPG manager = "manager", ESO webhook =
+  # "external-secrets"); ignoring their managed fields kills the perpetual OutOfSync.
+  ignoreDifferences:
+    - group: external-secrets.io
+      kind: ExternalSecret
+      managedFieldsManagers: [external-secrets]

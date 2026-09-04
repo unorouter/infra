@@ -1,0 +1,644 @@
+# Custom CNPG metrics that turn the new-api audit trail into Prometheus series.
+#
+# The gateway writes every admin action, login, key reveal, refused check and
+# setting change to the `logs` table with a source address (logs.ip). Left unread,
+# that table only helps after the fact; these queries make it page. Each one maps
+# to a step of an account takeover:
+#
+#   auth hardening toggled off and on   -> newapi_security_setting_changes_total
+#   many accounts edited in one window  -> newapi_admin_user_edits_total
+#   root login from a new address       -> newapi_admin_logins_total by ip
+#   2FA enrolled and dropped in a cycle -> newapi_twofa_changes_total
+#   upstream provider keys read out     -> newapi_channel_key_reads_total
+#
+# All windows are 5m and every query is bounded by created_at so it never scans
+# the full 9M-row table. `logs` has idx_created_at_type, which these use.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnpg-newapi-security
+  namespace: databases
+  labels:
+    cnpg.io/reload: "true"
+data:
+  queries: |
+    newapi_admin_actions:
+      query: |
+        SELECT coalesce(nullif(ip,''),'unknown') AS ip,
+               count(*)::float8 AS count
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+        GROUP BY 1
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - ip:
+            usage: "LABEL"
+            description: "Client IP performing admin actions"
+        - count:
+            usage: "GAUGE"
+            description: "Admin (type 3) audit actions in the last 5 minutes, by source IP"
+
+    newapi_admin_user_edits:
+      query: |
+        SELECT count(*)::float8 AS count,
+               count(DISTINCT substring(content from 'ID: [0-9]+'))::float8 AS distinct_targets
+        FROM logs
+        WHERE type = 3
+          AND content LIKE 'Updated user%'
+          AND created_at > extract(epoch from now())::bigint - 300
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "User-record edits in the last 5 minutes"
+        - distinct_targets:
+            usage: "GAUGE"
+            description: "Distinct accounts edited in the last 5 minutes."
+
+    newapi_channel_key_reads:
+      query: |
+        SELECT count(*)::float8 AS count
+        FROM logs
+        WHERE type = 3
+          AND content ILIKE '%Viewed channel key%'
+          AND created_at > extract(epoch from now())::bigint - 300
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Upstream channel key reveals in the last 5 minutes. There is no benign baseline."
+
+    newapi_token_key_reveals:
+      query: |
+        SELECT count(*)::float8 AS pat_count,
+               count(DISTINCT l.user_id)::float8 AS pat_distinct_users
+        FROM logs l
+        JOIN tokens t ON t.id = (l.other::jsonb->'op'->'params'->>'id')::int
+        WHERE l.type = 3
+          AND l.created_at > extract(epoch from now())::bigint - 300
+          AND l.other LIKE '%token.key_view%'
+          -- auth_method lives under audit_info for this action, NOT admin_info: the
+          -- key-view audit is written by recordUserSecurityAudit (a UserAuth route), so
+          -- it never populates the admin_info block that AdminAuth handlers use. Reading
+          -- the wrong object returns NULL for every row and the alert silently matches
+          -- nothing. Verified against production data before shipping.
+          AND l.other::jsonb->'audit_info'->>'auth_method' = 'access_token'
+          -- The credential alone is not the discriminator: a PAT is the documented way
+          -- to script your own account, and users do provision tokens and read them
+          -- back. What no legitimate caller ever does is read a key belonging to
+          -- SOMEBODY ELSE. Across the full history every PAT reveal was of the actor's
+          -- own token, so the join below is the real signal with a baseline of zero.
+          AND t.user_id <> l.user_id
+          -- Dashboard reveals proxied by the BFF still carry the user's own session, so
+          -- they land as auth_method=session and never reach this branch.
+          AND l.ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - pat_count:
+            usage: "GAUGE"
+            description: "User API-key reveals via access token in 5m. Real users reveal their own keys from a browser session; a PAT doing it is automation or a stolen credential."
+        - pat_distinct_users:
+            usage: "GAUGE"
+            description: "Distinct accounts whose API keys were revealed via access token in 5m."
+
+    newapi_twofa_changes:
+      query: |
+        SELECT count(*)::float8 AS count
+        FROM logs
+        WHERE created_at > extract(epoch from now())::bigint - 300
+          AND (content ILIKE '%Force-disabled two-factor%'
+            OR content ILIKE '%2FA enabled successfully%'
+            OR content ILIKE '%started 2FA setup%')
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "2FA enrol/disable events in the last 5 minutes. A real user enrols once."
+
+    newapi_security_setting_changes:
+      query: |
+        SELECT count(*)::float8 AS count
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND (content LIKE '%TurnstileCheckEnabled%'
+            OR content LIKE '%PasswordLoginEnabled%'
+            OR content LIKE '%RegisterEnabled%'
+            OR content LIKE '%EmailVerificationEnabled%')
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Auth-hardening toggles changed in the last 5 minutes."
+
+    # Emitted WITHOUT a label so the series exists even when nobody has logged in.
+    # The ip-labelled variant below vanishes entirely while idle, so absent() cannot
+    # tell a quiet hour from a dead collector.
+    newapi_admin_logins_total:
+      query: |
+        SELECT count(*)::float8 AS count
+        FROM logs
+        WHERE type = 7
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND user_id = 1
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Root admin logins in 5m. Always emits, including zero, so an absent series means the collector is broken rather than quiet."
+
+    newapi_admin_logins:
+      query: |
+        SELECT coalesce(nullif(ip,''),'unknown') AS ip,
+               count(*)::float8 AS count
+        FROM logs
+        WHERE type = 7
+          AND user_id = 1
+          AND created_at > extract(epoch from now())::bigint - 300
+        GROUP BY 1
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - ip:
+            usage: "LABEL"
+            description: "Source IP of the root admin login"
+        - count:
+            usage: "GAUGE"
+            description: "Root-admin (user 1) logins in the last 5 minutes, by IP"
+
+    # A refused attempt to read an upstream channel key. The successful reads are
+    # already covered by newapi_channel_key_reads; this is the attempt that BOUNCES,
+    # which is what reconnaissance looks like before the gate is bypassed. Edge logs
+    # expire within a day, so this is recorded here, durably.
+    #
+    # Nobody but the operator has ever been refused on this route, so > 0 is a real
+    # threshold rather than a guess, and a single refusal is worth waking up for.
+    #
+    # No GROUP BY on purpose. An ip-labelled metric emits no series while idle, which
+    # makes "quiet" and "collector broken" indistinguishable; a bare count always
+    # reports, including zero.
+    newapi_channel_key_denials:
+      query: |
+        SELECT count(*)::float8 AS count,
+               count(DISTINCT coalesce(nullif(ip,''),'unknown'))::float8 AS distinct_ips
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND content LIKE '%/api/channel/%key%'
+          AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+          AND ip NOT LIKE '10.42.%'
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Refused upstream channel-key reads in 5m from an external client. Nobody but the operator has ever been refused here."
+        - distinct_ips:
+            usage: "GAUGE"
+            description: "Distinct external IPs refused on the channel-key route in 5m."
+
+    # Emitted WITHOUT a label so the series exists while nobody is being refused.
+    # The ip-labelled variant below vanishes when idle, which makes a quiet hour and
+    # a dead collector indistinguishable.
+    #
+    # Refusals from an address with no history here. Volume cannot separate a probe
+    # from ordinary noise; what does is structural: a legitimate caller being refused
+    # has almost always talked to us before, from a session, a relay request or an
+    # earlier login. A stranger whose opening move is a burst of refusals is probing.
+    #
+    # Threshold set from measurement: a single refusal from a new address happens
+    # several times a day (roaming phones, stale tabs, scanners knocking once);
+    # requiring 3 in one 5m bucket matched nothing benign when replayed over
+    # production history.
+    #
+    # The lookback is 7 days: long enough that a regular's address stays known across
+    # a weekend, short enough that a dormant residential IP reassigned to someone new
+    # is treated as new.
+    newapi_denials_from_new_ip:
+      query: |
+        WITH den AS (
+          SELECT ip, count(*)::float8 AS c, min(created_at) AS mn
+          FROM logs
+          WHERE type = 3
+            AND created_at > extract(epoch from now())::bigint - 300
+            -- Structural, not textual: older rows predate the 'Security check
+            -- refused' prefix and carry only the bare route, so key on the recorded
+            -- outcome, which every era of the audit row has.
+            AND other LIKE '%\"success\":false%'
+            AND other LIKE '%\"status\":403%'
+            AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+            AND ip NOT LIKE '10.42.%'
+          GROUP BY 1
+        )
+        SELECT coalesce(max(d.c), 0)::float8 AS max_denials,
+               count(*)::float8 AS offending_ips
+        FROM den d
+        WHERE d.c >= 3
+          AND NOT EXISTS (
+            SELECT 1 FROM logs p
+            WHERE p.ip = d.ip
+              AND p.created_at < d.mn - 300
+              AND p.created_at > d.mn - 604800
+          )
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - max_denials:
+            usage: "GAUGE"
+            description: "Largest 5m refusal burst from an address with no prior 7-day history. Nothing legitimate scores above 0."
+        - offending_ips:
+            usage: "GAUGE"
+            description: "Count of previously-unseen addresses producing 3 or more refusals in 5m."
+
+    # Low-signal probing. These are Discord-only warnings by design: they are the
+    # shapes worth KNOWING about, not worth waking anyone for, and the routing keeps
+    # severity=warning off the phone entirely.
+    #
+    # Two distinct refusal reasons that a normal user essentially never produces:
+    #
+    #   PAT_NOT_ALLOWED       a personal access token was used on a route that
+    #                         demands a real session. Credential-changing routes
+    #                         sit behind SessionOnly(), so this firing means
+    #                         somebody is driving them with a token.
+    #   INSUFFICIENT_PRIVILEGE an authenticated caller reached for something above
+    #                         their role. Ordinary use does not generate it; the UI
+    #                         does not offer controls a user cannot use.
+    #
+    # Over the full history only the operator's own testing has produced either.
+    newapi_privilege_probes:
+      query: |
+        SELECT count(*) FILTER (WHERE content LIKE '%PAT_NOT_ALLOWED%')::float8 AS pat_route_count,
+               count(*) FILTER (WHERE content LIKE '%INSUFFICIENT_PRIVILEGE%')::float8 AS privilege_count,
+               count(DISTINCT coalesce(nullif(ip,''),'unknown'))::float8 AS distinct_ips
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND (content LIKE '%PAT_NOT_ALLOWED%' OR content LIKE '%INSUFFICIENT_PRIVILEGE%')
+          AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+          AND ip NOT LIKE '10.42.%'
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - pat_route_count:
+            usage: "GAUGE"
+            description: "Refusals in 5m where a PAT was used on a session-only route."
+        - privilege_count:
+            usage: "GAUGE"
+            description: "Refusals in 5m where a caller reached above their role."
+        - distinct_ips:
+            usage: "GAUGE"
+            description: "Distinct external addresses producing those refusals in 5m."
+
+    # One address being refused against several different accounts inside one window.
+    # Credential stuffing and session-guessing both look like this and neither is
+    # loud enough in raw volume to clear SecurityDenialBurst.
+    #
+    # Measured over 7 days: an address is refused against 1 account per 5m at p95 and
+    # 2 at most, so 3 is outside anything observed while staying well under the
+    # volume thresholds.
+    newapi_denial_account_spread:
+      query: |
+        WITH spread AS (
+          SELECT ip, count(DISTINCT user_id) AS users
+          FROM logs
+          WHERE type = 3
+            AND created_at > extract(epoch from now())::bigint - 300
+            AND content LIKE 'Security check refused%'
+            AND user_id > 0
+            AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+            AND ip NOT LIKE '10.42.%'
+          GROUP BY 1
+        )
+        SELECT coalesce(max(users), 0)::float8 AS max_accounts_per_ip
+        FROM spread
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - max_accounts_per_ip:
+            usage: "GAUGE"
+            description: "Most distinct accounts a single external address was refused against in 5m. Observed max is 2 over 7 days."
+
+    # Honeytokens. Personal access tokens that were never issued to anyone and are
+    # deliberately left where credentials tend to leak. Nothing legitimate can ever
+    # present one, so a single use is proof that somebody is harvesting, and it
+    # identifies their address.
+    #
+    # Only the HMAC fingerprint lives here. The gateway fingerprints every REJECTED
+    # credential with HMAC-SHA256 keyed by CRYPTO_SECRET (middleware
+    # rejectedCredentialFingerprint), so the bait value itself never needs to be
+    # stored anywhere the exporter or git can see. Verified end to end before this
+    # shipped: presenting the bait returned 401 and produced exactly this fingerprint.
+    # Bait values are kept out of the repo, in the operator's local state dir.
+
+    # The real admin credential used from a network it has never been used from.
+    #
+    # Exact-IP history cannot express that: the operator's ISP rotates the IPv6
+    # suffix daily, so exact matching flagged the operator every single day.
+    # Comparing on the network prefix (IPv6: first two groups plus two hex digits of
+    # the third, roughly /40; IPv4: /16) keeps the operator's home network as one
+    # stable identity while an address in another country stays foreign. Genuine
+    # first contact from a new operator network is worth a page too.
+    #
+    # Root only, matched on the admin_info block as text rather than parsed JSON:
+    # a handful of legacy rows carry malformed `other`, and a cast error inside a
+    # CNPG custom query rolls back the whole batch and takes every metric with it.
+    newapi_root_pat_from_new_network:
+      query: |
+        WITH r AS (
+          SELECT CASE WHEN ip LIKE '%:%'
+                      THEN split_part(ip,':',1)||':'||split_part(ip,':',2)||':'||left(split_part(ip,':',3),2)
+                      ELSE split_part(ip,'.',1)||'.'||split_part(ip,'.',2) END AS pfx,
+                 created_at, ip
+          FROM logs
+          WHERE type = 3 AND user_id = 1
+            AND other LIKE '%"admin_id":1,"admin_role":100%'
+            AND other LIKE '%"auth_method":"access_token"%'
+            AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+            AND ip NOT LIKE '10.42.%'
+            AND created_at > extract(epoch from now())::bigint - 2592000
+        ),
+        w AS (
+          SELECT pfx, count(*) AS c, min(created_at) AS mn
+          FROM r WHERE created_at > extract(epoch from now())::bigint - 300
+          GROUP BY 1
+        )
+        SELECT coalesce(sum(w.c), 0)::float8 AS count,
+               count(*)::float8 AS networks
+        FROM w
+        WHERE NOT EXISTS (
+          SELECT 1 FROM r p WHERE p.pfx = w.pfx AND p.created_at < w.mn - 300
+        )
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Root PAT actions in 5m from a network with no root history in 30d. The operator's rotating home prefix does not score here."
+        - networks:
+            usage: "GAUGE"
+            description: "Distinct never-seen networks that used root's PAT in 5m."
+
+    # Every invalid credential presented from outside the operator's and the
+    # cluster's own networks, one series per (fingerprint, address), so the
+    # Discord line names the token and where it came from.
+    #
+    # "Foreign" is read straight off the row: the gateway stamps every security
+    # denial with trusted_network, decided at write time against the
+    # TRUSTED_NETWORKS list in OpenBao (secret/newapi-env). Earlier versions
+    # inferred the operator's networks from root 2FA logins and the cluster's from
+    # service-token history; the inference paged on the sync cron from node8 the
+    # first night. Rows written before the stamp existed simply never match.
+    #
+    # Labelled metric, so it is absent when idle by design; SecurityMetricsMissing
+    # watches the unlabelled totals, not this one.
+    newapi_invalid_credentials:
+      query: |
+        SELECT substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') AS fingerprint,
+               ip,
+               count(*)::float8 AS count
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND other LIKE '%"credential_fingerprint":"%'
+          AND other LIKE '%"trusted_network":false%'
+        GROUP BY 1, 2
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - fingerprint:
+            usage: "LABEL"
+            description: "HMAC fingerprint of the rejected credential"
+        - ip:
+            usage: "LABEL"
+            description: "Address that presented it"
+        - count:
+            usage: "GAUGE"
+            description: "Rejections of this credential from this address in 5m, from outside TRUSTED_NETWORKS."
+
+    newapi_honeytoken_hits:
+      query: |
+        SELECT count(*)::float8 AS count,
+               count(DISTINCT coalesce(nullif(ip,''),'unknown'))::float8 AS distinct_ips
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          -- One fingerprint per bait, so a hit says which one was lifted. Values and
+          -- labels live in the operator's local state file, never here.
+          AND substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') IN ('3390e9840e4a', '44033c6511ed', '4f21fbceef44', '65d200bee45f', '71aa796122a9', '7d1ca3dfe341', '8d862b3cfbc3', '90b721d68ecb', 'abd24fcea20c', 'ac01ce008cd0', 'c0d1f8be9d0b', 'cdf9db226058', 'e243a3be0e7d', 'ef3822f6317c')
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Uses of the honeytoken PAT in 5m. Nothing legitimate holds it; any value above zero is a live credential harvester."
+        - distinct_ips:
+            usage: "GAUGE"
+            description: "Distinct addresses that presented the honeytoken in 5m."
+
+    newapi_security_denials_total:
+      query: |
+        SELECT count(*)::float8 AS count,
+               count(DISTINCT coalesce(nullif(ip,''),'unknown'))::float8 AS distinct_ips
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND content LIKE 'Security check refused%'
+          AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+          AND ip NOT LIKE '10.42.%'
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "External security-check refusals in 5m. Always emits, including zero, so an absent series means the collector is broken rather than quiet."
+        - distinct_ips:
+            usage: "GAUGE"
+            description: "Distinct external IPs refused in 5m."
+
+    newapi_security_denials:
+      query: |
+        SELECT coalesce(nullif(ip,''),'unknown') AS ip,
+               count(*)::float8 AS count
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND content LIKE 'Security check refused%'
+          -- Loopback and in-cluster pod IPs are our own frontend and bots hitting
+          -- endpoints with an expired session (mostly /api/data/self from stale
+          -- browser tabs). That is continuous background noise, not probing, and it
+          -- buried the signal the moment this metric went live. Only refusals from a
+          -- real external client are interesting: an attacker reaches us through
+          -- Cloudflare and lands with a public address.
+          --
+          -- That holds only while the unorouter BFF forwards CF-Connecting-IP; if it
+          -- ever sends X-Forwarded-For instead (which the gateway discards), every
+          -- dashboard-originated request lands as a pod address and this exclusion
+          -- silently hides them along with the noise.
+          AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+          AND ip NOT LIKE '10.42.%'
+        GROUP BY 1
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - ip:
+            usage: "LABEL"
+            description: "Source IP of the refused attempt"
+        - count:
+            usage: "GAUGE"
+            description: "Refused auth / proof / permission checks in 5m, recorded durably because edge logs expire."
+
+    newapi_quota_grants:
+      query: |
+        SELECT count(*)::float8 AS large_count,
+               coalesce(max(
+                 nullif(regexp_replace(substring(content from '[0-9]+\\.[0-9]+'), '[^0-9.]', '', 'g'), '')::numeric
+               ), 0)::float8 AS max_usd
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND content LIKE '%granted quota%'
+          -- The Discord bot grants $0.01-$0.50 hundreds of times a day, so volume alone
+          -- says nothing. Size does: anything at or above $5 is outside every grant this
+          -- platform has ever issued automatically.
+          AND coalesce(nullif(regexp_replace(substring(content from '[0-9]+\\.[0-9]+'), '[^0-9.]', '', 'g'), '')::numeric, 0) >= 5
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - large_count:
+            usage: "GAUGE"
+            description: "Quota grants of $5 or more in 5m. Routine bot grants are $0.01-$0.50; a grant this size is an operator action or someone paying themselves."
+        - max_usd:
+            usage: "GAUGE"
+            description: "Largest single quota grant in USD in the last 5 minutes."
+
+    newapi_password_changes:
+      query: |
+        SELECT count(*)::float8 AS count,
+               count(DISTINCT substring(content from 'ID: [0-9]+'))::float8 AS distinct_targets
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND content LIKE 'Updated user%'
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Admin edits to user records in 5m. new-api does not record WHICH field changed, so a password reset is indistinguishable from a role or status edit -- treat any burst as potential account takeover."
+        - distinct_targets:
+            usage: "GAUGE"
+            description: "Distinct accounts edited via the admin API in 5m."
+
+
+    # 2026-08-31: $142 across 27 crypto top-ups sat uncredited for 10 days. The money
+    # reached NowPayments, the balance never reached the user, and nothing alerted:
+    # NowPayments has no merchant email for a received payment (webhook-only by design),
+    # and a webhook it delivers successfully is "done" on their side even when our
+    # handler declines to credit. Only we can see the gap, so only we can alarm on it.
+    #
+    # paid_amount is the discriminator: the webhook writes it only from what the
+    # provider says it RECEIVED, so a row carrying one that is STILL pending means
+    # money moved and quota did not.
+    #
+    # NOT provider_payment_id, which the first version used and which is wrong: it is
+    # recorded on EVERY webhook including "waiting" (controller/topup_nowpayments.go,
+    # deliberately, so a stalled order stays reconcilable). Every abandoned checkout
+    # gets one when the payment page opens, so that version alerted on 27 orders /
+    # $142 owed when the providers' own APIs said 19 of 20 NowPayments invoices had
+    # actually_paid = 0, the twentieth was 2% of its invoice, and all 7 DeloPay ones
+    # were requires_payment_method / requires_customer_action. Real figure: zero.
+    #
+    # charged_money is wrong for the same reason: set at order creation, so it is
+    # intent, not evidence.
+    newapi_topup_stuck:
+      query: |
+        SELECT count(*)::float8 AS count,
+               coalesce(sum(money),0)::float8 AS usd,
+               coalesce(max(extract(epoch from now())::bigint - create_time),0)::float8 AS oldest_seconds
+        FROM top_ups
+        WHERE status = 'pending'
+          AND paid_amount > 0
+          AND create_time < extract(epoch from now())::bigint - 1800
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Top-ups pending >30m where the provider reported funds received: the customer paid and the balance never arrived."
+        - usd:
+            usage: "GAUGE"
+            description: "Total USD sitting in stuck top-ups."
+        - oldest_seconds:
+            usage: "GAUGE"
+            description: "Age of the oldest stuck top-up. The 2026-08 incident ran 10 days before a customer reported it."
+
+    # Partner gift cards and grants. These routes are reachable with a PAT by
+    # design (partners script them), which makes a stolen partner token the
+    # cheapest way to convert a hijacked account into value that leaves the
+    # platform: a gift card is a bearer code, and a grant is irreversible.
+    #
+    # Keyed on the audit params rather than the log sentence: LogQuota renders
+    # USD, CNY or a custom symbol depending on a live display setting, so the
+    # existing '%granted quota%' pattern would parse a different currency after
+    # any settings change. The params carry the raw integer quota, where
+    # 500000 = $1, so 5000000 is $10.
+    #
+    # No size floor on the count: unlike the Discord bot's $0.01 grants, every
+    # call here is a deliberate commercial act and the volume is low, so the
+    # useful signal is a BURST, not a big single number.
+    newapi_partner_actions:
+      query: |
+        SELECT count(*)::float8 AS count,
+               count(DISTINCT user_id)::float8 AS distinct_actors,
+               coalesce(max((other::jsonb -> 'op' -> 'params' ->> 'quota')::numeric), 0)::float8 / 500000 AS max_usd,
+               count(*) FILTER (
+                 WHERE other::jsonb -> 'op' ->> 'action' = 'partner.grant'
+               )::float8 AS grants
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND other LIKE '%"action":"partner.%'
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Partner mint/void/grant actions in 5m. Only accounts with a negotiated top-up bonus can call these."
+        - distinct_actors:
+            usage: "GAUGE"
+            description: "Distinct partner accounts acting in 5m."
+        - max_usd:
+            usage: "GAUGE"
+            description: "Largest single partner action in USD in the last 5 minutes."
+        - grants:
+            usage: "GAUGE"
+            description: "Irreversible balance grants to other accounts in 5m."

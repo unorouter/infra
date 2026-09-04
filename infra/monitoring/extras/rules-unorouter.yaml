@@ -1,0 +1,402 @@
+# Alert rules derived from ACTUAL past incidents, not a generic starter pack. Every group
+# cites the failure it would have caught. The bias is toward SILENT failures: three separate
+# times something was broken for hours with zero signal (backups never running, etcd stalling,
+# Velero stuck), and those are the rules that matter most here.
+#
+# GROUP NAMES MUST BE UNIQUE. A duplicate group name breaks ArgoCD's server-side-apply diff
+# ("ComparisonError: .spec.groups: duplicate entries") and the ENTIRE monitoring app silently
+# stops syncing -- every edit after that looks applied but is not. Check
+# `kubectl -n argocd get app monitoring -o jsonpath='{.status.conditions}'` when a rule
+# change does not show up in the live PrometheusRule.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: unorouter-incidents
+  namespace: monitoring
+spec:
+  groups:
+    # A. memory / OOM cascade -- 2026-07-23 8h frontend outage (OOMKill -> crashloop -> 502)
+    # and the 2026-07-24 24h RAM-pressure incident.
+    - name: unorouter.memory
+      rules:
+        - alert: NodeMemoryCritical
+          expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.92
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.instance }} memory >92%"
+            description: "Node memory {{ $value | humanizePercentage }}. node4/node5 sat at 92.5%/88.7% during the 2026-07-24 incident."
+        # percentage alone lied during the 8h outage (node showed 60% but only 233Mi free)
+        - alert: NodeMemoryFreeLow
+          expr: node_memory_MemAvailable_bytes < 400 * 1024 * 1024
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} has <400Mi available"
+            description: "Only {{ $value | humanize1024 }}B available. Percentage can look fine while absolute headroom is gone."
+        # uno-import is excluded from every CRITICAL pod rule (see also
+        # DeploymentNoReplicas / PodCrashLoopBackOff): it is a single-replica batch
+        # importer, not the revenue path, and nobody should be woken for it. It keeps a
+        # warning twin so the signal is not lost.
+        - alert: ContainerOOMKilled
+          expr: increase(kube_pod_container_status_restarts_total{pod!~"uno-import.*"}[10m]) > 0
+            and on(namespace, pod, container) kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Container hit exit 137 (kernel OOM). This is exactly what killed both unorouter replicas for 8 hours."
+        - alert: SideContainerOOMKilled
+          expr: increase(kube_pod_container_status_restarts_total{pod=~"uno-import.*"}[10m]) > 0
+            and on(namespace, pod, container) kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Non-revenue importer hit its memory limit. Raise the limit or cap its batch size."
+        - alert: ContainerMemoryNearLimit
+          expr: (container_memory_working_set_bytes{container!="",container!="POD"}
+            / on(namespace, pod, container) kube_pod_container_resource_limits{resource="memory"}) > 0.90
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} >90% of memory limit"
+            description: "Early warning before the OOMKill."
+    # B. etcd degradation -> NodeNotReady cascade -- 2026-07-24. 1000+ slow-apply warnings per
+    # 2h were completely invisible; they stalled lease renewals and evicted pods.
+    - name: unorouter.etcd
+      rules:
+        - alert: EtcdHighFsyncLatency
+          expr: histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket[10m])) > 0.1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "etcd WAL fsync p99 {{ $value | humanizeDuration }} on {{ $labels.instance }}"
+            description: "Above etcd's own 100ms SLA. Usually memory pressure stealing page cache."
+        - alert: EtcdLeaderChanges
+          expr: increase(etcd_server_leader_changes_seen_total[15m]) > 2
+          labels: { severity: warning }
+          annotations:
+            summary: "etcd leader changed {{ $value }}x in 15m"
+        - alert: EtcdMembersDown
+          expr: count(up{job="etcd"} == 1) < 3
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "etcd has fewer than 3 reachable members"
+            description: "Quorum tolerates one loss only. Two = the 34min DB-write outage of 2026-07-23."
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 3m
+          labels: { severity: critical, node: "{{ $labels.node }}" }
+          annotations:
+            summary: "{{ $labels.node }} NotReady"
+            description: "node5 flapped 4x in one hour, silently, during the 2026-07-24 incident."
+
+    # C. prod service down -- the 8h outage reached 13 restarts per pod with no alert.
+    - name: unorouter.services
+      rules:
+        # Revenue path only. uno-import is a single-replica batch importer behind a
+        # gluetun tunnel: its health check goes through a VPN exit reroll, so readiness
+        # flaps to 0 on a slow probe while nothing is actually broken, and nobody needs
+        # waking for it. Excluded here, still covered by the warning rule below.
+        - alert: DeploymentNoReplicas
+          expr: kube_deployment_status_replicas_available{namespace="services",deployment!~"uno-import.*"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.deployment }} has ZERO ready replicas"
+            description: "Revenue service is down."
+        - alert: SideDeploymentNoReplicas
+          expr: kube_deployment_status_replicas_available{namespace="services",deployment=~"uno-import.*"} == 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.deployment }} has no ready replica for 15m"
+            description: "Non-revenue importer. 15m outlasts a tunnel reroll, so this means genuinely stuck, not flapping."
+        - alert: PodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total[15m]) > 3
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} restarting repeatedly"
+            description: "{{ $value | printf \"%.0f\" }} restarts in 15m. Catches the crashloop BEFORE it becomes an outage."
+        - alert: PodCrashLoopBackOff
+          expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",pod!~"uno-import.*"} == 1
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} in CrashLoopBackOff"
+        - alert: SidePodCrashLoopBackOff
+          expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",pod=~"uno-import.*"} == 1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} in CrashLoopBackOff"
+
+    # D. backups silently broken -- THE WORST past failure. Base backups were 0 bytes and had
+    # never run while WAL archiving looked healthy; PITR was impossible and nothing said so.
+    - name: unorouter.backups
+      rules:
+        # NOTE: cnpg_collector_last_available_backup_timestamp is NOT usable here -- CNPG leaves
+        # it (and cluster.status.lastSuccessfulBackup) at zero when backups run via the Barman
+        # Cloud PLUGIN, which is our method. Freshness is read from the Backup CRs instead, via
+        # kube-state-metrics customResourceState.
+        - alert: CNPGNoRecentBaseBackup
+          expr: >
+            (time() - max by (cluster) (cnpg_backup_completion_time{phase="completed"})) > 26 * 3600
+            or absent(cnpg_backup_completion_time{phase="completed"})
+          for: 30m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.cluster }} base backup older than 26h (or none at all)"
+            description: "Catches BOTH 'never ran' and 'hung in BackupStarted'. Without a base backup, WAL archives alone cannot restore anything -- exactly the 2026-07-22 state where base backups were 0 bytes while WAL looked healthy."
+        - alert: CNPGBackupStuck
+          expr: cnpg_backup_phase_info{phase=~"started|running"} == 1
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "CNPG backup {{ $labels.name }} stuck in {{ $labels.phase }} >1h"
+            description: "barman hangs here indefinitely with no error and no completion (CNPG #5420); the 2026-07-22 backups sat in this state until killed."
+        - alert: CNPGWalArchiveFailing
+          expr: cnpg_pg_stat_archiver_last_failed_time > cnpg_pg_stat_archiver_last_archived_time
+          for: 15m
+          labels: { severity: critical }
+          annotations:
+            summary: "WAL archiving failing on {{ $labels.pod }}"
+            description: "Runbook hard gate: WAL archiving must stay green or PITR silently rots."
+        - alert: CNPGWalArchiveFailures
+          # Deliberately a bare counter, warning-only, Discord-only: it exists to surface
+          # failures that self-recover, which CNPGWalArchiveFailing above (the critical,
+          # PITR-is-rotting signal) cannot see by design. Do not gate it on staleness --
+          # that would just duplicate the critical rule and lose the transient case.
+          #
+          # Known benign source: every promotion/switchover archives a NNNNNNNN.history
+          # timeline file that the barman plugin refuses to overwrite (exit 1), so the
+          # counter rises by exactly one per primary change. 2026-09-02: six primary
+          # changes in 48 minutes produced six of these, each followed by a successful
+          # segment within one archive_timeout (5min). Triage before chasing S3:
+          #   psql: SELECT last_failed_wal, last_failed_time, last_archived_time FROM pg_stat_archiver;
+          # last_failed_wal ending in .history with last_archived_time newer = not a fault.
+          expr: increase(cnpg_pg_stat_archiver_failed_count[1h]) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value | printf \"%.0f\" }} WAL archive failures on {{ $labels.pod }} in 1h"
+            description: "5 failures self-recovered unnoticed on 2026-07-22. One failure per primary change is the barman plugin refusing to overwrite the timeline .history file and is expected; check last_failed_wal in pg_stat_archiver before treating this as an S3 problem."
+        - alert: OpenBaoSnapshotStale
+          # the 6h raft-snapshot cron is the ONLY OpenBao DR source (node loss wipes the
+          # local-path PV); a silently-dead cron is invisible until `make restore` needs it
+          expr: >
+            (time() - kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-raft-snapshot"}) > 8 * 3600
+            or absent(kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-raft-snapshot"})
+          for: 30m
+          labels: { severity: critical }
+          annotations:
+            summary: "OpenBao raft snapshot has no success in 8h (schedule is 6h)"
+            description: "latest.snap in S3 is what dr.sh restore pulls; if this cron is dead, vault DR silently rots."
+        - alert: VeleroBackupStale
+          # velero also exports this metric WITHOUT a schedule label, aggregating one-off
+          # backups. That series never advances once an ad-hoc backup ages out, so an
+          # unfiltered expr fires every day forever. Only scheduled backups are expected
+          # to stay fresh.
+          expr: (time() - velero_backup_last_successful_timestamp{schedule!=""}) > 26 * 3600
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "Velero schedule {{ $labels.schedule }} has no success in 26h"
+        - alert: VeleroDown
+          expr: up{job=~".*velero.*"} == 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Velero not scrapeable"
+            description: "Velero sat stuck in ContainerCreating on a missing secret for 16min on 2026-07-22 with backups simply not happening."
+
+    # E. CNPG cluster health
+    - name: unorouter.postgres
+      rules:
+        - alert: CNPGClusterUnhealthy
+          expr: cnpg_collector_up == 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "CNPG collector down for {{ $labels.namespace }}/{{ $labels.pod }}"
+        # metric name has no `collector_` infix -- the wrong one silently returns nothing,
+        # which looks identical to "healthy" on a dashboard.
+        - alert: CNPGReplicaMissing
+          expr: max by (namespace) (cnpg_pg_replication_streaming_replicas{namespace="databases"}) < 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "CNPG primary has no streaming replica"
+            description: "Replication is not streaming to any standby; a primary loss would fall back to S3 PITR."
+        - alert: CNPGReplicationLagHigh
+          expr: cnpg_pg_replication_lag > 30
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Replication lag {{ $value }}s on {{ $labels.pod }}"
+
+    # F. ingress / external path -- the hairpin + CF-mitigation chain of the 8h outage.
+    - name: unorouter.ingress
+      rules:
+        # og-badges excluded: a degraded badge is a warning with its own alert below, not a
+        # critical endpoint outage.
+        - alert: PublicEndpointDown
+          expr: probe_success{job!="probe/monitoring/og-badges"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "Public endpoint {{ $labels.instance }} failing from inside the cluster"
+            description: "This is the exact hairpin path Cloudflare began dropping mid-TLS-handshake. External checks looked fine at the time."
+        - alert: TunnelRequestErrorsHigh
+          # Needs the cloudflared PodMonitor (metrics :2000). Clients hanging up on stalled
+          # responses is often the ONLY signal users see 524s: the origin still answers
+          # in-cluster checks.
+          #
+          # RATIO, not absolute rate, and paired with origin latency. The old rule was
+          # `rate(errors) > 1` on a baseline of ~0.1/s, which made sense when this gateway
+          # served short requests. It does not now: /v1/chat/completions and /v1/messages
+          # are streaming LLM calls that legitimately run 40-60s, and a user closing a tab
+          # mid-generation is recorded as `context canceled` exactly like a stalled response.
+          # Measured 2026-09-01 while the origin was healthy (200s in ~100ms, 55 of 56 slow
+          # requests returning 200): 2.26 errors/s, over twice the old threshold, purely from
+          # normal cancellations. Absolute rate scales with traffic; the ratio does not.
+          #
+          # 24h baseline of the ratio, same day: p50 1.2%, p90 4.2%, max 12.1%. The 25%
+          # threshold sits above organic peaks, and the origin-latency conjunct is what
+          # separates the two worlds: during the 2026-08-12 outage the edge shed requests
+          # WHILE the origin answered in 0.1s, so probe latency stayed flat and this fires.
+          # When users simply cancel long generations, the origin is also slow (that is why
+          # they cancelled), so the conjunct holds it silent.
+          expr: |
+            (
+              sum(rate(cloudflared_tunnel_request_errors[5m]))
+              / clamp_min(sum(rate(cloudflared_tunnel_total_requests[5m])), 0.01)
+            ) > 0.25
+            and on()
+            (
+              max(probe_duration_seconds{instance="https://api.unorouter.com/api/status"}) < 2
+            )
+          for: 10m
+          # critical: this is the exact signature of the 2026-08-12 customer-impacting outage,
+          # and the origin looks healthy while it fires -- nothing else pages for it.
+          labels: { severity: critical }
+          annotations:
+            summary: "cloudflared erroring {{ $value | humanizePercentage }} of requests while the origin is fast"
+            description: "The edge is shedding requests while in-cluster probes still answer under 2s -- the 2026-08-12 signature, where the origin looked healthy and only pod logs showed it. Ordinary client cancellation of long LLM streams does NOT reach here, because that comes with a slow origin."
+        - alert: TLSCertExpiringSoon
+          expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "Certificate for {{ $labels.instance }} expires in <14d"
+        - alert: CloudflaredDegraded
+          expr: kube_deployment_status_replicas_available{namespace="cloudflared"} < 3
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "cloudflared HA degraded ({{ $value }}/3 up)"
+            description: "Tunnel is the ONLY ingress path for app traffic."
+        # Open streams are the leading signal of an L7 flood; memory alerts only arrive
+        # after the tunnel is already down. Normal is a few hundred across all replicas.
+        - alert: CloudflaredStreamFlood
+          expr: sum(cloudflared_tunnel_concurrent_requests_per_tunnel) > 1500
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $value | humanize }} open streams to the tunnel (attack or origin stall)"
+            description: "Check Cloudflare analytics for what reaches origin; cloudflared pays memory per open stream and dies first."
+        - alert: CloudflaredStreamsPerReplicaHigh
+          expr: max by (pod) (cloudflared_tunnel_concurrent_requests_per_tunnel) > 1000
+          for: 2m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} holds {{ $value | humanize }} open streams"
+            description: "One replica stalling or absorbing a flood; the others are fine."
+
+    # G. cluster basics. local-path PVCs live on the node disk, so a full PVC is a node problem.
+    - name: unorouter.cluster
+      rules:
+        - alert: PVCAlmostFull
+          expr: (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.85
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} >85% full"
+        - alert: NodeDiskAlmostFull
+          expr: (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}
+            / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) > 0.85
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} root disk >85% full"
+            description: "local-path PVCs (pg data, prometheus) all live here."
+        # 85% is where the kubelet starts evicting pods, which is too late to think.
+        # 75% is the "look at it this week" mark: kubelet image GC (high=70) has already
+        # run by then, so anything above it is real data, not build-image churn, and the
+        # levers are slow ones (prometheus retention, pg growth, bigger volume).
+        - alert: NodeDiskFillingUp
+          expr: (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}
+            / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) > 0.75
+          for: 2h
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} root disk >75% full and image GC cannot help"
+            description: "Image GC trims at 70%. Above that it is PVC data: check prometheus retention and pg size."
+        # Catches a runaway writer (log loop, WAL that stops archiving, a stuck backup)
+        # long before a threshold does: 6h of trend projected 24h ahead hits full.
+        # predict_linear on a disk is honest in a way it is not on a warming cache,
+        # because disks do not plateau on their own.
+        - alert: NodeDiskFillingFast
+          expr: predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}[6h], 24*3600) < 0
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.instance }} root disk trending full within 24h"
+            description: "Sustained growth, not a spike. Find the writer before the threshold alerts fire."
+        # NO PVC-level trend alert on purpose. local-path volumes are plain directories on
+        # the node disk, so kubelet_volume_stats_* reports the NODE filesystem's numbers for
+        # every PVC (all of them read 76G capacity, not their requested size) and duplicates
+        # per namespace. A trend rule on that fires once per PVC for what is really one node
+        # filling up, which NodeDiskFillingFast already covers correctly. PVCAlmostFull stays
+        # because the ratio it compares is node-level too, but only alarms when genuinely full.
+        # a missing agent on a node breaks that node's pod networking (and pod creation
+        # stalls there even though the eBPF datapath keeps forwarding).
+        - alert: CiliumAgentMissing
+          expr: kube_daemonset_status_number_ready{daemonset="cilium",namespace="kube-system"}
+            < kube_daemonset_status_desired_number_scheduled{daemonset="cilium",namespace="kube-system"}
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "Cilium agent not running on every node"
+            description: "{{ $value }} ready vs desired; pods on the affected node lose networking."
+        # real metric again since cilium prometheus was enabled 2026-07-25
+        - alert: CiliumUnreachableNodes
+          expr: cilium_unreachable_nodes > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Cilium reports {{ $value }} unreachable node(s) from {{ $labels.pod }}"
+            description: "Cross-node vxlan is broken; usually a stale cached node IP after a --node-ip change (restart the cilium daemonset) or a firewall change."
+
+    # Paid money that never became balance. NowPayments only notifies merchants by
+    # webhook, and a webhook it delivered is finished business on their side even when
+    # our handler declines to credit -- so a crediting bug is silent at both ends. It
+    # ran 10 days in Aug 2026 ($142, 27 orders) and surfaced only when a customer
+    # emailed NowPayments support themselves. Warning, not critical: nothing is on
+    # fire, but money is owed and every hour is a support ticket.
+    - name: unorouter.payments
+      rules:
+        - alert: TopUpStuckAfterPayment
+          expr: cnpg_newapi_topup_stuck_count > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} paid top-up(s) not credited (${{ with query \"max(cnpg_newapi_topup_stuck_usd)\" }}{{ . | first | value }}{{ end }} owed)"
+            description: >-
+              Top-ups have an upstream payment id but are still pending after 30
+              minutes, so the customer paid and the balance never arrived. Reconcile:
+              `SELECT id, user_id, money, provider_payment_id,
+              to_timestamp(create_time) FROM top_ups WHERE status='pending'
+              AND coalesce(provider_payment_id,'') <> '' ORDER BY create_time`

@@ -1,0 +1,73 @@
+# teleport-cluster Helm chart (CE, self-hosted). Access plane: kubectl + Postgres behind
+# GitHub SSO, short-lived certs, session recording + audit.
+#
+# DR posture: re-login acceptable at 1-2 users -> standalone SQLite on a PVC. On full node
+# loss the PVC dies -> fresh CA -> everyone `tsh login` again. Session recordings survive in
+# S3. Avoids the Teleport-needs-Postgres-while-Postgres-restores cycle.
+chartMode: standalone
+clusterName: teleport.unorouter.com
+
+# ACME (Let's Encrypt): Teleport auto-gets + renews a cert. Needs teleport.unorouter.com DNS
+# -> node IP (grey-cloud, NOT behind CF proxy) + port 443 reachable.
+acme: true
+acmeEmail: don.cryptus@gmail.com
+
+# grey-cloud + own hostNetwork port: ALPN multiplex needs raw TLS passthrough (NOT CF proxy,
+# NOT Cilium Gateway). hostNetwork binds the proxy on the node's public IP directly.
+proxyListenerMode: multiplex
+
+persistence:
+  enabled: true
+  volumeSize: 5Gi
+  storageClassName: local-path
+
+# session recordings -> S3 (node-independent, survives node loss). Audit events stay on SQLite.
+# static app-join token (file-based) lets the in-cluster teleport-kube-agent (App Access) join
+# without a short-lived tctl step -- reproducible on every DR. Secret value from OpenBao via ESO,
+# mounted into the auth pod; same value reaches the agent as its authToken (single source).
+auth:
+  teleportConfig:
+    teleport:
+      storage:
+        audit_sessions_uri: "s3://unorouter-pg-backups/teleport-recordings?endpoint=fsn1.your-objectstorage.com&region=fsn1"
+    auth_service:
+      tokens:
+        - "app,db,kube:/etc/teleport-join/token"
+      # GitHub SSO only: hide local username/password/passkey from the login UI. Everyone
+      # signs in via the org-gated GitHub connector. Break-glass = tctl on the auth pod
+      # (kubectl exec), which bypasses UI auth entirely, so no local user is needed.
+      authentication:
+        type: github
+        connector_name: github
+        local_auth: false
+  extraVolumes:
+    - name: app-join-token
+      secret:
+        secretName: teleport-app-join
+  extraVolumeMounts:
+    - name: app-join-token
+      mountPath: /etc/teleport-join
+      readOnly: true
+  # S3 creds for session-recording uploads (ESO secret teleport-s3)
+  extraEnv:
+    - name: AWS_ACCESS_KEY_ID
+      valueFrom: { secretKeyRef: { name: teleport-s3, key: AWS_ACCESS_KEY_ID } }
+    - name: AWS_SECRET_ACCESS_KEY
+      valueFrom: { secretKeyRef: { name: teleport-s3, key: AWS_SECRET_ACCESS_KEY } }
+
+# expose the proxy on the host network (needs the public IP for ACME + ALPN passthrough)
+service:
+  type: ClusterIP
+  spec:
+    # Empty on purpose: the proxy is reached through the Cloudflare tunnel (see
+    # infra/cloudflared), so no node IP is published anywhere. If a direct entry is ever
+    # needed again it must be a node without DB primaries or OpenBao, and the DNS record
+    # and this list must stay in sync (Cilium only answers an externalIP on its owner).
+    externalIPs: []
+proxy:
+  # hostNetwork so :443 binds the node public IP directly (grey-cloud DNS points here)
+  annotations: {}
+
+# GitHub SSO connector + roles are applied as Teleport resources (tctl / operator) after
+# install -- Client Secret is not committed; it goes into a k8s Secret via SOPS/ESO.
+# Client ID (not secret): Ov23li6rNPrZg3tJr1v5

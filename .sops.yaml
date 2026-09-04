@@ -1,0 +1,10 @@
+creation_rules:
+  # edge config: whole-file, the rule expressions are the secret
+  - path_regex: infra/cloudflare/.*\.sops\.ya?ml$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
+  # whole-file encryption (no encrypted_regex): raw secret files, every value must encrypt
+  - path_regex: secrets/openbao-init\.sops\.ya?ml$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
+  - path_regex: secrets/.*\.(ya?ml|json|env)$
+    encrypted_regex: ^(data|stringData)$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9

@@ -1,0 +1,178 @@
+#cloud-config
+package_update: true
+packages:
+  - curl
+  - open-iscsi
+
+write_files:
+  - path: /etc/sysctl.d/90-conntrack.conf
+    content: |
+      # The default 131k conntrack table fills under a SYN flood and every service on the node stalls.
+      net.netfilter.nf_conntrack_max = 2097152
+      net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+      net.netfilter.nf_conntrack_tcp_timeout_established = 300
+      net.netfilter.nf_conntrack_tcp_timeout_close_wait = 10
+  # :22 is world-open in the firewall; key-only auth is the actual gate.
+  - path: /etc/ssh/sshd_config.d/99-keyonly.conf
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+
+  # k3s auto-deploy manifests: applied automatically on first server start (and on change).
+  # This makes `tofu apply` ALONE bring up k3s + Cilium + ArgoCD + app-of-apps -- no `make
+  # bootstrap`. Filenames MUST be RFC1123 (no underscores). Cilium uses bootstrap:true so it
+  # installs before the node is CNI-ready.
+
+  # Cilium via k3s HelmChart CRD (bootstrap = install before CNI-ready so node goes Ready).
+  - path: /var/lib/rancher/k3s/server/manifests/cilium.yaml
+    permissions: "0644"
+    content: |
+      apiVersion: helm.cattle.io/v1
+      kind: HelmChart
+      metadata:
+        name: cilium
+        namespace: kube-system
+      spec:
+        bootstrap: true
+        repo: https://helm.cilium.io/
+        chart: cilium
+        version: 1.20.1
+        failurePolicy: abort
+        targetNamespace: kube-system
+        valuesContent: |-
+          kubeProxyReplacement: true
+          k8sServiceHost: 127.0.0.1
+          k8sServicePort: 6443
+          ipam:
+            operator:
+              clusterPoolIPv4PodCIDRList:
+                - 10.42.0.0/16
+          envoy:
+            enabled: false
+          hubble:
+            relay:
+              enabled: true
+            ui:
+              enabled: false
+          operator:
+            replicas: 1
+            prometheus:
+              enabled: true
+          prometheus:
+            enabled: true
+          updateStrategy:
+            rollingUpdate:
+              maxUnavailable: 1
+
+  # ArgoCD install (upstream manifest) + root app-of-apps -> reconciles everything from git.
+  - path: /var/lib/rancher/k3s/server/manifests/argocd.yaml
+    permissions: "0644"
+    content: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: argocd
+      ---
+      apiVersion: helm.cattle.io/v1
+      kind: HelmChart
+      metadata:
+        name: argo-cd
+        namespace: kube-system
+      spec:
+        repo: https://argoproj.github.io/argo-helm
+        chart: argo-cd
+        version: 10.7.1
+        failurePolicy: abort
+        targetNamespace: argocd
+        valuesContent: |-
+          crds:
+            install: true
+            keep: true
+          configs:
+            cm:
+              url: https://argocd.unorouter.com
+              # SSO only: the local admin account is disabled so GitHub (via dex) is the one
+              # way in. Break-glass if dex/GitHub is down: flip this to true, restart
+              # argocd-server, log in with the password in secret argocd-initial-admin-secret.
+              admin.enabled: "false"
+              oidc.config: |
+                name: GitHub
+                issuer: https://dex.unorouter.com
+                clientID: argocd
+                clientSecret: $argocd-dex-sso:argocdClientSecret
+                requestedScopes: [openid, profile, email, groups]
+            rbac:
+              policy.csv: |
+                g, unorouter:admins, role:admin
+              scopes: "[groups, email]"
+
+  - path: /var/lib/rancher/k3s/server/manifests/root-app.yaml
+    permissions: "0644"
+    content: |
+      apiVersion: argoproj.io/v1alpha1
+      kind: Application
+      metadata:
+        name: root
+        namespace: argocd
+      spec:
+        project: default
+        source:
+          repoURL: https://github.com/unorouter/infra.git
+          targetRevision: main
+          path: apps
+          directory:
+            recurse: true
+        destination:
+          server: https://kubernetes.default.svc
+          namespace: argocd
+        syncPolicy:
+          automated:
+            prune: true
+            selfHeal: true
+          retry:
+            limit: 5
+            backoff: { duration: 30s, factor: 2, maxDuration: 5m }
+
+runcmd:
+  # HOST-ONLY swap: gives the node a soft landing instead of a hard OOM kill when memory
+  # spikes. Pods never swap (kubelet swapBehavior stays NoSwap), so etcd/postgres/prometheus
+  # latency is untouched -- only cold pages from system processes get reclaimed. swappiness=10
+  # means it engages under real pressure, not routinely. Velero cannot restore this: it is
+  # host state, below the Kubernetes API.
+  - |
+    if ! swapon --show | grep -q swapfile; then
+      fallocate -l 4G /swapfile
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo "/swapfile none swap sw 0 0" >> /etc/fstab
+      echo "vm.swappiness=10" > /etc/sysctl.d/99-swap.conf
+      sysctl -p /etc/sysctl.d/99-swap.conf
+    fi
+  - |
+    PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
+    mkdir -p /var/lib/rancher/k3s/server/manifests && touch /var/lib/rancher/k3s/server/manifests/coredns.yaml.skip   # CoreDNS is ArgoCD-managed (infra/coredns)
+    export INSTALL_K3S_EXEC="server \
+      --cluster-init \
+      --token '${k3s_token}' \
+      --node-ip=10.100.1.1 \
+      --node-external-ip=$PUBLIC_IP \
+      --advertise-address=10.100.1.1 \
+      --flannel-backend=none \
+      --disable-network-policy \
+      --disable=traefik \
+      --disable=servicelb \
+      --disable-kube-proxy \
+      --etcd-expose-metrics=true \
+      --kubelet-arg=fail-swap-on=false \
+      --kubelet-arg=image-gc-high-threshold=70 \
+      --kubelet-arg=image-gc-low-threshold=55 \
+      --tls-san=$PUBLIC_IP \
+      --write-kubeconfig-mode 600"
+%{ if k3s_version != "" ~}
+    export INSTALL_K3S_VERSION="${k3s_version}"
+%{ else ~}
+    export INSTALL_K3S_CHANNEL="stable"
+%{ endif ~}
+    curl -sfL https://get.k3s.io | sh -

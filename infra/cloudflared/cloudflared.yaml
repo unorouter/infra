@@ -1,0 +1,257 @@
+# Cloudflare Tunnel (cloudflared) - outbound-only edge entry. Hides node IP, no inbound ports.
+# Routes prod apps + internal UIs (ops hosts go via the Teleport proxy svc, which gates SSO).
+# Token from OpenBao via ESO. Teleport stays DIRECT grey-cloud (ALPN, can't tunnel).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: cloudflared-token
+  namespace: cloudflared
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: cloudflared-token
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef: { key: cloudflared, property: token }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: cloudflared
+data:
+  config.yaml: |
+    # tunnel run reads token from env; ingress rules here (locally-managed config)
+    metrics: 0.0.0.0:2000
+    no-autoupdate: true
+    # http2, NOT quic: in the 2026-08-12 API outage a replica's QUIC edge connections
+    # degraded silently (registered and "ready" while requests through them stalled until
+    # clients gave up), and ~50% of api.unorouter.com traffic died at the edge for 3h while
+    # the origin answered in 0.1s. QUIC rides UDP, the least reliable path on this network;
+    # http2 keeps the tunnel on TCP.
+    protocol: http2
+    # Internal UIs now front through Teleport App Access (GitHub SSO), NOT CF Access.
+    # All *-tp hosts point at the SAME proxy origin; Teleport routes by Host header to the app
+    # whose public_addr matches. noTLSVerify: proxy serves its own teleport.unorouter.com cert
+    # on this in-cluster hop (edge TLS already terminated at Cloudflare). Do NOT set
+    # httpHostHeader -- the original Host is what selects the app.
+    ingress:
+      # Teleport proxy itself: tsh/kubectl/psql ride a WebSocket connection upgrade (Teleport's
+      # TLS-routing-behind-L7 mode), the web UI is plain HTTPS. No public IP anywhere.
+      - hostname: teleport.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: argocd.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: openbao.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: grafana.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      # OpenBao API for CI only, bypassing the Teleport gate: GitHub runners cannot pass an
+      # interactive SSO login. Safe because it holds no standing credential -- callers must
+      # present a JWT signed by GitHub whose `repository` claim matches the jwt-github role,
+      # and the token it returns reads exactly one KV path for 10 minutes.
+      # The human UI stays on openbao.unorouter.com behind Teleport; do NOT point that here.
+      - hostname: openbao-ci.unorouter.com
+        service: http://openbao.openbao.svc.cluster.local:8200
+      # Dex OIDC IdP: direct (no Teleport gate) -- discovery/JWKS must be publicly fetchable
+      # and browser redirects land here; actual auth happens at GitHub (org-gated).
+      - hostname: dex.unorouter.com
+        service: http://dex.dex.svc.cluster.local:5556
+      # PostHog EU ingest proxy (was a don traefik route; NEXT_PUBLIC_POSTHOG_HOST is
+      # build-baked to ph.unorouter.com so the host must keep working). Assets rule first.
+      - hostname: ph.unorouter.com
+        path: ^/static/.*
+        service: https://eu-assets.i.posthog.com
+        originRequest: { httpHostHeader: eu-assets.i.posthog.com, originServerName: eu-assets.i.posthog.com }
+      - hostname: ph.unorouter.com
+        service: https://eu.i.posthog.com
+        originRequest: { httpHostHeader: eu.i.posthog.com, originServerName: eu.i.posthog.com }
+      # ---- prod services (real hostnames since cutover) ----
+      # uno-import: the OpenAPI document plus the import API, which takes no
+      # token. It is not an open proxy: the adapter whitelist pins the fetch
+      # target to ten card sites, and a per-IP concurrency cap keeps one caller
+      # off the single browser page the worker drives serially. The debug and
+      # echo surfaces still need the token and are NOT routed here.
+      - hostname: cards.unorouter.com
+        path: ^/openapi/.*
+        service: http://uno-import.services.svc.cluster.local:4000
+      - hostname: cards.unorouter.com
+        path: ^/api/jobs(/.*)?$
+        service: http://uno-import.services.svc.cluster.local:4000
+      - hostname: cards.unorouter.com
+        service: http_status:404
+      - hostname: api.unorouter.com
+        service: http://new-api.services.svc.cluster.local:3000
+      - hostname: unorouter.com
+        service: http://unorouter.services.svc.cluster.local:3000
+      - hostname: www.unorouter.com
+        service: http://unorouter.services.svc.cluster.local:3000
+      - hostname: status.unorouter.com
+        service: http://unorouter.services.svc.cluster.local:3000
+      - hostname: mcp.unorouter.com
+        service: http://unorouter-mcp.services.svc.cluster.local:3000
+      - hostname: bot.unorouter.com
+        service: http://unorouter-bot.services.svc.cluster.local:4000
+      - service: http_status:404
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+spec:
+  # 3 = one per node, the ceiling the required anti-affinity below allows. Raised from 2
+  # after a single replica carried 70+ concurrent streams while the other idled, and the
+  # site intermittently 524'd. Still do NOT autoscale (downscale breaks live connections).
+  replicas: 3
+  # no surge: with required anti-affinity a surge pod needs a third free node, so a
+  # rollout during a node outage would deadlock; replace-in-place keeps 1 replica up
+  strategy:
+    rollingUpdate: { maxSurge: 0, maxUnavailable: 1 }
+  selector:
+    matchLabels: { app: cloudflared }
+  template:
+    metadata:
+      labels: { app: cloudflared }
+    spec:
+      affinity:
+        podAntiAffinity:
+          # required, not preferred: the tunnel is the only ingress path, and preferred
+          # can still co-locate both replicas on one node (single node loss = full outage)
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { app: cloudflared }
+              topologyKey: kubernetes.io/hostname
+      serviceAccountName: cloudflared
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2026.8.3
+          resources:
+            requests: { cpu: 10m, memory: 128Mi }
+            limits: { memory: 2Gi }
+          ports:
+            - name: metrics
+              containerPort: 2000
+          args:
+            - tunnel
+            - --config
+            - /etc/cloudflared/config.yaml
+            - --no-autoupdate
+            - run
+          env:
+            - name: GOMEMLIMIT
+              value: 1700MiB
+            - name: TUNNEL_TOKEN
+              valueFrom: { secretKeyRef: { name: cloudflared-token, key: token } }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared
+              readOnly: true
+          livenessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap: { name: cloudflared-config }
+---
+# SSO: internal UIs are gated by TELEPORT App Access (GitHub connector), not CF Access.
+# - hosts argocd / openbao .unorouter.com -> tunnel -> teleport proxy -> app (SSO-gated).
+# - Teleport GitHub SSO (org unorouter, team admins) is the gate; one pane like the work setup.
+# - CF Access apps + the "Cloudflare Access SSO" GitHub OAuth app on these hosts are RETIRED
+#   (removed via CF API). Cloudflare here is only the tunnel (IP hiding), not the auth layer.
+# - the flat *-tp naming keeps CF free Universal SSL (*.unorouter.com) valid at the edge (no ACM).
+---
+# The tunnel is the only ingress path, and during the 2026-08-12 outage its request errors
+# (clients giving up on stalled responses) were only visible by hand-grepping pod logs.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+spec:
+  selector:
+    matchLabels: { app: cloudflared }
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+---
+# Daily replica recycling: the 2026-08-12 outage traced to a 5-day-old replica whose edge
+# connections had degraded while still registered. Age is the common factor in every
+# degraded-process incident on this cluster; no replica gets old enough to matter. Rolling
+# (maxSurge 0 / maxUnavailable 1) so 2 of 3 replicas always serve.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudflared-restarter
+  namespace: cloudflared
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudflared-restarter
+  namespace: cloudflared
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [cloudflared]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudflared-restarter
+  namespace: cloudflared
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudflared-restarter
+subjects:
+  - kind: ServiceAccount
+    name: cloudflared-restarter
+    namespace: cloudflared
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restart-cloudflared
+  namespace: cloudflared
+spec:
+  schedule: "30 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          serviceAccountName: cloudflared-restarter
+          restartPolicy: Never
+          containers:
+            - name: restart
+              image: rancher/kubectl:v1.36.2
+              command:
+                - kubectl
+                - -n
+                - cloudflared
+                - rollout
+                - restart
+                - deployment/cloudflared
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 64Mi }

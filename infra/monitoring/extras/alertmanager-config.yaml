@@ -1,0 +1,141 @@
+# Alertmanager routing. Lives in the CRD (not the chart's inline `config:`) because
+# discordConfigs.apiURL accepts a Secret reference -- the webhook URL never enters git.
+# The chart's alertmanagerConfiguration.name points here.
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: unorouter-alerts
+  namespace: monitoring
+spec:
+  route:
+    # DEFAULT IS DROP. Only warning/critical opt in below. Making discord the default
+    # receiver spammed the channel with severity=none plumbing alerts (Watchdog,
+    # InfoInhibitor) whose own descriptions say they belong in a null receiver.
+    receiver: "null"
+    groupBy: [alertname, namespace]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    routes:
+      # DEAD-MAN SWITCH. Watchdog always fires while Prometheus+Alertmanager are alive, so
+      # re-notifying it every 5m is a heartbeat to healthchecks.io. If the cluster, Prometheus
+      # or Alertmanager dies the pings stop and healthchecks emails after its grace period --
+      # the one failure mode in-cluster alerting can never report itself.
+      - receiver: healthchecks
+        matchers:
+          - name: alertname
+            value: Watchdog
+        groupWait: 0s
+        groupInterval: 5m
+        repeatInterval: 5m
+      # InfoInhibitor exists only to suppress info alerts; it must never notify.
+      - receiver: "null"
+        matchers:
+          - name: alertname
+            value: InfoInhibitor
+      # Edge attack mode: the stream-flood alert flips the Cloudflare zone into attack mode
+      # (edge-mode Deployment); resolved flips it back after a hold. continue: true so the
+      # same alert still reaches discord and the phone below.
+      - receiver: edge-mode
+        matchers:
+          - name: alertname
+            value: CloudflaredStreamFlood
+        groupWait: 0s
+        groupInterval: 1m
+        repeatInterval: 10m
+        continue: true
+      # critical fans out to BOTH discord (continue: true falls through) and ntfy, which
+      # makes the phone ring. Discord alone failed 2026-08-12: the API degraded for 2h
+      # during Korea business hours (= our night) before anyone saw the channel.
+      - receiver: discord
+        matchers:
+          - name: severity
+            value: critical
+        groupWait: 10s
+        repeatInterval: 1h
+        continue: true
+      # Phone pages are an explicit API-path allowlist (owner decision 2026-08-13 after a
+      # node-pressure page): only alerts that mean api.unorouter.com is failing or its
+      # database is dying ring the phone. Everything else critical stays Discord-only.
+      # The pod/deployment/instance excludes keep frontend/bot/site instances of the
+      # shared alertnames (OOMKilled, PublicEndpointDown, ...) off the phone.
+      #
+      # The security alerts page too. They are not availability alerts, but somebody
+      # holding a working credential is time-critical in the same way a dead API is,
+      # and a Discord channel is not read at night. They stay narrow (key reveals, mass
+      # account edits, hardening flapping, 2FA churn) so the phone never rings for
+      # normal admin work.
+      - receiver: ntfy
+        matchers:
+          - name: severity
+            value: critical
+          - name: alertname
+            matchType: "=~"
+            value: "^(PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork)$"
+          - name: pod
+            matchType: "!~"
+            value: "unorouter.*"
+          - name: deployment
+            matchType: "!~"
+            value: "unorouter.*"
+          - name: instance
+            matchType: "!~"
+            value: "https://(www\\.)?unorouter\\.com.*"
+        groupWait: 10s
+        repeatInterval: 1h
+      - receiver: discord
+        matchers:
+          - name: severity
+            value: warning
+        groupWait: 5m
+        repeatInterval: 12h
+  receivers:
+    - name: "null"
+    # heartbeat target: any POST marks the check alive. sendResolved is off -- a resolved
+    # Watchdog would ping too and defeat the point.
+    - name: healthchecks
+      webhookConfigs:
+        - urlSecret:
+            name: alertmanager-discord
+            key: healthchecks
+          sendResolved: false
+    - name: edge-mode
+      webhookConfigs:
+        - url: http://edge-mode.monitoring.svc:8080/alert
+          sendResolved: true
+    # phone paging via the ntfy-bridge Deployment (reformats webhook JSON for ntfy.sh)
+    - name: ntfy
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/alert
+          sendResolved: true
+    - name: discord
+      discordConfigs:
+        - apiURL:
+            name: alertmanager-discord
+            key: webhook
+          sendResolved: true
+          # default template dumps every label, the full description paragraph, the runbook
+          # URL and an unreadable Source: query link -- a screen of text per alert. Keep it
+          # to what you act on: what broke, where, and the one-line summary.
+          title: '{{ if eq .Status "firing" }}[{{ .CommonLabels.severity | toUpper }}]{{ else }}[RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
+          message: |-
+            {{ range .Alerts -}}
+            {{ .Annotations.summary }}
+            {{ end -}}
+  inhibitRules:
+    # one root cause must not become an alert storm: a down node explains its pods, and
+    # etcd degradation explains the NodeNotReady it causes (incident 2026-07-24).
+    - sourceMatch:
+        - name: alertname
+          value: NodeNotReady
+      targetMatch:
+        - name: severity
+          value: warning
+      equal: [node]
+    - sourceMatch:
+        - name: severity
+          value: critical
+      targetMatch:
+        - name: severity
+          value: warning
+      equal: [alertname, namespace]

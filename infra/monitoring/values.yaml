@@ -1,0 +1,279 @@
+# kube-prometheus-stack. Whole stack is PINNED TO node7: local-path PVCs bind to one node
+# forever, so pinning is explicit rather than accidental. Swapping node7 later = delete the
+# Prometheus/Grafana/Alertmanager PVCs and lose history (no prod impact); see DR runbook.
+# node1 is deliberately avoided (pg primaries + OpenBao + argocd controllers, hottest node).
+
+nameOverride: kps
+fullnameOverride: kps
+
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector:
+      kubernetes.io/hostname: unorouter-node9
+    resources:
+      requests: { cpu: 20m, memory: 64Mi }
+      limits: { cpu: 100m, memory: 128Mi }
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 2Gi
+    # Routing lives in the AlertmanagerConfig CRD (extras/alertmanager-config.yaml) rather
+    # than an inline `config:` block: the CRD's discordConfigs.apiURL takes a Secret ref, so
+    # the webhook URL stays out of git. Inline config only supports a literal webhook_url
+    # (webhook_url_file is not in the discordConfig schema at v0.33.1).
+    alertmanagerConfiguration:
+      name: unorouter-alerts
+      global:
+        resolveTimeout: 5m
+
+grafana:
+  nodeSelector:
+    kubernetes.io/hostname: unorouter-node9
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 384Mi }
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    size: 2Gi
+  admin:
+    existingSecret: grafana-admin
+    userKey: adminUser
+    passwordKey: adminPassword
+  # dex OIDC, same IdP argocd + openbao use: one GitHub session, org-gated to unorouter/admins.
+  # Teleport gates the outer hop (tunnel -> proxy -> app); this gates Grafana's own identity.
+  extraSecretMounts:
+    - name: grafana-dex-sso
+      secretName: grafana-dex-sso
+      mountPath: /etc/secrets/grafana-oidc
+      readOnly: true
+  grafana.ini:
+    server:
+      root_url: https://grafana.unorouter.com
+    auth:
+      # no second login: Teleport already authenticated the user at the tunnel edge, so the
+      # JWT below logs them straight in. The form would only be a redundant prompt.
+      disable_login_form: true
+    auth.anonymous:
+      enabled: false
+    # PRIMARY path. Teleport signs every proxied request with a JWT in the
+    # Teleport-Jwt-Assertion header; Grafana verifies it against the cluster's public JWKS and
+    # signs the user in. One GitHub auth at Teleport = already logged into Grafana.
+    auth.jwt:
+      enabled: true
+      header_name: Teleport-Jwt-Assertion
+      jwk_set_url: https://teleport.unorouter.com/.well-known/jwks.json
+      cache_ttl: 60m
+      username_claim: sub
+      email_claim: sub
+      auto_sign_up: true
+      # Teleport puts the user's teleport roles in the `roles` claim. Everyone reaching this
+      # app already passed the GitHub org gate (unorouter/admins -> access,editor,...).
+      role_attribute_path: contains(roles[*], 'editor') && 'Admin' || 'Viewer'
+      role_attribute_strict: false
+    # FALLBACK only: direct dex login, used when reaching Grafana outside the Teleport tunnel
+    # (e.g. port-forward during an incident where the tunnel itself is the problem).
+    auth.generic_oauth:
+      enabled: true
+      name: GitHub (dex)
+      allow_sign_up: true
+      client_id: grafana
+      client_secret: $__file{/etc/secrets/grafana-oidc/grafanaClientSecret}
+      scopes: openid profile email groups
+      auth_url: https://dex.unorouter.com/auth
+      token_url: https://dex.unorouter.com/token
+      api_url: https://dex.unorouter.com/userinfo
+      # analogue of argocd's `g, unorouter:admins, role:admin`
+      role_attribute_path: contains(groups[], 'unorouter:admins') && 'Admin' || 'Viewer'
+      role_attribute_strict: false
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+
+prometheus:
+  prometheusSpec:
+    # the TSDB is reproducible-by-waiting and grows to the 16GB retention cap; backing it
+    # up nightly cost ~9GB in the Velero repo for data nobody would restore. Grafana
+    # dashboards (a separate PVC, ~260MB) are the part that is not reproducible.
+    podMetadata:
+      annotations:
+        backup.velero.io/backup-volumes-excludes: prometheus-kps-prometheus-db
+    # node9 (cx43, 8c/16GB). It lived on node1 from 2026-08-29 to 2026-09-02; node1 is
+    # the last 4-core node and also carries etcd's leader and ArgoCD, and on 2026-09-02
+    # it saturated within 90s every time it hosted the pg primary. Prometheus was ~1Gi
+    # and ~0.2 core of that. Keep it on a 16GB node until node1 is upgraded.
+    nodeSelector:
+      kubernetes.io/hostname: unorouter-node9
+    retention: 15d
+    # 10GB not 16GB: node1 has 34G free and the 16GB cap would park the node at 72% disk,
+    # brushing the 75% NodeDiskFillingUp threshold with normal image churn on top.
+    retentionSize: 10GB
+    resources:
+      requests: { cpu: 200m, memory: 700Mi }
+      limits: { cpu: 1000m, memory: 1536Mi }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 20Gi
+    # pick up ServiceMonitors/PrometheusRules from every namespace, not just ones the
+    # chart labels (CNPG + cilium ship their own in other namespaces).
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+# Histogram buckets from the apiserver and kubelet dominate cardinality (~300k series on a
+# 3-node cluster, over half from the kubelet job alone) and grow the TSDB, the Prometheus
+# heap and the nightly Velero volume with it.
+#
+# Dropped below are buckets NO rule and NO dashboard reads -- verified before removal.
+# KEEP apiserver_request_sli_duration_seconds_bucket: the chart's apiserver SLO burn-rate
+# alerts are built on it (25 rules, 3 dashboards). Same for etcd_disk_wal_fsync_*, which the
+# etcd-degradation alerts use. Re-check with a query against the rules before adding here.
+# NOTE: metricRelabelings REPLACES the chart default, it does not merge. The first entry
+# below is the chart's own bucket-thinning rule copied verbatim -- dropping it would ADD
+# series back. Keep it first when editing this list.
+kubeApiServer:
+  serviceMonitor:
+    metricRelabelings:
+      - sourceLabels: [__name__, le]
+        regex: (etcd_request|apiserver_request_slo|apiserver_request_sli|apiserver_request)_duration_seconds_bucket;(0\.15|0\.2|0\.3|0\.35|0\.4|0\.45|0\.6|0\.7|0\.8|0\.9|1\.25|1\.5|1\.75|2|3|3\.5|4|4\.5|6|7|8|9|15|20|40|45|50)(\.0)?
+        action: drop
+      - sourceLabels: [__name__]
+        regex: apiserver_(request_duration_seconds|request_body_size_bytes|response_sizes|watch_list_duration_seconds|watch_cache_read_wait_seconds|watch_events_sizes)_bucket
+        action: drop
+      - sourceLabels: [__name__]
+        regex: etcd_request_duration_seconds_bucket
+        action: drop
+      - sourceLabels: [__name__]
+        regex: workqueue_(work|queue)_duration_seconds_bucket
+        action: drop
+
+kubelet:
+  serviceMonitor:
+    # first entry = chart default (see the kubeApiServer note above); the rest are ours.
+    metricRelabelings:
+      - sourceLabels: [__name__, le]
+        regex: (csi_operations|storage_operation_duration)_seconds_bucket;(0.25|2.5|15|25|120|600)(\.0)?
+        action: drop
+      - sourceLabels: [__name__]
+        regex: (apiserver|etcd)_request_duration_seconds_bucket
+        action: drop
+      - sourceLabels: [__name__]
+        regex: workqueue_(work|queue)_duration_seconds_bucket
+        action: drop
+
+prometheusOperator:
+  nodeSelector:
+    kubernetes.io/hostname: unorouter-node9
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+
+kube-state-metrics:
+  nodeSelector:
+    kubernetes.io/hostname: unorouter-node9
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 192Mi }
+  # CNPG's own backup timestamp metrics stay at 0 when backups run through the Barman Cloud
+  # PLUGIN (cnpg_collector_last_available_backup_timestamp is only populated by the in-tree
+  # method), so base-backup freshness is not observable from them. Read the Backup CRs
+  # directly instead -- this is what makes the "backups silently never ran" alert real.
+  rbac:
+    extraRules:
+      - apiGroups: [postgresql.cnpg.io]
+        resources: [backups, scheduledbackups]
+        verbs: [list, watch]
+  extraArgs:
+    - --custom-resource-state-only=false
+  customResourceState:
+    enabled: true
+    config:
+      spec:
+        resources:
+          - groupVersionKind:
+              group: postgresql.cnpg.io
+              version: v1
+              kind: Backup
+            metricNamePrefix: cnpg_backup
+            metrics:
+              - name: completion_time
+                help: "CNPG Backup stopped-at timestamp"
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, stoppedAt]
+                    valueFrom: []
+                labelsFromPath:
+                  name: [metadata, name]
+                  cluster: [spec, cluster, name]
+                  phase: [status, phase]
+              - name: phase_info
+                help: "CNPG Backup phase"
+                each:
+                  type: Info
+                  info:
+                    path: [status]
+                    labelsFromPath:
+                      phase: [phase]
+                labelsFromPath:
+                  name: [metadata, name]
+                  cluster: [spec, cluster, name]
+
+prometheus-node-exporter:
+  # DaemonSet by design: every node needs its own exporter (that is the point).
+  # CPU limit deliberately generous relative to usage: scrape bursts are short and spiky,
+  # and a tight limit throttles them into permanent CPUThrottlingHigh noise.
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { cpu: 400m, memory: 96Mi }
+
+# --- k3s reality: these control-plane components are not separately addressable ---
+# k3s runs scheduler/controller-manager/proxy inside the server process; kube-proxy is
+# disabled entirely (Cilium replaces it). Leaving them on produces permanently-down targets
+# that train you to ignore red.
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+# etcd IS scraped, but via an explicit endpoints list (below) because k3s binds 2381 to the
+# node private IP; the chart's default selector finds nothing.
+kubeEtcd:
+  enabled: false
+
+defaultRules:
+  create: true
+  # chart defaults that only ever described normal life on 2 to 4 vCPU nodes or a rollout in
+  # progress (30-day audit 2026-09-04: these were 1,500 of ~2,000 firing episodes, zero acted on)
+  disabled:
+    NodeSystemSaturation: true
+    NodeCPUHighUsage: true
+    NodeMemoryMajorPagesFaults: true
+    NodeDiskIOSaturation: true
+    KubePodNotReady: true
+    KubeDeploymentReplicasMismatch: true
+    KubeStatefulSetReplicasMismatch: true
+    KubeContainerWaiting: true
+    KubePdbNotEnoughHealthyPods: true
+    TargetDown: true
+    KubeJobFailed: true
+  rules:
+    # disabled to match the components turned off above
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeControllerManager: false
+    kubeProxy: false
+    etcd: false

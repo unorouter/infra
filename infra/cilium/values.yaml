@@ -1,0 +1,50 @@
+# Cilium owns CNI + kube-proxy replacement. Public ingress is the cloudflared tunnel
+# (outbound-only) and teleport's svc externalIPs (eBPF) -- no Envoy edge, no Gateway API,
+# no host :80/:443 listeners.
+kubeProxyReplacement: true
+
+# valid ONLY while every node is a k3s server (apiserver on each host); adding an agent
+# node requires pointing this at a real apiserver address first
+k8sServiceHost: 127.0.0.1
+k8sServicePort: 6443
+
+ipam:
+  operator:
+    # k3s default podCIDR
+    clusterPoolIPv4PodCIDRList:
+      - 10.42.0.0/16
+
+# no L7 policies / no Gateway -> the dedicated Envoy DaemonSet is idle weight
+envoy:
+  enabled: false
+
+hubble:
+  # relay kept for cluster-wide `hubble observe` (CLI). UI removed 2026-07-23: rarely opened,
+  # flows are reachable via `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe`.
+  relay:
+    enabled: true
+  ui:
+    enabled: false
+
+operator:
+  replicas: 1
+  prometheus:
+    enabled: true
+
+# agent + operator metrics for the CiliumAgentMissing / network alerts. serviceMonitor stays
+# off: it needs the Prometheus CRDs at Cilium install time, which do not exist on a DR
+# rebuild (Cilium comes up before ArgoCD). A PodMonitor in monitoring/extras covers it.
+prometheus:
+  enabled: true
+
+# a restart must touch ONE node at a time: eBPF programs live in the kernel and keep
+# forwarding while an agent is down (bpffs is mounted), but pod creation and policy updates
+# stall on that node meanwhile. Default maxUnavailable=2 would take 2 of 3 at once.
+updateStrategy:
+  rollingUpdate:
+    maxUnavailable: 1
+
+# NOTE: these values are ALSO inlined in tofu/cloud-init.yaml.tftpl, because bootstrap
+# cannot reference git before ArgoCD exists. KEEP THE TWO IN SYNC.
+# Live changes go through node1's /var/lib/rancher/k3s/server/manifests/cilium.yaml
+# (helm-controller reconciles it); this file is docs + the `make bootstrap` fallback.

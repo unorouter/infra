@@ -1,0 +1,17 @@
+# DB access role: least-privilege reader on newapi-pg. The masking is enforced in
+# postgres, not here: databases/reader-least-privilege.sql revokes pg_read_all_data and
+# grants SELECT per table, naming columns wherever a table carries a secret.
+#
+# The RLS policy on `options` used to be the whole of it, which left the role able to
+# read every PAT, API key, password hash, upstream provider key and TOTP seed in the
+# database -- including root's second factor. Applied via tctl create -f.
+kind: role
+version: v7
+metadata:
+  name: newapi-db-reader
+spec:
+  allow:
+    db_labels:
+      env: prod
+    db_names: ["newapi"]
+    db_users: ["reader"]

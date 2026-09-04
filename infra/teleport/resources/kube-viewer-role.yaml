@@ -1,0 +1,19 @@
+# Read-only kubectl tier for the readonly GitHub team. Maps into k8s group
+# `teleport-viewers`, which kube-viewer-binding.yaml binds to the built-in `view`
+# ClusterRole: pods/logs/deployments/services readable cluster-wide, k8s Secrets
+# NOT readable. Teleport-side verbs are also pinned read-only so neither layer
+# alone is load-bearing. Applied via tctl create -f.
+kind: role
+version: v7
+metadata:
+  name: kube-viewer
+spec:
+  allow:
+    kubernetes_labels:
+      "*": "*"
+    kubernetes_groups: ["teleport-viewers"]
+    kubernetes_resources:
+      - kind: "*"
+        name: "*"
+        namespace: "*"
+        verbs: ["get", "list", "watch"]

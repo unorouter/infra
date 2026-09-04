@@ -1,0 +1,167 @@
+# Edge mode toggler. Alertmanager posts CloudflaredStreamFlood here; firing switches the
+# Cloudflare zone into attack mode, resolved switches back after a hold. It edits a few rules
+# in place, found by description, so the encrypted rule files in infra/cloudflare stay the
+# source of truth and apply.sh attack|normal does the same thing by hand. Thresholds come
+# from the same OpenBao secret as the token, not from this file.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: edge-mode
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: edge-mode
+    creationPolicy: Owner
+  data:
+    - secretKey: CF_API_TOKEN
+      remoteRef: { key: cloudflare-edge, property: token }
+    - secretKey: CF_ZONE_ID
+      remoteRef: { key: cloudflare-edge, property: zone_id }
+    - secretKey: EDGE_RATE_NORMAL
+      remoteRef: { key: cloudflare-edge, property: rate_normal }
+    - secretKey: EDGE_RATE_ATTACK
+      remoteRef: { key: cloudflare-edge, property: rate_attack }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-mode
+  namespace: monitoring
+data:
+  server.py: |
+    import json, os, threading, time, urllib.request
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    TOKEN = os.environ["CF_API_TOKEN"]; ZONE = os.environ["CF_ZONE_ID"]
+    HOLD = int(os.environ.get("EDGE_HOLD_SECONDS", "1800"))
+    ALERT = os.environ.get("EDGE_ALERTNAME", "CloudflaredStreamFlood")
+    API = f"https://api.cloudflare.com/client/v4/zones/{ZONE}/rulesets/phases"
+    BROWSER_HOSTS = '(http.host in {"unorouter.com" "www.unorouter.com" "status.unorouter.com"})'
+    UA_RULE = {"action": "set_config", "enabled": True, "description": "ATTACK MODE: browser hosts",
+               "expression": BROWSER_HOSTS, "action_parameters": {"security_level": "under_attack"}}
+    COOKIELESS = "frontend host: challenge cookie-less"
+    RATE = {"normal": int(os.environ["EDGE_RATE_NORMAL"]), "attack": int(os.environ["EDGE_RATE_ATTACK"])}
+    state = {"mode": None, "timer": None, "changed": None}
+    lock = threading.Lock()
+
+    def cf(method, path, body=None):
+        req = urllib.request.Request(API + path, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                     headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            d = json.load(r)
+        if not d.get("success"):
+            raise RuntimeError(f"{method} {path}: {d.get('errors')}")
+        return d["result"]
+
+    def strip(rule):
+        keep = ("action", "expression", "description", "enabled", "action_parameters", "ratelimit", "logging")
+        return {k: rule[k] for k in keep if k in rule}
+
+    def current_mode():
+        rules = cf("GET", "/http_config_settings/entrypoint")["rules"]
+        return "attack" if any(r["description"].startswith("ATTACK MODE") for r in rules) else "normal"
+
+    def set_mode(mode):
+        cfg = [strip(r) for r in cf("GET", "/http_config_settings/entrypoint")["rules"] if not r["description"].startswith("ATTACK MODE")]
+        if mode == "attack": cfg.append(UA_RULE)
+        cf("PUT", "/http_config_settings/entrypoint", {"rules": cfg})
+        custom = [strip(r) for r in cf("GET", "/http_request_firewall_custom/entrypoint")["rules"]]
+        for r in custom:
+            if r["description"].startswith(COOKIELESS): r["enabled"] = (mode == "attack")
+        cf("PUT", "/http_request_firewall_custom/entrypoint", {"rules": custom})
+        rl = [strip(r) for r in cf("GET", "/http_ratelimit/entrypoint")["rules"]]
+        for r in rl:
+            if r["ratelimit"]["period"] == 60:
+                r["ratelimit"]["requests_per_period"] = RATE[mode]
+                r["description"] = ("ATTACK MODE: " if mode == "attack" else "") + f"auto-ban above {RATE[mode]} requests a minute per IP, one hour"
+        cf("PUT", "/http_ratelimit/entrypoint", {"rules": rl})
+        state["mode"] = mode; state["changed"] = time.time()
+        print(f"{time.strftime('%FT%T')} mode -> {mode}", flush=True)
+
+    def schedule_normal():
+        with lock:
+            if state["timer"]: state["timer"].cancel()
+            t = threading.Timer(HOLD, lambda: request("normal", "hold expired")); t.daemon = True; t.start()
+            state["timer"] = t
+
+    def request(mode, why):
+        with lock:
+            if mode == "attack" and state["timer"]: state["timer"].cancel(); state["timer"] = None
+            if state["mode"] == mode:
+                print(f"{time.strftime('%FT%T')} already {mode} ({why})", flush=True); return
+            try: set_mode(mode)
+            except Exception as e: print(f"{time.strftime('%FT%T')} FAILED {mode}: {e}", flush=True)
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            body = json.dumps({"mode": state["mode"], "changed": state["changed"], "hold_seconds": HOLD}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0)); raw = self.rfile.read(n) if n else b"{}"
+            if self.path.startswith("/set/"):
+                mode = self.path.split("/")[2]
+                if mode in RATE:
+                    request(mode, "manual")
+                    if mode == "attack": schedule_normal()
+                self.send_response(200); self.end_headers(); return
+            try:
+                p = json.loads(raw or b"{}")
+                names = {a.get("labels", {}).get("alertname") for a in p.get("alerts", [])} | {p.get("commonLabels", {}).get("alertname")}
+                if ALERT in names:
+                    if p.get("status") == "firing": request("attack", "alert firing")
+                    else: schedule_normal()
+                self.send_response(200)
+            except Exception as e:
+                print(f"bad payload: {e}", flush=True); self.send_response(400)
+            self.end_headers()
+
+    state["mode"] = current_mode()
+    print(f"{time.strftime('%FT%T')} start, mode={state['mode']}, hold={HOLD}s", flush=True)
+    HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-mode
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: edge-mode }
+  template:
+    metadata:
+      labels: { app: edge-mode }
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions: [{ key: kubernetes.io/hostname, operator: NotIn, values: [unorouter-node1] }]
+      containers:
+        - name: edge-mode
+          image: python:3.12-alpine
+          command: ["python3", "-u", "/app/server.py"]
+          envFrom: [{ secretRef: { name: edge-mode } }]
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 5m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes:
+        - name: app
+          configMap: { name: edge-mode }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge-mode
+  namespace: monitoring
+spec:
+  selector: { app: edge-mode }
+  ports: [{ port: 8080, targetPort: 8080 }]

@@ -1,0 +1,40 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 88.6.4
+      helm:
+        valueFiles:
+          - $values/infra/monitoring/values.yaml
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      path: infra/monitoring/extras
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  # ESO rewrites fields on its ExternalSecrets, so without this the app sits permanently
+  # OutOfSync and selfHeal fires selective syncs in a loop. That loop is worse than churn:
+  # auto-sync dedupes by revision, so after one full-sync attempt the controller only ever
+  # re-syncs the drifting resources -- NEW manifests in extras/ never get applied, and
+  # manual sync ops get overwritten by the self-heal racer within seconds (2026-08-12).
+  ignoreDifferences:
+    - group: external-secrets.io
+      kind: ExternalSecret
+      managedFieldsManagers: [external-secrets]
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
