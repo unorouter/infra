@@ -175,22 +175,3 @@ watches that route has a measured baseline of zero: eight such rows exist in the
 
 Volume-based alerting could not have helped. The attacker's peak was 4 refusals per
 5-minute bucket against a normal p95 of 34.
-
-## Follow-ups still open
-
-- `user.update` audit rows still record no field values. This is why the password
-  changes needed a database restore to find, and it would happen again.
-- Service tokens rotate through OpenBao and a pod restart rather than from the
-  dashboard. That is deliberate: the alternative is the options table, which is
-  readable from the dashboard, and reading the options table is part of what the
-  intruder did. The credential is re-read from the environment on every request,
-  so rotation takes as long as an ESO sync plus a rollout, not a redeploy.
-- `SessionOnly()` covers 9 of 111 mutating routes. Scoped deliberately to
-  credential-changing routes, but the class is not closed.
-- Bot and sync scoping has no test coverage; both gates are single `if` statements.
-- ~~Capture `CF-IPCountry` and `Accept-Language` on authentication events.~~ Done:
-  refused attempts now record both. The edge sets `CF-IPCountry` and overwrites
-  any client-supplied value, so it cannot be forged from outside; `Accept-Language`
-  is client-controlled and is stored only as a signal to correlate against a
-  credential's normal traffic. The only origin evidence in this incident was IP
-  ownership, which needed manual WHOIS work and decays as addresses are recycled.
