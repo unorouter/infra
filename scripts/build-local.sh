@@ -61,6 +61,10 @@ print("\n".join(f"{k}={v}" for k, v in sorted(d.items()) if not k.startswith("NE
 ' >> "$SRC/.env"
 fi
 
+# Every request this script makes to unorouter.com goes through the same edge rules a
+# visitor does, so it must look like one or it is refused as a bot.
+BROWSER_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
 SHA=$(git -C "$SRC" rev-parse HEAD)
 if [ -n "$(git -C "$SRC" status --porcelain | grep -v '^?? ')" ]; then
   echo "!! working tree dirty: the image would not match commit $SHA" >&2
@@ -119,10 +123,9 @@ Built locally (GitHub Actions unavailable)."
     echo ">> waiting for $SHA to go live (ArgoCD polls git ~3min, then rollout + probes)"
     live=""
     for i in $(seq 1 240); do
-      # Browser UA: Cloudflare answers a bare curl on this hostname with a 403 HTML
-      # challenge, which parsed as version "?" and reported every deploy as never
-      # going live. Verified 2026-09-03 with the pinned build live and healthy.
-      live=$(curl -fsS --max-time 10 -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36" \
+      # Browser UA everywhere on this hostname: the edge treats a bare curl as a bot,
+      # which parsed as version "?" and reported every deploy as never going live.
+      live=$(curl -fsS --max-time 10 -A "$BROWSER_UA" \
              "https://unorouter.com/api/ops/health?hc=$i-$RANDOM" 2>/dev/null \
              | python3 -c 'import sys,json;print(json.load(sys.stdin).get("version","?"))' 2>/dev/null || echo "?")
       [ "$live" = "$SHA" ] && break
@@ -139,7 +142,7 @@ Built locally (GitHub Actions unavailable)."
     # Guards the localhost-self-call regression that silently emptied every model
     # page from the sitemap. Fails loudly rather than leaving SEO quietly broken.
     echo ">> assert sitemap has model pages"
-    sm=$(curl -fsS --max-time 60 "https://unorouter.com/sitemap.xml")
+    sm=$(curl -fsS --max-time 60 -A "$BROWSER_UA" "https://unorouter.com/sitemap.xml")
     models=$(printf '%s' "$sm" | grep -oE '<loc>[^<]*</loc>' \
       | grep -cE '/(models|modeles|modelle|moxing|mo-hinh|moderu|modelli|modelos|modeu|modeller|model|modele|madal)/[^<]+' || true)
     echo "   $(printf '%s' "$sm" | grep -c '<loc>') urls, $models model pages"
@@ -166,7 +169,7 @@ for k in ("INDEXNOW_KEY",):
       | awk -F/ 'NF<=5' > /tmp/warm-urls.txt
     echo "   warming $(wc -l < /tmp/warm-urls.txt) urls"
     timeout 12m xargs -P 12 -n 1 -a /tmp/warm-urls.txt -I{} \
-      curl -s -o /dev/null -w '%{http_code} {}\n' --max-time 15 {} > /tmp/warm-codes.txt 2>/dev/null || true
+      curl -s -o /dev/null -w '%{http_code} {}\n' -A "$BROWSER_UA" --max-time 15 {} > /tmp/warm-codes.txt 2>/dev/null || true
     cut -d' ' -f1 /tmp/warm-codes.txt | sort | uniq -c
     grep -v '^200 ' /tmp/warm-codes.txt | head -20 || true
   fi
