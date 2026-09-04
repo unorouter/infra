@@ -2,7 +2,7 @@
 
 ## Topology
 
-node1 cx33 fsn1 (10.100.1.1) + node8 cx43 hel1 (10.100.1.3) + node9 cx43 nbg1 (10.100.1.2).
+node8 cx43 hel1 (10.100.1.3) + node9 cx43 nbg1 (10.100.1.2) + node10 cx43 hel1 (10.100.1.4).
 All k3s SERVERS, embedded etcd -- quorum survives a full DC outage. Private net 10.100.0.0/16
 carries etcd/vxlan/apiserver-kubelet.
 
@@ -99,7 +99,7 @@ alerting can never report about itself. Ping URL is in OpenBao `secret/alertmana
    roles -- after any connector change, `tsh logout` THEN login.
 2. **Direct kubeconfig**: `kubectl --context unorouter-direct` or
    `export KUBECONFIG=$PWD/kubeconfig` (hits node1 :6443).
-3. **Raw SSH**: `ssh root@$(./scripts/dr.sh NODE_IP unorouter-node1)` (or `dr.sh ips` to list
+3. **Raw SSH**: `ssh root@<node tailscale ip>` (Tailscale SSH; `dr.sh ips` lists public IPs)
    all) -- for the layer BELOW k8s (etcd/quorum recovery, k3s install/stop, disk/journal) when
    the kube API itself is dead.
 
@@ -135,7 +135,7 @@ therefore easy to forget here. Replicate by hand, from `tofu/cloud-init-join.yam
   swapon /swapfile`, append `/swapfile none swap sw 0 0` to /etc/fstab,
   `sysctl vm.swappiness=10` (+ persist in /etc/sysctl.d/).
 - k3s install with the template's EXACT `INSTALL_K3S_EXEC` flags (server, --server
-  https://10.100.1.1:6443, node-ip/advertise-address = its private IP, flannel none,
+  https://10.100.1.3:6443, node-ip/advertise-address = its private IP, flannel none,
   no traefik/servicelb/kube-proxy, `--etcd-expose-metrics=true`,
   `--kubelet-arg=fail-swap-on=false`, image-gc-high/low 70/55) and the pinned
   `INSTALL_K3S_VERSION` (`tofu/.env` TF_VAR_k3s_version -- must match the running fleet).

@@ -7,13 +7,16 @@
 chartMode: standalone
 clusterName: teleport.unorouter.com
 
-# ACME (Let's Encrypt): Teleport auto-gets + renews a cert. Needs teleport.unorouter.com DNS
-# -> node IP (grey-cloud, NOT behind CF proxy) + port 443 reachable.
-acme: true
-acmeEmail: don.cryptus@gmail.com
+# The proxy is reached through the Cloudflare tunnel, so no public port 443 exists on any
+# node and an ACME http/tls challenge can never complete. Cloudflare terminates the real
+# TLS; this in-cluster hop uses a long-lived self-signed cert that cloudflared accepts with
+# noTLSVerify (see infra/cloudflared, originServerName teleport.unorouter.com).
+acme: false
+tls:
+  existingSecretName: teleport-origin-tls
 
-# grey-cloud + own hostNetwork port: ALPN multiplex needs raw TLS passthrough (NOT CF proxy,
-# NOT Cilium Gateway). hostNetwork binds the proxy on the node's public IP directly.
+# ALPN multiplexing on one port. tsh rides Teleport's WebSocket connection upgrade through
+# the tunnel, which is what makes a layer-7 proxy in front of it work at all.
 proxyListenerMode: multiplex
 
 persistence:

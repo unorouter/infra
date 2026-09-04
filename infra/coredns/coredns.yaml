@@ -184,7 +184,7 @@ spec:
               - key: kubernetes.io/hostname
                 operator: NotIn
                 values:
-                - unorouter-node1
+                - unorouter-node8
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 50

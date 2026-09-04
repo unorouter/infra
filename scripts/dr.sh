@@ -18,9 +18,9 @@ for s in json.load(sys.stdin).get('servers',[]):
 "
 }
 
-# single node's IP by name, for scripting: NODE_IP unorouter-node1
+# single node's IP by name, for scripting: NODE_IP unorouter-node8
 NODE_IP() {
-  local want="${1:-unorouter-node1}"
+  local want="${1:-unorouter-node8}"
   set -a && . ./tofu/.env && set +a
   curl -sf -H "Authorization: Bearer $TF_VAR_hcloud_token" "https://api.hetzner.cloud/v1/servers?name=$want" \
     | python3 -c "

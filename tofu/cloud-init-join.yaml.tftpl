@@ -31,7 +31,7 @@ runcmd:
     PUBLIC_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
     mkdir -p /var/lib/rancher/k3s/server/manifests && touch /var/lib/rancher/k3s/server/manifests/coredns.yaml.skip   # CoreDNS is ArgoCD-managed (infra/coredns)
     export INSTALL_K3S_EXEC="server \
-      --server https://10.100.1.1:6443 \
+      --server https://10.100.1.3:6443 \
       --token '${k3s_token}' \
       --node-ip ${private_ip} \
       --node-external-ip $PUBLIC_IP \
