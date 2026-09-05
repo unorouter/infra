@@ -416,6 +416,6 @@ spec:
             summary: "sync job {{ $labels.job_name }} failed"
             description: >-
               `kubectl -n services logs job/{{ $labels.job_name }}` and read the
-              `[pricing]` block at the end: healed entries, dropped entries, and
+              `[pricing-audit]` block at the end: healed entries, dropped entries, and
               models on enabled channels that carry no price. Clears when the
               failed Job ages out of failedJobsHistoryLimit.
