@@ -1,14 +1,16 @@
 # infra
 
-unorouter revenue stack: 3-node k3s HA on Hetzner (node1 cx33 fsn1, node8 cx43 hel1, node9 cx43
-nbg1; embedded etcd, one node per DC). Private net 10.100.0.0/16. node6/7 swapped out
-2026-08-29/31, node1 next (`scripts/hetzner-snipe.sh` hunts the spare).
+unorouter revenue stack: 3-node k3s HA on Hetzner (node8 cx43 hel1, node9 cx43 nbg1, node10
+cx43 hel1; embedded etcd). Private net 10.100.0.0/16. node6/7/1 swapped out 2026-08-29 to
+09-04; `scripts/hetzner-snipe.sh` hunts an fsn1 box to restore the three-DC spread.
 
 Stack: k3s + Cilium (no kube-proxy) + ArgoCD (app-of-apps) + CloudNativePG (Barman plugin ->
 Hetzner S3 PITR) + OpenBao + ESO + cloudflared + kube-prometheus-stack. Secrets: SOPS/age in
-git, OpenBao at runtime. TLS: Cloudflare tunnel + Origin cert. Edge: Cloudflare Pro, rules
-encrypted in this repo. Admin plane: Tailscale; the Hetzner firewall allows NO inbound TCP.
-Teleport is paused. Runbook and break-glass: `bootstrap/dr/README.md`. Post-mortems: `incidents/`.
+git, OpenBao at runtime. TLS: everything enters through the Cloudflare tunnel; the only origin
+cert that matters is the Teleport proxy's (cert-manager, DNS-01). Edge: Cloudflare Pro, rules
+encrypted in this repo. Admin plane: Tailscale for nodes and kubeconfig, Teleport for audited
+access; the Hetzner firewall allows NO inbound TCP. Runbook and break-glass:
+`bootstrap/dr/README.md`. Post-mortems: `incidents/`.
 
 ## Adding a service !SELF-SERVE
 
@@ -19,8 +21,9 @@ Teleport is paused. Runbook and break-glass: `bootstrap/dr/README.md`. Post-mort
    (`namespace: databases`).
 2. Push. [apps/appset-services.yaml](apps/appset-services.yaml) scans the org and creates the
    Application within ~15 min (patch the ApplicationSet spec to force a rescan).
-3. CI `deploy` job seds the built SHA into `k8s/` and commits with `GITHUB_TOKEN` (copy from
-   new-api / unorouter-bot).
+3. Push to `main` runs the `GHCR Image` workflow (multi-arch build, then a `deploy(<repo>):
+   <sha>` pin commit by `unorouter-ci`; ArgoCD rolls it in 10 to 20 min). Pin commits do not
+   retrigger it (`paths-ignore: k8s/deployment.yaml`). Copy the workflow from new-api.
 
 - **Pin images to a git SHA, never `:latest`**: a floating tag changes no manifest, ArgoCD sees
   no diff, nothing deploys.
@@ -29,7 +32,12 @@ Teleport is paused. Runbook and break-glass: `bootstrap/dr/README.md`. Post-mort
   for a 10-minute token on one KV path (`ghcr.yml`, step "Fetch build secrets from OpenBao").
   `NEXT_PUBLIC_*` are not secrets and live in a committed `.env.public`. Vault side:
   `./scripts/openbao-ci-auth.sh`.
-- Actions down: `./scripts/build-local.sh <repo> [--deploy]` builds the same artifact locally.
+- `./scripts/build-local.sh <repo> [--deploy]` builds the same artifact locally (amd64, faster
+  for hotfixes, coexists with CI, the only path for new-api-sync). A deploy is done when ArgoCD
+  shows the new image, never because a push or a workflow succeeded.
+- CI reaches OpenBao at `openbao-ci.unorouter.com`, which is exempt from the edge relay-key
+  block; if the rule is ever rewritten, keep the exemption (symptom: "Get Vault Secrets" fails
+  with a Cloudflare 403 page).
 - Generated apps run under the restricted `apps` AppProject
   ([apps/appproject-apps.yaml](apps/appproject-apps.yaml)): `services` + `databases` only, no
   cluster-scoped resources. Shared secrets (`ClusterSecretStore/vault-backend`, `ghcr-pull`,
@@ -46,8 +54,9 @@ node IP and is gone.
 
 ## Ops UIs
 
-argocd / openbao / grafana.unorouter.com route to Teleport App Access, **paused since
-2026-09-03** (entry IP removed, agent at 0 replicas). Until re-homed behind the mesh:
+argocd / openbao / grafana.unorouter.com are Teleport App Access: the request lands on the
+proxy through the tunnel, the launcher runs GitHub SSO, the agent forwards to the service.
+Fallback when Teleport is down:
 
 ```sh
 kubectl -n argocd port-forward svc/argocd-server 8080:443
@@ -55,14 +64,17 @@ kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
 kubectl -n openbao port-forward svc/openbao 8200:8200
 ```
 
-No local passwords: ArgoCD `admin.enabled: false` (dex), Grafana login form off, OpenBao has
-no userpass. Hubble: `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe -f`.
+No local passwords: ArgoCD `admin.enabled: "false"` (GitHub through dex, `url` must stay
+`https://argocd.unorouter.com` or SSO fails with "Invalid redirect URL"), Grafana login form
+off, OpenBao has no userpass. Hubble: `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe -f`.
 
 ## Monitoring
 
 kube-prometheus-stack in `monitoring`, on node9 (local-path PVC; swapping that node loses
 history, no prod impact; a PVC pinned to a dead node stays Pending forever, delete PVC+PV).
-Rules: `infra/monitoring/extras/rules-unorouter.yaml`, each from a real incident.
+Rules: `infra/monitoring/extras/rules-unorouter.yaml` (platform, each from a real incident) and
+`rules-security.yaml` (account takeover steps, card chargebacks, guest chat abuse), the latter
+fed by SQL over the gateway's audit rows in `cnpg-security-queries.yaml`.
 
 - **Routing is drop-by-default**: root receiver `null`, only critical/warning reach Discord.
   Critical also pages the phone via ntfy (`extras/ntfy-bridge.yaml`, topic URL in OpenBao
@@ -93,6 +105,9 @@ skips bot management and challenges; browser surfaces are challenged on signal; 
 auto-ban catches single-source floods. Details: `incidents/2026-09-03-l7-ddos.md`.
 
 - Attack mode is automatic (edge-mode); manual `./apply.sh attack` / `normal`.
+- A challenge is only ever placed on a page navigation. A fetch, a service worker, a manifest or
+  an OAuth start cannot render one, so those paths are either skipped or blocked, never
+  challenged (9,345 silent failures in one day before this rule, 2026-09-05).
 - Pro until 2027-09. Pro-only pieces in use: Super Bot Fight Mode (skipped for the machine
   surface), the Cloudflare Managed WAF ruleset on browser surfaces, the 1 h auto-ban, Polish.
   Downgrade day: `CF_PLAN=free ./apply.sh` reshapes to 4 custom rules and one 10 s rate limit.
@@ -127,13 +142,13 @@ Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest |
 | --- | --- | --- |
 | k3s | v1.36.4+k3s1 | node binary swap, one server at a time (tofu var `k3s_version` empty = stable channel) |
 | hcloud tofu provider | 1.66.1 (constraint ~> 1.49, lock file) | tofu/providers.tf |
-| Cilium | 1.20.1 | node1 `/var/lib/rancher/k3s/server/manifests/cilium.yaml` + cloud-init template |
-| cert-manager | v1.21.1 | infra/cert-manager |
+| Cilium | 1.20.1 | live HelmChart CR `cilium` in kube-system + cloud-init template |
+| cert-manager | v1.21.1 (+ `letsencrypt-dns` ClusterIssuer, token from OpenBao) | infra/cert-manager |
 | CNPG operator | 1.30.0 | infra/cnpg-operator |
 | Barman Cloud plugin | 0.15.0 | infra/cnpg-operator |
 | CNPG Postgres | newapi 15, bot 18 (standard-bookworm) | databases/{newapi,bot}-pg |
 | OpenBao | chart 0.29.4 (app 2.6.2) | apps/openbao.yaml + infra/openbao/values.yaml tag; sts is OnDelete, delete the pod, then unseal (3 of 5 keys, sops) |
-| ArgoCD | 3.5.2 (chart 10.7.1) | tofu/cloud-init.yaml.tftpl HelmChart, patch the live CR too |
+| ArgoCD | 3.5.2 (chart 10.7.1) | live HelmChart CR `argo-cd` in kube-system (patch `spec.valuesContent`) + tofu/cloud-init.yaml.tftpl |
 | ESO | 2.10.0 | helm --version |
 | cloudflared | 2026.8.3 | apps/cloudflared.yaml |
 | Teleport (+ kube-agent) | 18.10.1 | apps/teleport.yaml |
@@ -158,10 +173,29 @@ allows 22 and 6443 only). Public node IPs accept nothing.
    (reads IPs from the Hetzner API with only `TF_VAR_hcloud_token`; IPs are not in git), else
    Hetzner VNC console (root password in the password manager) or rescue mode.
 
-Teleport (audited `tsh` access, GitHub team -> role mapping in `infra/teleport/resources/`)
-is being re-homed behind the tunnel (its public entry IP is gone). Auth/proxy run in-cluster. Org hardening that must stay regardless: base
-repo permission `none`, member repo creation OFF (the ApplicationSet deploys any org repo with
-`k8s/`), contributions via fork PRs.
+### Teleport
+
+Audited access, entirely behind the tunnel: auth and proxy in-cluster (`infra/teleport`), the
+app/db/kube agent in `teleport-agent` (`infra/teleport-app-access`). GitHub team -> roles
+(`infra/teleport/resources/`): `admins` everything, `readonly` auditor + kube-viewer +
+newapi-db-reader, `debuggers` pods in `services` only. Someone outside the org gets the
+GitHub authorize page and then nothing: invite them to a team first.
+
+- `tsh login --proxy=teleport.unorouter.com:443 --auth=github` (12 h cert). kubectl cannot talk
+  to the proxy through an L7 edge: use `tsh kubectl ...` or `tsh proxy kube
+  teleport.unorouter.com` and the kubeconfig it prints. The kube cluster is registered as
+  `teleport.unorouter.com`.
+- In-cluster clients resolve the proxy to its Service (`infra/coredns/coredns-custom.yaml`), so
+  the agent's reverse tunnel never crosses Cloudflare.
+- The proxy cert comes from cert-manager (`infra/cert-manager/issuer.yaml`, Secret
+  `teleport-origin-tls`). Teleport does not reload it: `rollout restart deploy/teleport-proxy`
+  after each renewal.
+- The agent keeps its identity in Secret `teleport-app-access-0-state`, not in its volume. After
+  an auth rebuild it logs `no authorities for hostname` forever: scale the sts to 0, delete
+  that Secret, scale to 1.
+
+Org hardening that must stay regardless: base repo permission `none`, member repo creation
+OFF (the ApplicationSet deploys any org repo with `k8s/`), contributions via fork PRs.
 
 ### Node disk
 
@@ -198,17 +232,18 @@ fresh apply brings the stack up from git. Prerequisites: age key `~/.config/sops
 - After changing a `--node-ip`: restart the cilium DaemonSet.
 - CNPG uses the Barman Cloud PLUGIN; Hetzner S3 needs the boto3 checksum workaround + path
   addressing. Test-restore from the real bucket is a hard gate (cnpg#6645).
-- cert-manager ACME is blocked by Cilium (cilium#45705): Cloudflare certs only.
+- ACME HTTP-01 can never reach an origin behind the tunnel: issue with the `letsencrypt-dns`
+  ClusterIssuer (DNS-01 through the Cloudflare token) or use Cloudflare's own certs.
 - Node ops manual, one node per apply, plan reviewed (a both-nodes `-replace` = 34 min DB
   outage, DR runbook).
 - new-api master stays replicas:1. CNPG primaries drift on failover: read
   `status.currentPrimary` every time.
-- **node1's `/var/lib/rancher/k3s/server/manifests/*.yaml` are authoritative for Cilium and
-  ArgoCD.** Every k3s restart re-applies them. Patching the HelmChart CR live and leaving the
-  file behind means the next restart downgrades; on 2026-09-03 that downgrade failed, the
-  helm-controller's default `reinstall` policy uninstalled ArgoCD with `crds.keep: false`, and
-  every Application vanished (workloads survived, restored from `root-app.yaml` + git). Upgrade
-  by editing the file on node1 AND `tofu/cloud-init.yaml.tftpl`; both HelmCharts now carry
-  `failurePolicy: abort` and ArgoCD keeps its CRDs.
+- **The Cilium and ArgoCD HelmChart CRs exist only in the cluster.** node1, the cluster-init
+  node that carried their bootstrap files, is gone and node10 has none. Upgrade by patching
+  the live CR (`spec.valuesContent`) AND `tofu/cloud-init.yaml.tftpl`, which is the DR copy.
+  Both carry `failurePolicy: abort` and ArgoCD keeps its CRDs, because on 2026-09-03 a
+  re-applied bootstrap file with the default `reinstall` policy uninstalled ArgoCD and every
+  Application vanished (workloads survived, restored from `root-app.yaml` + git). If a future
+  cluster-init node gets bootstrap files again, they become authoritative on every k3s restart.
 - Firewall (`tofu/firewall.tf`) allows Tailscale UDP + ICMP only. Never open 22/6443 without a
   source IP and a removal step.
