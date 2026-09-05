@@ -1,0 +1,14 @@
+# Imported by the Corefile (import /etc/coredns/custom/*.override). In-cluster clients, above
+# all the Teleport agent, reach the proxy directly instead of through Cloudflare: the reverse
+# tunnel needs end-to-end TLS with ALPN, which an L7 edge cannot pass.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  teleport.override: |
+    rewrite stop {
+      name exact teleport.unorouter.com teleport.teleport.svc.cluster.local
+      answer auto
+    }
