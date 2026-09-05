@@ -4,3 +4,4 @@ kind: Kustomization
 # and later for any non-CF-proxied cert issuance. Verified latest 2026-09-03.
 resources:
   - https://github.com/cert-manager/cert-manager/releases/download/v1.21.1/cert-manager.yaml
+  - issuer.yaml
