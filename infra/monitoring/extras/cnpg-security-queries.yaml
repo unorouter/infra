@@ -645,8 +645,8 @@ data:
 
     newapi_creem_reversals:
       query: |
-        SELECT count(*) FILTER (WHERE content LIKE 'Creem dispute:%')::float8 AS disputes,
-               count(*) FILTER (WHERE content LIKE 'Creem refund:%')::float8 AS refunds
+        SELECT count(*) FILTER (WHERE (content LIKE 'Creem dispute:%' OR content LIKE 'Stripe dispute:%'))::float8 AS disputes,
+               count(*) FILTER (WHERE (content LIKE 'Creem refund:%' OR content LIKE 'Stripe refund:%'))::float8 AS refunds
         FROM logs
         WHERE type = 6
           AND created_at > extract(epoch from now())::bigint - 300
@@ -656,10 +656,10 @@ data:
       metrics:
         - disputes:
             usage: "GAUGE"
-            description: "Creem chargebacks applied in the last 5 minutes (quota reversed, account disabled)."
+            description: "Card chargebacks (Creem or Stripe) applied in the last 5 minutes (quota reversed, account disabled)."
         - refunds:
             usage: "GAUGE"
-            description: "Creem one-time refunds applied in the last 5 minutes (quota reversed)."
+            description: "Card one-time refunds (Creem or Stripe) applied in the last 5 minutes (quota reversed)."
 
     newapi_creem_topup_velocity:
       query: |
@@ -670,7 +670,7 @@ data:
           FROM top_ups t
           JOIN users u ON u.id = t.user_id
           WHERE t.status = 'success'
-            AND t.payment_provider = 'creem'
+            AND t.payment_provider IN ('creem', 'stripe')
             AND t.complete_time > extract(epoch from now())::bigint - 86400
           GROUP BY t.user_id, u.created_at
           HAVING count(*) > 2

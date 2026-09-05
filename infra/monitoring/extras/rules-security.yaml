@@ -368,26 +368,26 @@ spec:
 
     - name: newapi.security.payments
       rules:
-        - alert: CreemChargeback
+        - alert: CardChargeback
           expr: cnpg_newapi_creem_reversals_disputes > 0
           for: 0m
           labels: { severity: critical }
           annotations:
-            summary: "Creem chargeback: quota reversed and account disabled"
+            summary: "Card chargeback: quota reversed and account disabled"
             description: >-
               {{ $value }} dispute(s) applied in 5m. The gateway already took the credits
-              back and disabled the account. Check the Creem dashboard for the card and
-              the logs table (type 6, content 'Creem dispute:') for the user id.
-        - alert: CreemRefundReversed
+              back and disabled the account. Check the processor dashboard for the card and
+              the logs table (type 6, content 'Creem dispute:' or 'Stripe dispute:') for the user id.
+        - alert: CardRefundReversed
           expr: cnpg_newapi_creem_reversals_refunds > 0
           for: 0m
           labels: { severity: info }
           annotations:
-            summary: "Creem refund applied: quota reversed"
+            summary: "Card refund applied: quota reversed"
             description: >-
               {{ $value }} one-time refund(s) reversed in 5m. Do not deduct the balance by
               hand as well.
-        - alert: CreemTopUpVelocity
+        - alert: CardTopUpVelocity
           expr: cnpg_newapi_creem_topup_velocity_flagged_users > 0
           for: 5m
           labels: { severity: warning }
