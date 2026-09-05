@@ -400,3 +400,22 @@ spec:
               `SELECT id, user_id, money, provider_payment_id,
               to_timestamp(create_time) FROM top_ups WHERE status='pending'
               AND coalesce(provider_payment_id,'') <> '' ORDER BY create_time`
+
+    # A sync Job that exits non-zero used to vanish: KubeJobFailed is disabled in
+    # values.yaml and metadata runs never set an exit code at all, so refused option
+    # writes (six "not priced by the administrator" incidents since June) left no
+    # signal. The sync now exits 1 on a healed or unpriced model; this is the alert
+    # behind that exit code.
+    - name: unorouter.sync
+      rules:
+        - alert: NewApiSyncJobFailed
+          expr: max by (job_name) (kube_job_status_failed{namespace="services", job_name=~"new-api-sync.*"}) > 0
+          for: 1m
+          labels: { severity: warning }
+          annotations:
+            summary: "sync job {{ $labels.job_name }} failed"
+            description: >-
+              `kubectl -n services logs job/{{ $labels.job_name }}` and read the
+              `[pricing]` block at the end: healed entries, dropped entries, and
+              models on enabled channels that carry no price. Clears when the
+              failed Job ages out of failedJobsHistoryLimit.
