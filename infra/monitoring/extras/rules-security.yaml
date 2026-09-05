@@ -398,6 +398,19 @@ spec:
               week old (largest {{ with query "cnpg_newapi_creem_topup_velocity_max_usd" }}{{ . | first | value }}{{ end }} USD).
               Real whales are old accounts; check the buyer name against the account email.
 
+    - name: newapi.security.guestchat
+      rules:
+        - alert: GuestChatAbuse
+          expr: cnpg_newapi_guest_error_rows_count > 300
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Guest chat key is being hammered: {{ $value }} error rows in 5m"
+            description: >-
+              Rejections under the shared web chat key are piling up in the logs table.
+              Normal is under 20 per 5m. Check unorouter.com POST /api/ai/chat/forward at the
+              edge for the user agent and ASN mix; the browser-only edge rule may need a new fingerprint.
+
     # F. The meta-alert. Every rule above depends on the CNPG custom queries being
     # scraped. If that breaks, the alerts do not fire and the silence looks like
     # safety.

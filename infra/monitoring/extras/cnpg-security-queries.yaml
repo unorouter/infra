@@ -686,3 +686,18 @@ data:
         - max_usd:
             usage: "GAUGE"
             description: "Largest 24h card total among flagged accounts."
+
+    newapi_guest_error_rows:
+      query: |
+        SELECT count(*)::float8 AS count
+        FROM logs
+        WHERE type = 5
+          AND token_name = 'UnoRouter Web'
+          AND created_at > extract(epoch from now())::bigint - 300
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Error rows written under the shared guest chat key in the last 5 minutes."
