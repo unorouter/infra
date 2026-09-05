@@ -366,6 +366,38 @@ spec:
               'Security check refused%' ORDER BY created_at DESC` -- `other` carries the
               path, the reason, whether a credential was presented and its fingerprint.
 
+    - name: newapi.security.payments
+      rules:
+        - alert: CreemChargeback
+          expr: cnpg_newapi_creem_reversals_disputes > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Creem chargeback: quota reversed and account disabled"
+            description: >-
+              {{ $value }} dispute(s) applied in 5m. The gateway already took the credits
+              back and disabled the account. Check the Creem dashboard for the card and
+              the logs table (type 6, content 'Creem dispute:') for the user id.
+        - alert: CreemRefundReversed
+          expr: cnpg_newapi_creem_reversals_refunds > 0
+          for: 0m
+          labels: { severity: info }
+          annotations:
+            summary: "Creem refund applied: quota reversed"
+            description: >-
+              {{ $value }} one-time refund(s) reversed in 5m. Do not deduct the balance by
+              hand as well.
+        - alert: CreemTopUpVelocity
+          expr: cnpg_newapi_creem_topup_velocity_flagged_users > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Card top-up velocity: {{ $value }} account(s) flagged"
+            description: >-
+              More than two card top-ups in 24h, or over $200 in 24h on an account under a
+              week old (largest {{ with query "cnpg_newapi_creem_topup_velocity_max_usd" }}{{ . | first | value }}{{ end }} USD).
+              Real whales are old accounts; check the buyer name against the account email.
+
     # F. The meta-alert. Every rule above depends on the CNPG custom queries being
     # scraped. If that breaks, the alerts do not fire and the silence looks like
     # safety.

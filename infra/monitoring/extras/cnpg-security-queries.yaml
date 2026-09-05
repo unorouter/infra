@@ -642,3 +642,47 @@ data:
         - grants:
             usage: "GAUGE"
             description: "Irreversible balance grants to other accounts in 5m."
+
+    newapi_creem_reversals:
+      query: |
+        SELECT count(*) FILTER (WHERE content LIKE 'Creem dispute:%')::float8 AS disputes,
+               count(*) FILTER (WHERE content LIKE 'Creem refund:%')::float8 AS refunds
+        FROM logs
+        WHERE type = 6
+          AND created_at > extract(epoch from now())::bigint - 300
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - disputes:
+            usage: "GAUGE"
+            description: "Creem chargebacks applied in the last 5 minutes (quota reversed, account disabled)."
+        - refunds:
+            usage: "GAUGE"
+            description: "Creem one-time refunds applied in the last 5 minutes (quota reversed)."
+
+    newapi_creem_topup_velocity:
+      query: |
+        SELECT count(*)::float8 AS flagged_users,
+               coalesce(max(usd), 0)::float8 AS max_usd
+        FROM (
+          SELECT t.user_id, sum(t.money) AS usd
+          FROM top_ups t
+          JOIN users u ON u.id = t.user_id
+          WHERE t.status = 'success'
+            AND t.payment_provider = 'creem'
+            AND t.complete_time > extract(epoch from now())::bigint - 86400
+          GROUP BY t.user_id, u.created_at
+          HAVING count(*) > 2
+              OR (sum(t.money) > 200 AND u.created_at > extract(epoch from now())::bigint - 7 * 86400)
+        ) x
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - flagged_users:
+            usage: "GAUGE"
+            description: "Accounts with more than two card top-ups in 24h, or over $200 in 24h while under a week old."
+        - max_usd:
+            usage: "GAUGE"
+            description: "Largest 24h card total among flagged accounts."
