@@ -1,0 +1,27 @@
+#cloud-config
+# Sent by scripts/hetzner-snipe.sh as user_data for every spare it buys. A spare comes up on
+# the tailnet by itself, so it is reachable over Tailscale SSH the moment it exists and the
+# Hetzner firewall never needs an inbound TCP rule. Nothing Kubernetes-related here: k0sctl
+# installs k0s later over that same Tailscale connection.
+hostname: __HOSTNAME__
+write_files:
+  - path: /etc/sysctl.d/90-conntrack.conf
+    content: |
+      net.netfilter.nf_conntrack_max = 262144
+      net.ipv4.ip_forward = 1
+      net.ipv6.conf.all.forwarding = 1
+      fs.inotify.max_user_instances = 8192
+      fs.inotify.max_user_watches = 524288
+packages:
+  - curl
+  - jq
+runcmd:
+  - sysctl --system
+  - |
+    if ! swapon --show | grep -q swapfile; then
+      fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+      echo "/swapfile none swap sw 0 0" >> /etc/fstab
+      echo "vm.swappiness=10" > /etc/sysctl.d/99-swap.conf && sysctl -p /etc/sysctl.d/99-swap.conf
+    fi
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --auth-key=__TS_AUTHKEY__ --ssh --accept-dns=false --hostname=__HOSTNAME__

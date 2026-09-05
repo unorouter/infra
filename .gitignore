@@ -9,3 +9,4 @@ kubeconfig*
 tofu/storage/.terraform/
 tofu/storage/terraform.tfstate*
 BITWARDEN-*.txt
+bootstrap/k0s/k0sctl.yaml
