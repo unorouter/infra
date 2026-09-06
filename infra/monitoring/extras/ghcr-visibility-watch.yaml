@@ -1,0 +1,118 @@
+# Every 15 minutes: list every container package of the GitHub org and try an ANONYMOUS
+# pull token against ghcr.io for each. A package outside ALLOW_PUBLIC that answers an
+# anonymous tags/list is posted to Discord. The API visibility field is only the
+# cross-check; the anonymous probe is what an attacker sees. Background: from July to
+# 2026-09-06 the unorouter and unorouter-bot packages were public while their images
+# carried the full .env, which is how the admin PAT, the guest key and the Creem key leaked.
+# GitHub makes a package of a public repo PUBLIC by default when Actions publishes it,
+# so a new image workflow can reopen this without anyone touching settings. New packages
+# are covered automatically: anything not in the allowlist that answers anonymously fires.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: ghcr-visibility-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: ghcr-visibility-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: DISCORD_WEBHOOK
+      remoteRef: { key: alertmanager, property: discordWebhook }
+    - secretKey: GITHUB_TOKEN
+      remoteRef: { key: ghcr-push, property: token }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ghcr-visibility-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, urllib.request, urllib.error
+
+    ORG = os.environ.get("GITHUB_ORG", "unorouter")
+    ALLOW = set(x for x in os.environ.get("ALLOW_PUBLIC", "").split(",") if x)
+    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+    GH = os.environ["GITHUB_TOKEN"]
+    UA = {"user-agent": "ghcr-visibility-watch/1"}
+
+    def get(url, headers=None):
+        req = urllib.request.Request(url, headers={**UA, **(headers or {})})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, ""
+
+    def post(text):
+        body = json.dumps({"username": "ghcr visibility", "content": text[:1900]}).encode()
+        req = urllib.request.Request(WEBHOOK, data=body, headers={**UA, "content-type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=30).read()
+
+    status, body = get(f"https://api.github.com/orgs/{ORG}/packages?package_type=container&per_page=100",
+                       {"authorization": "Bearer " + GH, "accept": "application/vnd.github+json"})
+    if status != 200:
+        post(f"**ghcr visibility watch cannot list packages** (HTTP {status}); the GITHUB_TOKEN in secret/ghcr-push may be dead, the check is BLIND until fixed")
+        raise SystemExit(1)
+    packages = json.loads(body)
+
+    findings = []
+    for p in packages:
+        name = p["name"]
+        st, tok = get(f"https://ghcr.io/token?scope=repository:{ORG}/{name}:pull")
+        anon = "?"
+        if st == 200:
+            t = json.loads(tok).get("token", "")
+            st2, _ = get(f"https://ghcr.io/v2/{ORG}/{name}/tags/list", {"authorization": "Bearer " + t})
+            anon = st2 == 200
+        api_public = p.get("visibility") == "public"
+        if (anon is True or api_public) and name not in ALLOW:
+            findings.append(f"`{ORG}/{name}`: anonymous pull {'WORKS' if anon is True else 'blocked'}, API says {p.get('visibility')}, updated {p.get('updated_at', '')[:10]}")
+        elif anon is False and api_public:
+            findings.append(f"`{ORG}/{name}`: API says public but anonymous pull is blocked (inconsistent, check)")
+
+    if findings:
+        post("**ghcr: a container package that must be private is PUBLIC**\n" + "\n".join(findings)
+             + "\nFix: github.com/orgs/" + ORG + "/packages/container/<name>/settings, Danger Zone, change visibility. Then rotate whatever the image carried.")
+    print(f"packages={len(packages)} allowed_public={sorted(ALLOW)} findings={len(findings)}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ghcr-visibility-watch
+  namespace: monitoring
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 180
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.12-alpine
+              command: ["python3", "-u", "/app/watch.py"]
+              env:
+                - name: GITHUB_ORG
+                  value: unorouter
+                # images that hold no secrets and are pulled without a pull secret
+                - name: ALLOW_PUBLIC
+                  value: new-api,new-api-sync,worker-comfyui,comfyui-models
+              envFrom: [{ secretRef: { name: ghcr-visibility-watch } }]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }]
+          volumes:
+            - name: app
+              configMap: { name: ghcr-visibility-watch }
