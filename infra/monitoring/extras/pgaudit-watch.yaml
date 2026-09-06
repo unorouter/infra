@@ -1,0 +1,137 @@
+# Reads the pgaudit records CNPG writes to the postgres pods' stdout and posts every
+# access to the audited tables (see infra/databases/options-audit.sql) that did not come
+# from the application role. Without this the audit log only answers questions after
+# the fact; with it a superuser read from a kubectl exec, a Teleport reader session or
+# anything else shows up in Discord within five minutes. Statement text is never posted
+# (pgaudit.log_statement is off in the cluster parameters), only who, from where, what
+# command and which table.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pgaudit-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: pgaudit-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: DISCORD_WEBHOOK
+      remoteRef: { key: alertmanager, property: discordWebhook }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pgaudit-watch
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pgaudit-watch
+  namespace: databases
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pgaudit-watch
+  namespace: databases
+subjects:
+  - kind: ServiceAccount
+    name: pgaudit-watch
+    namespace: monitoring
+roleRef:
+  kind: Role
+  name: pgaudit-watch
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgaudit-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, ssl, urllib.request, urllib.parse
+    from collections import Counter
+
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    TOKEN = open(f"{SA}/token").read()
+    API = "https://kubernetes.default.svc"
+    CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+    SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
+    APP_ROLES = set(os.environ.get("APP_ROLES", "newapi").split(","))
+    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+
+    def k8s(path):
+        req = urllib.request.Request(API + path, headers={"Authorization": "Bearer " + TOKEN})
+        with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
+            return r.read().decode(errors="replace")
+
+    pods = json.loads(k8s("/api/v1/namespaces/databases/pods?labelSelector=cnpg.io%2Fcluster%3Dnewapi-pg"))
+    hits = Counter()
+    for pod in pods["items"]:
+        name = pod["metadata"]["name"]
+        q = urllib.parse.urlencode({"container": "postgres", "sinceSeconds": SINCE})
+        for line in k8s(f"/api/v1/namespaces/databases/pods/{name}/log?{q}").splitlines():
+            if '"logger":"pgaudit"' not in line:
+                continue
+            try:
+                rec = json.loads(line)["record"]
+            except (ValueError, KeyError):
+                continue
+            user = rec.get("user_name", "?")
+            if user in APP_ROLES:
+                continue
+            src = rec.get("connection_from", "?")
+            hits[(name, user, src, rec.get("command_tag", "?"), rec.get("audit", {}).get("object_name", ""))] += 1
+
+    if hits:
+        lines = ["**pgaudit: audited table touched by a non-app role** (last %ds)" % SINCE]
+        for (pod, user, src, cmd, obj), n in sorted(hits.items(), key=lambda kv: -kv[1])[:15]:
+            lines.append(f"`{user}` from `{src}` on {pod}: {cmd} {obj} x{n}")
+        req = urllib.request.Request(WEBHOOK, data=json.dumps({"username": "pgaudit", "content": "\n".join(lines)[:1900]}).encode(),
+                                     headers={"content-type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=30).read()
+    print(f"pods={len(pods['items'])} hits={sum(hits.values())}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pgaudit-watch
+  namespace: monitoring
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          serviceAccountName: pgaudit-watch
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.12-alpine
+              command: ["python3", "-u", "/app/watch.py"]
+              envFrom: [{ secretRef: { name: pgaudit-watch } }]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }]
+          volumes:
+            - name: app
+              configMap: { name: pgaudit-watch }
