@@ -107,7 +107,7 @@ spec:
                   value: unorouter
                 # images that hold no secrets and are pulled without a pull secret
                 - name: ALLOW_PUBLIC
-                  value: new-api,new-api-sync,worker-comfyui,comfyui-models
+                  value: new-api,new-api-sync
               envFrom: [{ secretRef: { name: ghcr-visibility-watch } }]
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
