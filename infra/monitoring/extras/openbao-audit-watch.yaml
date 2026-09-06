@@ -55,6 +55,28 @@ roleRef:
   name: openbao-audit-watch
   apiGroup: rbac.authorization.k8s.io
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openbao-audit-watch-pods
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openbao-audit-watch-pods
+subjects:
+  - kind: ServiceAccount
+    name: openbao-audit-watch
+    namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: openbao-audit-watch-pods
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -63,7 +85,7 @@ metadata:
 data:
   watch.py: |
     import json, os, re, ssl, urllib.request, urllib.parse
-    from collections import Counter
+    from collections import defaultdict
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
     TOKEN = open(f"{SA}/token").read()
@@ -80,8 +102,28 @@ data:
         with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
             return r.read().decode(errors="replace")
 
+    def short(path):
+        for pre in ("sys/internal/ui/mounts/", "secret/data/", "secret/metadata/", "secret/"):
+            if path.startswith(pre):
+                return path[len(pre):] or path
+        return path
+
+    # remote_address is a pod IP: name the pod so a token use is tied to a workload
+    pod_by_ip = {}
+    try:
+        for pod in json.loads(k8s("/api/v1/pods?limit=2000"))["items"]:
+            for ip in pod.get("status", {}).get("podIPs") or []:
+                pod_by_ip[ip["ip"]] = pod["metadata"]["namespace"] + "/" + pod["metadata"]["name"]
+    except Exception as e:
+        print("pod lookup failed:", e, flush=True)
+
+    def where(remote):
+        if remote in ("127.0.0.1", "::1"):
+            return "inside the openbao pod (kubectl exec)"
+        return pod_by_ip.get(remote, remote)
+
     pods = json.loads(k8s("/api/v1/namespaces/openbao/pods?labelSelector=app.kubernetes.io%2Fname%3Dopenbao"))
-    hits = Counter()
+    callers = defaultdict(lambda: {"first": None, "last": None, "reads": defaultdict(int), "mounts": 0, "ops": []})
     for pod in pods["items"]:
         name = pod["metadata"]["name"]
         q = urllib.parse.urlencode({"sinceSeconds": SINCE})
@@ -108,31 +150,44 @@ data:
             routine = ident in ROUTINE or plumbing or (ident == "unauthenticated" and is_login)
             if routine and not sensitive and not is_root:
                 continue
-            if ident == "unauthenticated" and not sensitive and d.get("error"):
-                # a failed anonymous call: report it, it is a probe
-                pass
+            t = d.get("time", "")[11:19]
+            c = callers[(ident or "?", "root" if is_root else policies[:40], remote)]
+            c["first"] = min(c["first"] or t, t)
+            c["last"] = max(c["last"] or t, t)
             err = " ERR" if d.get("error") else ""
-            hits[(ident or "?", "root" if is_root else policies[:40], remote, f"{op} {path}{err}")] += 1
+            if path.startswith("sys/internal/ui/mounts/") and not err:
+                c["mounts"] += 1   # the mount lookup a kv get does before the real read
+                continue
+            if op in ("read", "list") and not sensitive and not err:
+                c["reads"][short(path)] += 1
+                continue
+            data = req.get("data") or {}
+            keys = list((data.get("data") or {}).keys()) if isinstance(data.get("data"), dict) else [k for k in data.keys() if k != "options"]
+            ver = (d.get("response") or {}).get("data") or {}
+            detail = ""
+            if keys:
+                detail += " keys=" + ",".join(sorted(keys)[:10])
+            if isinstance(ver, dict) and ver.get("version"):
+                detail += f" (now v{ver['version']})"
+            c["ops"].append(f"{op} {short(path)}{detail}{err} at {t}")
 
-    if hits:
-        # one line per caller: reads summarised by path, writes and sensitive ops itemised
-        by_caller = {}
-        for (ident, pol, remote, what), n in hits.items():
-            by_caller.setdefault((ident, pol, remote), []).append((what, n))
+    if callers:
         lines = ["**openbao audit: non-routine activity** (last %ds)" % SINCE]
-        for (ident, pol, remote), ops in sorted(by_caller.items(), key=lambda kv: -sum(n for _, n in kv[1])):
-            reads = [(w, n) for w, n in ops if w.startswith(("read ", "list ")) and not SENSITIVE.match(w.split(" ", 1)[1]) and " ERR" not in w]
-            rest = [(w, n) for w, n in ops if (w, n) not in reads]
+        for (ident, pol, remote), c in sorted(callers.items(), key=lambda kv: -(sum(kv[1]["reads"].values()) + len(kv[1]["ops"]))):
+            span = c["first"] if c["first"] == c["last"] else f"{c['first']} to {c['last']}"
             parts = []
-            if reads:
-                paths = sorted({w.split(" ", 1)[1].replace("sys/internal/ui/mounts/", "").replace("secret/data/", "").replace("secret/metadata/", "") for w, _ in reads})
-                parts.append(f"{sum(n for _, n in reads)} reads ({', '.join(paths[:8])}{', ...' if len(paths) > 8 else ''})")
-            parts += [f"{w} x{n}" if n > 1 else w for w, n in sorted(rest, key=lambda x: -x[1])[:8]]
-            lines.append(f"`{ident}` [{pol}] from `{remote}`: " + "; ".join(parts))
+            if c["reads"]:
+                paths = sorted(c["reads"])
+                parts.append("%d reads: %s%s" % (sum(c["reads"].values()), ", ".join(f"{p} x{n}" if n > 1 else p for p, n in sorted(c["reads"].items())[:8]), ", ..." if len(paths) > 8 else ""))
+            parts += c["ops"][:8]
+            if len(c["ops"]) > 8:
+                parts.append(f"and {len(c['ops']) - 8} more")
+            lines.append(f"`{ident}` [{pol}] from {where(remote)}, {span} UTC: " + "; ".join(parts))
+        print("\n".join(lines), flush=True)
         body = json.dumps({"username": "openbao audit", "content": "\n".join(lines[:20])[:1900]}).encode()
         req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "openbao-audit-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
-    print(f"pods={len(pods['items'])} hits={sum(hits.values())}", flush=True)
+    print(f"pods={len(pods['items'])} callers={len(callers)}", flush=True)
 ---
 apiVersion: batch/v1
 kind: CronJob
