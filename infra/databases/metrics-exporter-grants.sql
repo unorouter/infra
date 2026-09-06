@@ -13,3 +13,6 @@
 -- API key the alert exists to protect. Verified: `select key from tokens` as
 -- this role returns permission denied while the metric query succeeds.
 GRANT SELECT (id, user_id) ON tokens TO cnpg_metrics_exporter;
+
+-- card top-up velocity (cnpg-security-queries newapi_creem_topup_velocity) needs the account age
+GRANT SELECT (id, created_at) ON users TO cnpg_metrics_exporter;
