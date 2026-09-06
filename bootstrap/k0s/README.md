@@ -14,12 +14,15 @@ Lean rules for the new cluster:
   metrics-server from the distribution. What the stack needs comes from `apps/`.
 - Nodes are `controller+worker`, untainted, until a fourth node exists; then databases move
   off the etcd voters by label.
-- Admin over Tailscale only. Spares join the tailnet from cloud-init, so no inbound TCP ever.
+- Admin over Tailscale only. A spare is joined by an operator, on purpose, one at a time; no
+  automation holds a tailnet key.
 
 ## 0. Prerequisites
 
-- Three cx43 spares parked by `scripts/hetzner-snipe.sh` (`SNIPE_COUNT=3`, any EU DC), each on
-  the tailnet as `unorouter-spare-<loc>-<n>` (cloud-init in `spare-user-data.yaml`).
+- Three cx43 spares parked by `scripts/hetzner-snipe.sh` (`SNIPE_COUNT=3`, any EU DC). The
+  sniper only buys; it holds no tailnet key. Join each spare yourself with
+  `./spare-join.sh unorouter-spare-<loc>-<n>` (opens 22 for your IP, installs Tailscale with a
+  key read from OpenBao at run time, closes 22 again) and check `tailscale status`.
 - `k0sctl` on the laptop (`~/.local/bin/k0sctl`), `tofu/.env` for the Hetzner token.
 - Both CNPG restores rehearsed against the real bucket within the last week (hard gate).
 - OpenBao raft snapshot taken right before the flip, unseal keys at hand.

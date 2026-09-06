@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Hetzner capacity sniper. Watches stock for one server type across the EU locations and buys
 # up to SNIPE_COUNT parked spares the moment they appear (cx43 is chronically sold out). It
-# never touches live nodes and never joins anything; spares are named
+# never touches live nodes, never joins anything and holds no other credential than the
+# Hetzner token: a spare is a plain Ubuntu box behind the node firewall until an operator
+# joins it by hand (bootstrap/k0s/spare-join.sh). Spares are named
 # <prefix>-<location>-<n> and carry the label role=spare. Runs as a systemd unit on the
 # operator VPS; secrets come from /etc/hetzner-snipe/env (HCLOUD_TOKEN, DISCORD_WEBHOOK).
 #
@@ -9,8 +11,6 @@
 #   SNIPE_LOCS    locations in order of preference         (default "fsn1 nbg1 hel1")
 #   SNIPE_COUNT   how many spares to hold in total         (default 1)
 #   SNIPE_PREFIX  server name prefix                       (default unorouter-spare)
-#   SNIPE_USER_DATA cloud-init template for spares         (default /etc/hetzner-snipe/user-data.yaml)
-#   TAILSCALE_AUTHKEY (env file) reusable tailnet key; spares join the tailnet on first boot
 set -uo pipefail
 set -a
 source "${SNIPE_ENV:-/etc/hetzner-snipe/env}"
@@ -46,18 +46,6 @@ import sys,json; d=json.load(sys.stdin)
 print(sum(1 for s in d.get('servers',[]) if s['name'].startswith('$PREFIX-')))" 2>/dev/null || echo 0
 }
 
-# cloud-init for the spare (Tailscale join, sysctl, swap). Template from SNIPE_USER_DATA,
-# __HOSTNAME__ and __TS_AUTHKEY__ filled here so no secret sits in the template.
-user_data(){
-  local f="${SNIPE_USER_DATA:-/etc/hetzner-snipe/user-data.yaml}"
-  [ -f "$f" ] && [ -n "${TAILSCALE_AUTHKEY:-}" ] || return 0
-  python3 - "$f" "$1" <<'PY'
-import json,os,sys
-t=open(sys.argv[1]).read().replace("__HOSTNAME__",sys.argv[2]).replace("__TS_AUTHKEY__",os.environ["TAILSCALE_AUTHKEY"])
-print(", \"user_data\": "+json.dumps(t))
-PY
-}
-
 grab(){
   local loc=$1 n=$2 name resp sid ip
   name="$PREFIX-$loc-$n"
@@ -71,7 +59,6 @@ grab(){
     \"networks\": [$NETWORK],
     \"labels\": {\"role\": \"spare\"},
     \"start_after_create\": true
-    $(user_data "$name")
   }")
   if echo "$resp" | grep -q '"server"'; then
     sid=$(echo "$resp" | python3 -c "import json,sys;print(json.load(sys.stdin)['server']['id'])")
