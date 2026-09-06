@@ -1,0 +1,152 @@
+# Posts every failed Teleport login to Discord within five minutes: GitHub SSO logins
+# refused by the org gate (with the GitHub username as a profile link when Teleport
+# knows it), local-auth attempts (root/admin guesses against a cluster with local auth
+# off), plus successful SSO logins so the two are side by side. Reads the audit events
+# the auth pod mirrors to stdout (audit_events_uri stdout:// in infra/teleport/values.yaml).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: teleport-login-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: teleport-login-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: DISCORD_WEBHOOK
+      remoteRef: { key: alertmanager, property: discordWebhook }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: teleport-login-watch
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: teleport-login-watch
+  namespace: teleport
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: teleport-login-watch
+  namespace: teleport
+subjects:
+  - kind: ServiceAccount
+    name: teleport-login-watch
+    namespace: monitoring
+roleRef:
+  kind: Role
+  name: teleport-login-watch
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: teleport-login-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, re, ssl, urllib.request, urllib.parse
+
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    TOKEN = open(f"{SA}/token").read()
+    API = "https://kubernetes.default.svc"
+    CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+    SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
+    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+    WANT = {"user.login", "auth"}
+
+    def k8s(path):
+        req = urllib.request.Request(API + path, headers={"Authorization": "Bearer " + TOKEN})
+        with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
+            return r.read().decode(errors="replace")
+
+    def github_login(ev):
+        # the username sits in different places depending on how far the login got
+        for key in ("user", "login"):
+            v = ev.get(key)
+            if v and v != "undefined":
+                return v
+        attrs = ev.get("attributes") or {}
+        for key in ("login", "username", "preferred_username"):
+            if attrs.get(key):
+                return attrs[key] if isinstance(attrs[key], str) else attrs[key][0]
+        return ""
+
+    pods = json.loads(k8s("/api/v1/namespaces/teleport/pods?labelSelector=app.kubernetes.io%2Fcomponent%3Dauth"))
+    lines = []
+    for pod in pods["items"]:
+        name = pod["metadata"]["name"]
+        q = urllib.parse.urlencode({"sinceSeconds": SINCE})
+        for line in k8s(f"/api/v1/namespaces/teleport/pods/{name}/log?{q}").splitlines():
+            if '"event":' not in line:
+                continue
+            try:
+                ev = json.loads(line[line.index("{"):])
+            except ValueError:
+                continue
+            if ev.get("event") not in WANT:
+                continue
+            ok = ev.get("success", True)
+            method = ev.get("method", "local")
+            who = github_login(ev)
+            addr = ev.get("addr.remote") or (ev.get("addr") or {}).get("remote") or "?"
+            if ok and ev.get("event") == "user.login":
+                lines.append(f"login ok `{who}` via {method} from `{addr}`")
+                continue
+            if ok:
+                continue
+            link = f"https://github.com/{who}" if method == "github" and who else (f"`{who}`" if who else "(no username)")
+            ua = (ev.get("user_agent") or "")[:80]
+            lines.append(f"**login FAILED** {link} via {method} from `{addr}`: {ev.get('error','')[:120]}" + (f"  ua `{ua}`" if ua else ""))
+
+    if lines:
+        body = json.dumps({"username": "teleport logins", "content": ("**teleport** (last %ds)\n" % SINCE + "\n".join(lines[:20]))[:1900]}).encode()
+        req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "teleport-login-watch/1"}, method="POST")
+        urllib.request.urlopen(req, timeout=30).read()
+    print(f"pods={len(pods['items'])} events={len(lines)}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: teleport-login-watch
+  namespace: monitoring
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          serviceAccountName: teleport-login-watch
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.12-alpine
+              command: ["python3", "-u", "/app/watch.py"]
+              envFrom: [{ secretRef: { name: teleport-login-watch } }]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }]
+          volumes:
+            - name: app
+              configMap: { name: teleport-login-watch }
