@@ -60,6 +60,19 @@ data:
         post(f"**ghcr visibility watch cannot list packages** (HTTP {status}); the GITHUB_TOKEN in secret/ghcr-push may be dead, the check is BLIND until fixed")
         raise SystemExit(1)
     packages = json.loads(body)
+    # The org listing silently omits packages the token's user only reaches through
+    # repository-inherited access (unorouter-bot on 2026-09-07), so every name in
+    # EXPECT_PACKAGES is fetched directly and merged in; a name the API cannot find at
+    # all is reported too, so a renamed or deleted package does not fall out of view.
+    seen = {p["name"] for p in packages}
+    missing = []
+    for name in [x for x in os.environ.get("EXPECT_PACKAGES", "").split(",") if x and x not in seen]:
+        st, b = get(f"https://api.github.com/orgs/{ORG}/packages/container/{name}",
+                    {"authorization": "Bearer " + GH, "accept": "application/vnd.github+json"})
+        if st == 200:
+            packages.append(json.loads(b))
+        else:
+            missing.append(f"{name} (HTTP {st})")
 
     findings = []
     for p in packages:
@@ -76,6 +89,8 @@ data:
         elif anon is False and api_public:
             findings.append(f"`{ORG}/{name}`: API says public but anonymous pull is blocked (inconsistent, check)")
 
+    if missing:
+        findings.append("expected packages the API cannot find: " + ", ".join(missing) + " (deleted or renamed? update EXPECT_PACKAGES)")
     if findings:
         post("**ghcr: a container package that must be private is PUBLIC**\n" + "\n".join(findings)
              + "\nFix: github.com/orgs/" + ORG + "/packages/container/<name>/settings, Danger Zone, change visibility. Then rotate whatever the image carried.")
@@ -108,6 +123,10 @@ spec:
                 # images that hold no secrets and are pulled without a pull secret
                 - name: ALLOW_PUBLIC
                   value: new-api,new-api-sync
+                # every package that must exist; merged with the API listing, which drops
+                # packages reachable only through repository-inherited access
+                - name: EXPECT_PACKAGES
+                  value: unorouter,unorouter-bot,new-api,new-api-sync,uno-cards,uno-import,comfyui-worker
               envFrom: [{ secretRef: { name: ghcr-visibility-watch } }]
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
