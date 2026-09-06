@@ -1,0 +1,103 @@
+# Posts every Cloudflare account audit-log entry to Discord within five minutes: who
+# (email or token), from where, what (DNS record, ruleset, token, tunnel, zone setting,
+# member) and on which zone. The account fronts every hostname and holds the tunnel, so
+# a change nobody here made is the earliest possible sign of an account takeover. The
+# token is the account-scoped day-to-day one (audit_token in OpenBao cloudflare-edge);
+# the zone-scoped edge token cannot read the account log.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: cloudflare-audit-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: cloudflare-audit-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: DISCORD_WEBHOOK
+      remoteRef: { key: alertmanager, property: discordWebhook }
+    - secretKey: CF_API_TOKEN
+      remoteRef: { key: cloudflare-edge, property: audit_token }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflare-audit-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, urllib.request, urllib.parse
+    from datetime import datetime, timedelta, timezone
+
+    ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "7dad953fa57f079bfec11d3db10bc18a")
+    TOKEN = os.environ["CF_API_TOKEN"]
+    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+    SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
+    since = (datetime.now(timezone.utc) - timedelta(seconds=SINCE)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    entries, page = [], 1
+    while True:
+        q = urllib.parse.urlencode({"since": since, "per_page": 100, "page": page, "direction": "asc"})
+        req = urllib.request.Request(f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}/audit_logs?{q}",
+                                     headers={"Authorization": "Bearer " + TOKEN})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            d = json.load(r)
+        if not d.get("success"):
+            raise SystemExit(f"audit_logs: {d.get('errors')}")
+        entries += d["result"]
+        if len(d["result"]) < 100:
+            break
+        page += 1
+
+    lines = []
+    for e in entries:
+        actor = e.get("actor") or {}
+        who = actor.get("email") or actor.get("type") or "?"
+        ip = actor.get("ip") or "?"
+        action = (e.get("action") or {}).get("type", "?")
+        res = (e.get("resource") or {}).get("type", "?")
+        meta = e.get("metadata") or {}
+        what = meta.get("name") or meta.get("zone_name") or meta.get("zone") or ""
+        via = e.get("interface") or ""
+        when = (e.get("when") or "")[11:19]
+        lines.append(f"{when}Z `{who}` from `{ip}`: {action} {res} {what} {('via ' + via) if via else ''}".rstrip())
+
+    if lines:
+        body = json.dumps({"username": "cloudflare audit", "content": ("**cloudflare account changes** (last %ds)\n" % SINCE + "\n".join(lines[:25]))[:1900]}).encode()
+        req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "cloudflare-audit-watch/1"}, method="POST")
+        urllib.request.urlopen(req, timeout=30).read()
+    print(f"entries={len(entries)}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cloudflare-audit-watch
+  namespace: monitoring
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.12-alpine
+              command: ["python3", "-u", "/app/watch.py"]
+              envFrom: [{ secretRef: { name: cloudflare-audit-watch } }]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }]
+          volumes:
+            - name: app
+              configMap: { name: cloudflare-audit-watch }
