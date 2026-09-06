@@ -169,7 +169,7 @@ spec:
           for: 0m
           labels: { severity: warning }
           annotations:
-            summary: "Dead credential {{ $labels.fingerprint }} replayed ({{ $value }}): several addresses, admin routes, or a burst"
+            summary: "Dead credential {{ $labels.fingerprint }} from {{ $labels.sources }} on {{ $labels.paths }}"
             description: >-
               A rejected token is being tried from more than one address, against admin routes,
               or ten times in 15m. An expired dashboard session looks different: one address, a
