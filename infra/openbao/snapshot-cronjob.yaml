@@ -59,6 +59,9 @@ spec:
                   valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: ACCESS_KEY_ID } }
                 - name: RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY
                   valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: ACCESS_SECRET_KEY } }
+                # the bucket-scoped R2 token may not call CreateBucket; rclone otherwise probes it before an upload
+                - name: RCLONE_CONFIG_HZ_NO_CHECK_BUCKET
+                  value: "true"
                 - name: RCLONE_CONFIG_HZ_REGION
                   valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: REGION } }
               command:
