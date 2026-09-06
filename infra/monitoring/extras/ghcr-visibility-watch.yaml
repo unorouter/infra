@@ -122,7 +122,7 @@ spec:
                   value: unorouter
                 # images that hold no secrets and are pulled without a pull secret
                 - name: ALLOW_PUBLIC
-                  value: new-api,new-api-sync
+                  value: ""
                 # every package that must exist; merged with the API listing, which drops
                 # packages reachable only through repository-inherited access
                 - name: EXPECT_PACKAGES
