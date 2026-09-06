@@ -77,12 +77,11 @@ service:
 proxy:
   # hostNetwork so :443 binds the node public IP directly (grey-cloud DNS points here)
   annotations: {}
-  teleportConfig:
-    proxy_service:
-      # Behind the Cloudflare tunnel every login arrives from a cloudflared pod IP, so the
-      # audit log showed 10.42.x.x for the 2026-09-06 login scrape. cloudflared forwards the
-      # real client in X-Forwarded-For; only the tunnel can reach this proxy, so trusting it is safe.
-      trust_x_forwarded_for: true
+  # trust_x_forwarded_for was tried on 2026-09-06 to get real client addresses into the audit
+  # log (behind the tunnel every login shows a cloudflared pod IP). It breaks tsh for IPv6
+  # clients: the proxy rejects the ALPN WebSocket upgrade with "client source and destination
+  # addresses should be valid same TCP version" because the forwarded v6 address is paired with
+  # the v4 pod address. Client addresses come from the Cloudflare request log instead.
 
 # GitHub SSO connector + roles are applied as Teleport resources (tctl / operator) after
 # install -- Client Secret is not committed; it goes into a k8s Secret via SOPS/ESO.
