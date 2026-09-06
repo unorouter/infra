@@ -443,7 +443,7 @@ data:
                count(*)::float8 AS count,
                count(DISTINCT ip)::float8 AS distinct_ips,
                count(*) FILTER (
-                 WHERE other ~ '"path":"/api/(channel|option|group|redemption|token/search|user/(?!self)|log/)'
+                 WHERE other ~ '"path":"/api/(channel|option|group|redemption|token/search|log/|user/(search|manage|topup/complete|[0-9]+)|user/?")'
                )::float8 AS admin_paths
         FROM logs
         WHERE type = 3
