@@ -72,7 +72,7 @@ data:
     SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
     ROUTINE = set(os.environ.get("ROUTINE_IDENTITIES",
         "kubernetes-external-secrets-external-secrets,kubernetes-openbao-openbao-snapshot,jwt-github-GHCR Image").split(","))
-    SENSITIVE = re.compile(r"^(sys/(policies|policy|auth|mounts|audit|seal|unseal|rekey|generate-root|raft|rotate|internal/counters)|auth/token/(create|revoke|roles)|auth/[^/]+/(config|role|roles)|identity/)")
+    SENSITIVE = re.compile(r"^(sys/(policies|policy|auth|mounts|audit|seal|unseal|rekey|generate-root|raft|rotate|internal/counters)|auth/token/(create|revoke$|revoke-accessor|roles)|auth/[^/]+/(config|role|roles)|identity/)")
     WEBHOOK = os.environ["DISCORD_WEBHOOK"]
 
     def k8s(path):
@@ -104,7 +104,7 @@ data:
             sensitive = bool(SENSITIVE.match(path))
             # UI plumbing: every page load reads these, logged-in or not. The login itself
             # (auth/*/callback, auth/*/login) and anything sensitive still get reported.
-            plumbing = path.startswith(("sys/internal/ui/", "sys/health", "sys/seal-status", "sys/capabilities-self", "auth/token/lookup-self")) or path.endswith("/auth_url")
+            plumbing = path.startswith(("sys/internal/ui/", "sys/health", "sys/seal-status", "sys/capabilities-self", "auth/token/lookup-self", "auth/token/revoke-self")) or path.endswith("/auth_url")
             routine = ident in ROUTINE or plumbing or (ident == "unauthenticated" and is_login)
             if routine and not sensitive and not is_root:
                 continue
