@@ -32,7 +32,10 @@ auth:
   teleportConfig:
     teleport:
       storage:
-        audit_sessions_uri: "s3://unorouter-pg-backups/teleport-recordings?endpoint=fsn1.your-objectstorage.com&region=fsn1"
+        # disablesse: Teleport asks S3 for SSE-KMS on every upload; Hetzner Object Storage
+        # answers 400 "KMS managed key requires ... key-id" and every session recording
+        # since the 2026-09-05 rebuild was lost (604 "Failed to create audit stream").
+        audit_sessions_uri: "s3://unorouter-pg-backups/teleport-recordings?endpoint=fsn1.your-objectstorage.com&region=fsn1&disablesse=true"
     auth_service:
       tokens:
         - "app,db,kube:/etc/teleport-join/token"
