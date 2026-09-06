@@ -55,6 +55,28 @@ roleRef:
   name: pgaudit-watch
   apiGroup: rbac.authorization.k8s.io
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pgaudit-watch-pods
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pgaudit-watch-pods
+subjects:
+  - kind: ServiceAccount
+    name: pgaudit-watch
+    namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: pgaudit-watch-pods
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -63,7 +85,7 @@ metadata:
 data:
   watch.py: |
     import json, os, ssl, urllib.request, urllib.parse
-    from collections import Counter
+    from collections import defaultdict
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
     TOKEN = open(f"{SA}/token").read()
@@ -78,8 +100,24 @@ data:
         with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
             return r.read().decode(errors="replace")
 
+    # connection_from is a pod IP for in-cluster clients and [local] for a psql started
+    # inside the postgres pod (kubectl exec); name the pod so the line says which workload.
+    pod_by_ip = {}
+    try:
+        for pod in json.loads(k8s("/api/v1/pods?limit=2000"))["items"]:
+            for ip in pod.get("status", {}).get("podIPs") or []:
+                pod_by_ip[ip["ip"]] = pod["metadata"]["namespace"] + "/" + pod["metadata"]["name"]
+    except Exception as e:
+        print("pod lookup failed:", e, flush=True)
+
+    def where(src):
+        if src == "[local]":
+            return "unix socket inside the postgres pod (kubectl exec)"
+        host = src.rsplit(":", 1)[0]
+        return pod_by_ip.get(host, src)
+
     pods = json.loads(k8s("/api/v1/namespaces/databases/pods?labelSelector=cnpg.io%2Fcluster%3Dnewapi-pg"))
-    hits = Counter()
+    sessions = defaultdict(lambda: {"first": None, "last": None, "ops": defaultdict(int), "order": []})
     for pod in pods["items"]:
         name = pod["metadata"]["name"]
         q = urllib.parse.urlencode({"container": "postgres", "sinceSeconds": SINCE})
@@ -93,17 +131,29 @@ data:
             user = rec.get("user_name", "?")
             if user in APP_ROLES:
                 continue
-            src = rec.get("connection_from", "?")
-            hits[(name, user, src, rec.get("command_tag", "?"), rec.get("audit", {}).get("object_name", ""))] += 1
+            audit = rec.get("audit", {})
+            t = (rec.get("log_time") or "")[11:19]
+            key = (name, user, rec.get("connection_from", "?"), rec.get("session_id", "?"), rec.get("backend_type", "?"), rec.get("session_start_time", "")[11:19])
+            s = sessions[key]
+            s["first"] = min(s["first"] or t, t)
+            s["last"] = max(s["last"] or t, t)
+            what = f"{audit.get('command') or rec.get('command_tag', '?')} {audit.get('object_name', '')}".strip()
+            if what not in s["ops"]:
+                s["order"].append(what)
+            s["ops"][what] += 1
 
-    if hits:
-        lines = ["**pgaudit: audited table touched by a non-app role** (last %ds)" % SINCE]
-        for (pod, user, src, cmd, obj), n in sorted(hits.items(), key=lambda kv: -kv[1])[:15]:
-            lines.append(f"`{user}` from `{src}` on {pod}: {cmd} {obj} x{n}")
+    if sessions:
+        lines = ["**pgaudit: audited table touched by a non-app role** (last %ds; statements are not logged by design, only who, where, what)" % SINCE]
+        for (pod, user, src, sid, backend, started), s in sorted(sessions.items(), key=lambda kv: kv[1]["first"] or "")[:15]:
+            span = s["first"] if s["first"] == s["last"] else f"{s['first']} to {s['last']}"
+            ops = ", ".join(f"{w} x{s['ops'][w]}" if s["ops"][w] > 1 else w for w in s["order"][:8])
+            note = "" if backend == "client backend" else f" ({backend})"
+            lines.append(f"`{user}` on {pod} from {where(src)}{note}, session {sid} opened {started}, {span} UTC: {ops}")
+        print("\n".join(lines), flush=True)
         req = urllib.request.Request(WEBHOOK, data=json.dumps({"username": "pgaudit", "content": "\n".join(lines)[:1900]}).encode(),
                                      headers={"content-type": "application/json", "user-agent": "pgaudit-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
-    print(f"pods={len(pods['items'])} hits={sum(hits.values())}", flush=True)
+    print(f"pods={len(pods['items'])} sessions={len(sessions)}", flush=True)
 ---
 apiVersion: batch/v1
 kind: CronJob
