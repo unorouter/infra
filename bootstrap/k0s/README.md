@@ -69,6 +69,24 @@ paused). They stay at their pinned SHA and are synced by hand at the flip.
    tunnel stream count, and a real chat request end to end.
 6. Soak one day. Old cluster stays powered but idle.
 
+## Backups on the new cluster (Velero is not carried over)
+
+One bucket (`unorouter-pg-backups`), one nightly cadence, one restore order, four writers:
+
+| prefix | writer | what |
+| --- | --- | --- |
+| `k0s/<controller>/` | `k0s-backup.timer` on each controller (`install-backup.sh <node>`) | etcd snapshot, PKI, k0s.yaml, bootstrap manifests, helm extension state |
+| `openbao/` | the existing snapshot CronJob | raft snapshot |
+| `newapi-pg-v5/`, `bot-pg-v5/` | CNPG Barman plugin | base backups plus WAL, PITR |
+| `files/` | rclone sidecar next to the owning pod | the three PVCs nothing else covers: Teleport auth SQLite, `new-api-sync-logs`, `uno-import-profile` |
+
+Everything else on disk is disposable (Prometheus, Grafana, Alertmanager history, Redis) and
+desired state is git. Restore order: `k0sctl apply --restore-from` (cluster and certs),
+ArgoCD syncs git, OpenBao restore and unseal, CNPG bootstrap-recovery from the prefixes,
+rclone the three paths back. `apps/velero.yaml` and `infra/velero/` are deleted at the flip,
+after the last k3s-side run, because git is shared by both clusters until then. The rclone
+sidecars run a 24 h loop and need no scheduling tricks around node-pinned volumes.
+
 ## 4. After
 
 - Delete node8, node9, node10 with tofu (state reconciled), remove their IPs from
