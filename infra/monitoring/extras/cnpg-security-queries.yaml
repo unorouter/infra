@@ -437,6 +437,36 @@ data:
             usage: "GAUGE"
             description: "Rejections of this credential from this address in 5m, from outside TRUSTED_NETWORKS."
 
+    newapi_invalid_credentials_spread:
+      query: |
+        SELECT substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') AS fingerprint,
+               count(*)::float8 AS count,
+               count(DISTINCT ip)::float8 AS distinct_ips,
+               count(*) FILTER (
+                 WHERE other ~ '"path":"/api/(channel|option|group|redemption|token/search|user/(?!self)|log/)'
+               )::float8 AS admin_paths
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 900
+          AND other LIKE '%"credential_fingerprint":"%'
+        GROUP BY 1
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - fingerprint:
+            usage: "LABEL"
+            description: "HMAC fingerprint of the rejected credential"
+        - count:
+            usage: "GAUGE"
+            description: "Rejections of this credential in 15m, any network (the frontend forwards from node IPs)."
+        - distinct_ips:
+            usage: "GAUGE"
+            description: "Addresses that presented it in 15m. Two or more is a token being replayed, not an expired session."
+        - admin_paths:
+            usage: "GAUGE"
+            description: "Rejections on admin routes in 15m. An expired user session never asks for channels, options or other users."
+
     newapi_honeytoken_hits:
       query: |
         SELECT count(*)::float8 AS count,

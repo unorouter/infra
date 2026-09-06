@@ -164,26 +164,26 @@ spec:
     # stuffing. See the metric for why "foreign" means "no root 2FA login".
     - name: newapi.security.invalidcreds
       rules:
+        - alert: InvalidCredentialReplayed
+          expr: cnpg_newapi_invalid_credentials_spread_distinct_ips >= 2 or cnpg_newapi_invalid_credentials_spread_admin_paths > 0 or cnpg_newapi_invalid_credentials_spread_count >= 10
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "Dead credential {{ $labels.fingerprint }} replayed ({{ $value }}): several addresses, admin routes, or a burst"
+            description: >-
+              A rejected token is being tried from more than one address, against admin routes,
+              or ten times in 15m. An expired dashboard session looks different: one address, a
+              handful of /api/user/self calls, then a fresh login. Query the logs table for the
+              fingerprint to see paths and addresses; node IPs mean the frontend forwarded it.
         - alert: InvalidCredentialFromForeignNetwork
-          expr: cnpg_newapi_invalid_credentials_count > 0
+          expr: cnpg_newapi_invalid_credentials_count >= 10
           for: 0m
           labels: { severity: warning }
           annotations:
             summary: "Invalid credential {{ $labels.fingerprint }} from {{ $labels.ip }} ({{ $value }}x in 5m)"
             description: >-
-              A credential the gateway does not recognise was presented from a network
-              with no operator 2FA login in 30 days. See what it was aimed at with
-              `SELECT to_timestamp(created_at), ip, other::jsonb->'op'->'params'->>'method',
-              other::jsonb->'op'->'params'->>'path' FROM logs WHERE type=3
-              AND other LIKE '%%{{ $labels.fingerprint }}%%'
-              AND created_at > extract(epoch from now())::bigint - 900 ORDER BY 1`.
-              Admin routes (/api/channel/, /api/option/, /api/user/) from an address
-              with no successful history is a probe; a user route with a stale token
-              is usually a customer who rotated a key.
-
-    # Bait. The token behind this fingerprint was never issued and exists only to be
-    # found where credentials tend to leak (streams, pastes, screenshots). There is no
-    # legitimate way to hold it, so one use is the whole signal.
+              Ten or more rejections of one credential from one outside address in 5m. Below that
+              it is almost always a user with an expired session and is not worth a page.
     - name: newapi.security.honeytoken
       rules:
         - alert: HoneytokenUsed
