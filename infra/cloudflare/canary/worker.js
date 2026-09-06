@@ -37,8 +37,13 @@ export default {
     const url = new URL(request.url);
     const body = request.method === "POST" ? (await request.text()).slice(0, 300) : "";
     const own = inOwn(ip, OWN_NETWORKS(env));
+    // Internet scanners found the hostname minutes after the certificate was issued. Only a
+    // request that carries a credential or aims at the API surface can be someone trying
+    // the planted key; everything else is background noise and gets a bare 404.
+    const tried = auth !== "" || url.pathname.startsWith("/v1/");
+    if (!tried) return new Response("Not Found", { status: 404 });
     const lines = [
-      `**CANARY HIT** ${own ? "(own network, probably a channel test)" : "@here"}`,
+      `**CANARY HIT** ${own ? "(own network, probably a channel test)" : ""}`.trim(),
       `ip: \`${ip}\`  asn: ${cf.asn || "?"} ${cf.asOrganization || ""}  country: ${cf.country || "?"}`,
       `${request.method} ${url.pathname}${url.search}`,
       `ua: \`${(request.headers.get("user-agent") || "").slice(0, 120)}\``,
