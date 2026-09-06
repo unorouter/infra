@@ -10,7 +10,8 @@ export KUBECONFIG=$PWD/kubeconfig
 BT=$(sops -d secrets/openbao-init.sops.yaml | grep -oP 'root_token:\s*\K\S+')
 ENVTXT=$(printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- sh -c 'read -r BAO_TOKEN && export BAO_TOKEN && bao kv get -format=json secret/pg-s3' | python3 -c "
 import sys,json; d=json.load(sys.stdin)['data']['data']
-m={'S3_ENDPOINT':d.get('endpoint'),'S3_ACCESS_KEY':d.get('access_key') or d.get('ACCESS_KEY_ID'),'S3_SECRET_KEY':d.get('secret_key') or d.get('SECRET_ACCESS_KEY'),'S3_REGION':d.get('region','eu-central'),'S3_BUCKET':d.get('bucket','unorouter-pg-backups')}
+r=d['REGION']
+m={'S3_ENDPOINT':f'https://{r}.your-objectstorage.com','S3_ACCESS_KEY':d['ACCESS_KEY_ID'],'S3_SECRET_KEY':d['ACCESS_SECRET_KEY'],'S3_REGION':r,'S3_BUCKET':'unorouter-pg-backups'}
 assert all(m.values()), m
 print('\n'.join(f'{k}={v}' for k,v in m.items()))")
 TSIP=$(tailscale status --json | python3 -c "import sys,json; d=json.load(sys.stdin); print(next(p['TailscaleIPs'][0] for p in d['Peer'].values() if p['HostName']=='$NAME'))")
