@@ -5,8 +5,27 @@
 // caller's address, network, agent and the key prefix, and goes straight to Discord.
 const OWN_NETWORKS = (env) => (env.OWN_NETWORKS || "").split(",").map((s) => s.trim()).filter(Boolean);
 
+function ipToBits(ip) {
+  if (ip.includes(":")) {
+    const [head, tail] = ip.split("::");
+    const h = head ? head.split(":") : [];
+    const t = tail ? tail.split(":") : [];
+    const groups = [...h, ...Array(8 - h.length - t.length).fill("0"), ...t];
+    return groups.map((g) => parseInt(g || "0", 16).toString(2).padStart(16, "0")).join("");
+  }
+  return ip.split(".").map((o) => (+o).toString(2).padStart(8, "0")).join("");
+}
+
 function inOwn(ip, prefixes) {
-  return prefixes.some((p) => (p.includes("/") ? ip.startsWith(p.split("/")[0].replace(/(:|\.)0+$/, "")) : ip === p));
+  if (!ip) return false;
+  const v6 = ip.includes(":");
+  const bits = ipToBits(ip);
+  return prefixes.some((p) => {
+    const [net, len] = p.split("/");
+    if (net.includes(":") !== v6) return false;
+    const n = len === undefined ? bits.length : +len;
+    return ipToBits(net).slice(0, n) === bits.slice(0, n);
+  });
 }
 
 export default {

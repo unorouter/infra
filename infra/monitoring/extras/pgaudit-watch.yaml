@@ -101,7 +101,7 @@ data:
         for (pod, user, src, cmd, obj), n in sorted(hits.items(), key=lambda kv: -kv[1])[:15]:
             lines.append(f"`{user}` from `{src}` on {pod}: {cmd} {obj} x{n}")
         req = urllib.request.Request(WEBHOOK, data=json.dumps({"username": "pgaudit", "content": "\n".join(lines)[:1900]}).encode(),
-                                     headers={"content-type": "application/json"}, method="POST")
+                                     headers={"content-type": "application/json", "user-agent": "pgaudit-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
     print(f"pods={len(pods['items'])} hits={sum(hits.values())}", flush=True)
 ---
