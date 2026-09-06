@@ -483,6 +483,25 @@ data:
             usage: "LABEL"
             description: "Up to four distinct paths it was tried on in 15m."
 
+    newapi_checkout_refused:
+      query: |
+        SELECT count(*)::float8 AS count,
+               coalesce(string_agg(DISTINCT substring(other from '"reason":"([a-z_]+)"'), ','), '') AS reasons
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 900
+          AND other LIKE '%"action":"payment.checkout_refused"%'
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Card checkouts the gateway refused to settle in 15m: paid less than the order price, or no request_id. Zero on a normal day."
+        - reasons:
+            usage: "LABEL"
+            description: "Refusal reasons seen in the window (underpaid, missing_request_id)."
+
     newapi_honeytoken_hits:
       query: |
         SELECT count(*)::float8 AS count,

@@ -398,6 +398,19 @@ spec:
               week old (largest {{ with query "cnpg_newapi_creem_topup_velocity_max_usd" }}{{ . | first | value }}{{ end }} USD).
               Real whales are old accounts; check the buyer name against the account email.
 
+    - name: newapi.security.checkout
+      rules:
+        - alert: CardCheckoutRefused
+          expr: cnpg_newapi_checkout_refused_count > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Card checkout refused ({{ $value }} in 15m): {{ $labels.reasons }}"
+            description: >-
+              The gateway received a paid Creem checkout it would not settle: the amount paid did
+              not cover the order (a discount code minted with the merchant key) or the order carried
+              no request_id (created outside the gateway). Nothing was credited. Check the Creem
+              dashboard for new discounts or products and rotate the merchant key if any exist.
     - name: newapi.security.guestchat
       rules:
         - alert: GuestChatAbuse
