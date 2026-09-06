@@ -53,6 +53,33 @@ roleRef:
   name: teleport-login-watch
   apiGroup: rbac.authorization.k8s.io
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: teleport-login-watch
+  namespace: dex
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: teleport-login-watch
+  namespace: dex
+subjects:
+  - kind: ServiceAccount
+    name: teleport-login-watch
+    namespace: monitoring
+roleRef:
+  kind: Role
+  name: teleport-login-watch
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -114,8 +141,25 @@ data:
             ua = (ev.get("user_agent") or "")[:80]
             lines.append(f"**login FAILED** {link} via {method} from `{addr}`: {ev.get('error','')[:120]}" + (f"  ua `{ua}`" if ua else ""))
 
+    # Dex fronts ArgoCD, OpenBao and Grafana with the same GitHub org gate, and unlike
+    # Teleport it names the refused user, which is the whole point of this watcher.
+    dpods = json.loads(k8s("/api/v1/namespaces/dex/pods?labelSelector=app%3Ddex"))
+    DEX_OK = re.compile(r'msg="login successful".*?preferred_username=(\S+).*?groups=\[([^\]]*)\]')
+    DEX_NO = re.compile(r'github: user "([^"]+)" not in required orgs')
+    for pod in dpods["items"]:
+        name = pod["metadata"]["name"]
+        q = urllib.parse.urlencode({"sinceSeconds": SINCE})
+        for line in k8s(f"/api/v1/namespaces/dex/pods/{name}/log?{q}").splitlines():
+            m = DEX_NO.search(line)
+            if m:
+                lines.append(f"**dex REFUSED** https://github.com/{m.group(1)} (not in the org)")
+                continue
+            m = DEX_OK.search(line)
+            if m:
+                lines.append(f"dex login ok https://github.com/{m.group(1)} groups [{m.group(2)}]")
+
     if lines:
-        body = json.dumps({"username": "teleport logins", "content": ("**teleport** (last %ds)\n" % SINCE + "\n".join(lines[:20]))[:1900]}).encode()
+        body = json.dumps({"username": "teleport logins", "content": ("**teleport / dex logins** (last %ds)\n" % SINCE + "\n".join(lines[:20]))[:1900]}).encode()
         req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "teleport-login-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
     print(f"pods={len(pods['items'])} events={len(lines)}", flush=True)
