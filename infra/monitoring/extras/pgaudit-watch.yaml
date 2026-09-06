@@ -137,7 +137,9 @@ data:
             s = sessions[key]
             s["first"] = min(s["first"] or t, t)
             s["last"] = max(s["last"] or t, t)
-            what = f"{audit.get('command') or rec.get('command_tag', '?')} {audit.get('object_name', '')}".strip()
+            # command_tag is the statement (COPY for a pg_dump), audit.command the inner
+            # class (that same COPY is logged as SELECT); the statement is what a reader wants
+            what = f"{rec.get('command_tag') or audit.get('command', '?')} {audit.get('object_name', '')}".strip()
             if what not in s["ops"]:
                 s["order"].append(what)
             s["ops"][what] += 1
