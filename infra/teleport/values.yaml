@@ -39,7 +39,7 @@ auth:
         # events stay in the default dir backend (first entry, what the web UI queries) and are
         # mirrored to stdout so the audit watcher in monitoring can post failed logins, with
         # the GitHub username and source address, to Discord within five minutes.
-        audit_events_uri: ["dir:///var/lib/teleport/log", "stdout://"]
+        audit_events_uri: ["file:///var/lib/teleport/log", "stdout://"]
     auth_service:
       tokens:
         - "app,db,kube:/etc/teleport-join/token"
