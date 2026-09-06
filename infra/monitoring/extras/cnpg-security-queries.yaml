@@ -439,27 +439,34 @@ data:
 
     newapi_invalid_credentials_spread:
       query: |
-        WITH r AS (
+        WITH h AS (
+          -- 24h history: the labels come from here so they stay STABLE while an episode
+          -- lasts (a changing label set is a new alert to Prometheus and the same
+          -- fingerprint then repeats in Discord with every window).
           SELECT substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') AS fingerprint,
                  ip,
-                 -- Cloudflare's CF-IPCountry as the gateway recorded it (T1 = Tor exit)
                  coalesce(substring(other from '"country":"([A-Z0-9]{1,2})"'), '?') AS country,
                  substring(other from '"path":"([^"]+)"') AS path,
-                 other ~ '"path":"/api/(channel|option|group|redemption|token/search|log/|user/(search|manage|topup/complete|[0-9]+)|user/?")' AS is_admin
+                 created_at
           FROM logs
           WHERE type = 3
-            AND created_at > extract(epoch from now())::bigint - 900
+            AND created_at > extract(epoch from now())::bigint - 86400
             AND other LIKE '%"credential_fingerprint":"%'
+        ), w AS (
+          SELECT fingerprint, ip, path,
+                 path ~ '^/api/(channel|option|group|redemption|token/search|log/|user/(search|manage|topup/complete|[0-9]+)|user/?$)' AS is_admin
+          FROM h
+          WHERE created_at > extract(epoch from now())::bigint - 900
         )
-        SELECT fingerprint,
+        SELECT w.fingerprint,
                count(*)::float8 AS count,
-               count(DISTINCT ip)::float8 AS distinct_ips,
-               count(*) FILTER (WHERE is_admin)::float8 AS admin_paths,
-               -- who and where, so the alert answers the first question without a query
-               (SELECT string_agg(src, ', ') FROM (SELECT DISTINCT ip || ' ' || country AS src FROM r r2 WHERE r2.fingerprint = r.fingerprint ORDER BY 1 LIMIT 4) s) AS sources,
-               (SELECT string_agg(p, ' ') FROM (SELECT DISTINCT path AS p FROM r r3 WHERE r3.fingerprint = r.fingerprint ORDER BY 1 LIMIT 4) t) AS paths
-        FROM r
-        GROUP BY fingerprint
+               count(DISTINCT w.ip)::float8 AS distinct_ips,
+               count(*) FILTER (WHERE w.is_admin)::float8 AS admin_paths,
+               (SELECT count(DISTINCT h2.ip) FROM h h2 WHERE h2.fingerprint = w.fingerprint)::float8 AS ips_24h,
+               (SELECT h2.ip || ' ' || h2.country FROM h h2 WHERE h2.fingerprint = w.fingerprint ORDER BY h2.created_at LIMIT 1) AS first_seen,
+               (SELECT h2.path FROM h h2 WHERE h2.fingerprint = w.fingerprint GROUP BY h2.path ORDER BY count(*) DESC, h2.path LIMIT 1) AS top_path
+        FROM w
+        GROUP BY w.fingerprint
       primary: true
       target_databases:
         - newapi
@@ -476,12 +483,15 @@ data:
         - admin_paths:
             usage: "GAUGE"
             description: "Rejections on admin routes in 15m. An expired user session never asks for channels, options or other users."
-        - sources:
+        - ips_24h:
+            usage: "GAUGE"
+            description: "Distinct addresses that presented it in the last 24h."
+        - first_seen:
             usage: "LABEL"
-            description: "Up to four distinct addresses with Cloudflare country code that presented it in 15m."
-        - paths:
+            description: "First address (with Cloudflare country, T1 = Tor) that presented it in the last 24h. Stable for the episode."
+        - top_path:
             usage: "LABEL"
-            description: "Up to four distinct paths it was tried on in 15m."
+            description: "Most-hit path for it in the last 24h. Stable for the episode."
 
     newapi_checkout_refused:
       query: |
