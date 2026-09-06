@@ -16,13 +16,18 @@ configuration:
   backupStorageLocation:
     - name: default
       provider: aws
-      bucket: unorouter-pg-backups
+      # Cloudflare R2 (encrypted at rest). Hetzner Object Storage offered no usable
+      # encryption and the Kopia repositories there were initialised with Velero's
+      # public default password; the move gives fresh repositories keyed by the
+      # velero-repo-credentials secret (OpenBao secret/velero). Old data stays on
+      # Hetzner under velero/ until its 14-day TTL is out.
+      bucket: unorouter-backups
       prefix: velero
       config:
-        region: fsn1
-        s3ForcePathStyle: "true"   # Ceph/RadosGW needs path-style
-        s3Url: https://fsn1.your-objectstorage.com
-        checksumAlgorithm: ""      # Hetzner Ceph: disable the aws checksum header
+        region: auto
+        s3ForcePathStyle: "true"
+        s3Url: https://7dad953fa57f079bfec11d3db10bc18a.r2.cloudflarestorage.com
+        checksumAlgorithm: ""
   volumeSnapshotLocation: []       # local-path has no CSI snapshots; use file-level (Kopia) instead
 
 # node-agent = Kopia file-level PV backup (local-path has no CSI snapshots)

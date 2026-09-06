@@ -1,0 +1,38 @@
+---
+# R2 credential for the encrypted-at-rest backup store (OpenBao r2-backups). Hetzner Object
+# Storage supports only SSE-C, which barman cannot use, so base backups and WAL move to
+# Cloudflare R2 where every object is encrypted at rest. The Hetzner stores stay as the
+# restore-from lineage until their 30-day retention has aged out.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-r2
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: newapi-pg-r2
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: r2-backups
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: bot-pg-r2
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: bot-pg-r2
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: r2-backups

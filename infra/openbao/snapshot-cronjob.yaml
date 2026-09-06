@@ -20,7 +20,7 @@ spec:
     creationPolicy: Owner
   dataFrom:
     - extract:
-        key: pg-s3
+        key: r2-backups
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -52,16 +52,14 @@ spec:
                 - name: RCLONE_CONFIG_HZ_TYPE
                   value: s3
                 - name: RCLONE_CONFIG_HZ_PROVIDER
-                  value: Ceph
+                  value: Cloudflare
                 - name: RCLONE_CONFIG_HZ_ENDPOINT
-                  value: https://fsn1.your-objectstorage.com
+                  valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: ENDPOINT } }
                 - name: RCLONE_CONFIG_HZ_ACCESS_KEY_ID
                   valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: ACCESS_KEY_ID } }
                 - name: RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY
                   valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: ACCESS_SECRET_KEY } }
                 - name: RCLONE_CONFIG_HZ_REGION
-                  valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: REGION } }
-                - name: RCLONE_CONFIG_HZ_LOCATION_CONSTRAINT
                   valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: REGION } }
               command:
                 - /bin/sh
@@ -81,6 +79,6 @@ spec:
                   SIZE=$(stat -c%s /tmp/openbao-$TS.snap)
                   [ "$SIZE" -gt 10240 ] || { echo "!! snapshot only $SIZE bytes, refusing upload"; exit 1; }
                   echo "snapshot $SIZE bytes -> S3"
-                  rclone copyto /tmp/openbao-$TS.snap hz:unorouter-pg-backups/openbao-snapshots/openbao-$TS.snap
-                  rclone copyto /tmp/openbao-$TS.snap hz:unorouter-pg-backups/openbao-snapshots/latest.snap
+                  rclone copyto /tmp/openbao-$TS.snap hz:unorouter-backups/openbao-snapshots/openbao-$TS.snap
+                  rclone copyto /tmp/openbao-$TS.snap hz:unorouter-backups/openbao-snapshots/latest.snap
                   echo "uploaded openbao-$TS.snap + latest.snap"
