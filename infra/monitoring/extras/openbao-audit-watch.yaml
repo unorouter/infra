@@ -1,0 +1,152 @@
+# Reads the OpenBao audit device (file audit to stdout, see infra/openbao/values.yaml)
+# from the pod log every five minutes and posts to Discord everything that is not the
+# routine machinery: any caller other than external-secrets, the snapshot job and the
+# CI JWT role; every root-token use; and any change to policies, auth methods, mounts,
+# audit devices, seal state or token creation, whoever did it. The pod log rotates
+# within a day, so the Discord copy is also the only durable trail. Secret values never
+# appear in the audit log (HMAC'd by OpenBao), only paths and identities are posted.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: openbao-audit-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: openbao-audit-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: DISCORD_WEBHOOK
+      remoteRef: { key: alertmanager, property: discordWebhook }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-audit-watch
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openbao-audit-watch
+  namespace: openbao
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-audit-watch
+  namespace: openbao
+subjects:
+  - kind: ServiceAccount
+    name: openbao-audit-watch
+    namespace: monitoring
+roleRef:
+  kind: Role
+  name: openbao-audit-watch
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-audit-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, re, ssl, urllib.request, urllib.parse
+    from collections import Counter
+
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    TOKEN = open(f"{SA}/token").read()
+    API = "https://kubernetes.default.svc"
+    CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+    SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
+    ROUTINE = set(os.environ.get("ROUTINE_IDENTITIES",
+        "kubernetes-external-secrets-external-secrets,kubernetes-openbao-openbao-snapshot,jwt-github-GHCR Image").split(","))
+    SENSITIVE = re.compile(r"^(sys/(policies|policy|auth|mounts|audit|seal|unseal|rekey|generate-root|raft|rotate|internal/counters)|auth/token/(create|revoke|roles)|auth/[^/]+/(config|role|roles)|identity/)")
+    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+
+    def k8s(path):
+        req = urllib.request.Request(API + path, headers={"Authorization": "Bearer " + TOKEN})
+        with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
+            return r.read().decode(errors="replace")
+
+    pods = json.loads(k8s("/api/v1/namespaces/openbao/pods?labelSelector=app.kubernetes.io%2Fname%3Dopenbao"))
+    hits = Counter()
+    for pod in pods["items"]:
+        name = pod["metadata"]["name"]
+        q = urllib.parse.urlencode({"sinceSeconds": SINCE})
+        for line in k8s(f"/api/v1/namespaces/openbao/pods/{name}/log?{q}").splitlines():
+            if '"type":"response"' not in line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            req = d.get("request") or {}
+            auth = d.get("auth") or {}
+            path = req.get("path", "")
+            op = req.get("operation", "?")
+            ident = auth.get("display_name") or "unauthenticated"
+            policies = ",".join(auth.get("policies") or [])
+            remote = (req.get("remote_address") or "?").rsplit(":", 1)[0]
+            is_root = "root" in (auth.get("policies") or [])
+            is_login = path.endswith("/login")
+            sensitive = bool(SENSITIVE.match(path))
+            routine = ident in ROUTINE or (ident == "unauthenticated" and (is_login or path.startswith("sys/health") or path.startswith("sys/seal-status")))
+            if routine and not sensitive and not is_root:
+                continue
+            if ident == "unauthenticated" and not sensitive and d.get("error"):
+                # a failed anonymous call: report it, it is a probe
+                pass
+            err = " ERR" if d.get("error") else ""
+            hits[(ident or "?", "root" if is_root else policies[:40], remote, f"{op} {path}{err}")] += 1
+
+    if hits:
+        lines = ["**openbao audit: non-routine activity** (last %ds)" % SINCE]
+        for (ident, pol, remote, what), n in sorted(hits.items(), key=lambda kv: -kv[1])[:20]:
+            lines.append(f"`{ident}` [{pol}] from `{remote}`: {what} x{n}")
+        body = json.dumps({"username": "openbao audit", "content": "\n".join(lines)[:1900]}).encode()
+        req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "openbao-audit-watch/1"}, method="POST")
+        urllib.request.urlopen(req, timeout=30).read()
+    print(f"pods={len(pods['items'])} hits={sum(hits.values())}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openbao-audit-watch
+  namespace: monitoring
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          serviceAccountName: openbao-audit-watch
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.12-alpine
+              command: ["python3", "-u", "/app/watch.py"]
+              envFrom: [{ secretRef: { name: openbao-audit-watch } }]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }]
+          volumes:
+            - name: app
+              configMap: { name: openbao-audit-watch }

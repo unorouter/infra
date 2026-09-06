@@ -242,8 +242,15 @@ spec:
       rules:
         # og-badges excluded: a degraded badge is a warning with its own alert below, not a
         # critical endpoint outage.
+        - alert: OpenBaoSealedOrDown
+          expr: probe_success{job="probe/monitoring/openbao"} == 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "OpenBao is sealed or unreachable"
+            description: "sys/health on openbao-active is not 200. After a pod restart the vault stays sealed until scripts/dr.sh unseal runs; ESO refreshes and CI secret fetches fail meanwhile."
         - alert: PublicEndpointDown
-          expr: probe_success{job!="probe/monitoring/og-badges"} == 0
+          expr: probe_success{job!~"probe/monitoring/(og-badges|openbao)"} == 0
           for: 2m
           labels: { severity: critical }
           annotations:

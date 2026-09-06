@@ -135,3 +135,22 @@ spec:
       static:
         - https://unorouter.com/api/ops/badge/hero?locale=en&size=og&format=png
         - https://unorouter.com/api/ops/badge/model?locale=en&size=og&format=png&model=glm-4.7
+---
+# OpenBao seal state. Shamir manual unseal means any restart leaves the vault sealed
+# until someone runs dr.sh unseal; before this probe the first symptom was a stale
+# Secret hours later. sys/health answers 200 only on an unsealed active node
+# (503 sealed, 501 uninitialised), so the plain http_2xx module is the right check.
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: openbao
+  namespace: monitoring
+spec:
+  interval: 30s
+  module: http_2xx
+  prober:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      static:
+        - http://openbao-active.openbao.svc.cluster.local:8200/v1/sys/health
