@@ -102,7 +102,10 @@ data:
             is_root = "root" in (auth.get("policies") or [])
             is_login = path.endswith("/login")
             sensitive = bool(SENSITIVE.match(path))
-            routine = ident in ROUTINE or (ident == "unauthenticated" and (is_login or path.startswith("sys/health") or path.startswith("sys/seal-status")))
+            # UI plumbing: every page load reads these, logged-in or not. The login itself
+            # (auth/*/callback, auth/*/login) and anything sensitive still get reported.
+            plumbing = path.startswith(("sys/internal/ui/", "sys/health", "sys/seal-status", "sys/capabilities-self", "auth/token/lookup-self")) or path.endswith("/auth_url")
+            routine = ident in ROUTINE or plumbing or (ident == "unauthenticated" and is_login)
             if routine and not sensitive and not is_root:
                 continue
             if ident == "unauthenticated" and not sensitive and d.get("error"):
