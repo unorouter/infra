@@ -25,13 +25,30 @@ after the first request. Nothing was watching the audit log.
 
 ## Root cause
 
-The PAT was exposed outside the platform, not obtained through a vulnerability in the gateway,
-the database or any host we run. Admin work using that token ran continuously until 19:53:38;
-the attacker's first request arrived at 19:53:39. A credential stolen from storage has no
-reason to correlate to the second with a live session. Two checks rule out the alternatives:
-the PAT appears in no file predating the attack on the operator workstation, and all 203
-provider keys sat in plaintext in a config file on that same workstation, which an attacker
-with file access would have taken instead of spending 43 noisy minutes to reach four.
+Established on 2026-09-06, eleven days after the incident. The frontend's container image on
+GitHub Container Registry carried the complete `.env` of the BFF at `/app/.env` (Next.js
+standalone output copies the build-time env file into the image), and that package was
+publicly pullable. The image deployed on the day of the attack (built 16:02 UTC) held the
+admin PAT, the guest relay key, the Creem merchant key, a full-access Cloudflare account token,
+the session secret and every other BFF credential. Anyone could `docker pull` it anonymously.
+
+The package could never have been private: the pull secret the deployment referenced held a
+token without `read:packages`, and the bot deployment had no pull secret at all, so both
+packages had been public since the first push in July. The vector was confirmed when, after
+every rotation in early September, the attacker kept reappearing with the newest values
+(guest key on 2026-09-06, Creem key the same day): each CI build re-baked the fresh secrets
+into a public image.
+
+The original write-up ruled this out incorrectly. The PAT appeared in no file on the operator
+workstation and the attacker used only the PAT, which pointed away from a bulk `.env` leak;
+in fact the attacker had the whole file and chose the one credential with admin rights. The
+one-second gap between the last legitimate PAT call and the first hostile one was coincidence:
+no build or push happened that minute.
+
+Fixed the night of 2026-09-06: both packages private, images no longer contain `.env`
+(the frontend keeps only `.env.public`, the bot copies nothing), the pull secret rebuilt with a
+token that can read private packages, and every credential that was ever in an image rotated,
+including the Cloudflare account token, which was also the R2 backup credential.
 
 ## Timeline (UTC)
 
