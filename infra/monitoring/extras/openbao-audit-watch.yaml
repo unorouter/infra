@@ -115,10 +115,21 @@ data:
             hits[(ident or "?", "root" if is_root else policies[:40], remote, f"{op} {path}{err}")] += 1
 
     if hits:
+        # one line per caller: reads summarised by path, writes and sensitive ops itemised
+        by_caller = {}
+        for (ident, pol, remote, what), n in hits.items():
+            by_caller.setdefault((ident, pol, remote), []).append((what, n))
         lines = ["**openbao audit: non-routine activity** (last %ds)" % SINCE]
-        for (ident, pol, remote, what), n in sorted(hits.items(), key=lambda kv: -kv[1])[:20]:
-            lines.append(f"`{ident}` [{pol}] from `{remote}`: {what} x{n}")
-        body = json.dumps({"username": "openbao audit", "content": "\n".join(lines)[:1900]}).encode()
+        for (ident, pol, remote), ops in sorted(by_caller.items(), key=lambda kv: -sum(n for _, n in kv[1])):
+            reads = [(w, n) for w, n in ops if w.startswith(("read ", "list ")) and not SENSITIVE.match(w.split(" ", 1)[1]) and " ERR" not in w]
+            rest = [(w, n) for w, n in ops if (w, n) not in reads]
+            parts = []
+            if reads:
+                paths = sorted({w.split(" ", 1)[1].replace("sys/internal/ui/mounts/", "").replace("secret/data/", "").replace("secret/metadata/", "") for w, _ in reads})
+                parts.append(f"{sum(n for _, n in reads)} reads ({', '.join(paths[:8])}{', ...' if len(paths) > 8 else ''})")
+            parts += [f"{w} x{n}" if n > 1 else w for w, n in sorted(rest, key=lambda x: -x[1])[:8]]
+            lines.append(f"`{ident}` [{pol}] from `{remote}`: " + "; ".join(parts))
+        body = json.dumps({"username": "openbao audit", "content": "\n".join(lines[:20])[:1900]}).encode()
         req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "openbao-audit-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
     print(f"pods={len(pods['items'])} hits={sum(hits.values())}", flush=True)
