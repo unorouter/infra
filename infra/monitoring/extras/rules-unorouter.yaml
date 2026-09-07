@@ -426,3 +426,69 @@ spec:
               `[pricing-audit]` block at the end: healed entries, dropped entries, and
               models on enabled channels that carry no price. Clears when the
               failed Job ages out of failedJobsHistoryLimit.
+
+    # 2026-09-07: option maps rewritten from an empty base while the gateway rolled.
+    # Channels and abilities stayed intact, so the site showed 30 models and 0 free
+    # for two hours with no alert. Series come from extras/cnpg-catalog-queries.yaml.
+    # Both tiers are compared to their own 6h high; the sync adds and removes a few
+    # lanes per run, a wipe removes most of them at once.
+    - name: unorouter.catalog
+      rules:
+        - alert: CatalogModelsGone
+          expr: >-
+            max by (tier) (cnpg_newapi_catalog_models_visible)
+              < 0.7 * max by (tier) (max_over_time(cnpg_newapi_catalog_models_visible[6h] offset 10m))
+          for: 3m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.tier }} models visible to users dropped to {{ $value }}"
+            description: >-
+              Fewer than 70% of the {{ $labels.tier }} models seen in the last 6h are still
+              exposed. If cnpg_newapi_catalog_models_enabled is unchanged the abilities are
+              fine and the option maps lost groups: restore AutoGroups, UserUsableGroups and
+              GroupRatio from the newest _bak_* options table or the last dump, then check
+              which sync Job wrote last (`kubectl -n services get jobs`).
+        - alert: CatalogModelsBelowFloor
+          expr: max by (tier) (cnpg_newapi_catalog_models_visible) < 60
+          for: 3m
+          labels: { severity: critical }
+          annotations:
+            summary: "only {{ $value }} {{ $labels.tier }} models visible (floor 60)"
+            description: >-
+              Absolute floor for either tier; normal is 130 free and 114 paid. Catches a wipe
+              that happened more than 6h ago, where the relative rule no longer has a baseline.
+        - alert: CatalogHiddenByOptions
+          expr: >-
+            max by (tier) (cnpg_newapi_catalog_models_visible)
+              < 0.8 * max by (tier) (cnpg_newapi_catalog_models_enabled)
+          for: 3m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.tier }}: {{ $value }} visible, abilities say more are enabled"
+            description: >-
+              Enabled abilities exist for models the option maps do not expose. This is the
+              exact 2026-09-07 signature: UserUsableGroups lost the groups those abilities
+              live in. Restore the option maps; the channels need no touch.
+        - alert: CatalogOptionMapShrunk
+          expr: >-
+            max by (key) (cnpg_newapi_catalog_options_entries)
+              < 0.7 * max by (key) (max_over_time(cnpg_newapi_catalog_options_entries[6h] offset 10m))
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "option map {{ $labels.key }} shrank to {{ $value }} entries"
+            description: >-
+              An option map the sync writes lost more than 30% of its entries within 6h.
+              GroupRatio and AutoGroups grow and shrink by a handful per run, never by a
+              third. A sync Job that read an empty base is the known cause; the newest
+              _bak_* options table in the newapi database is the restore source.
+        - alert: CatalogMetricsMissing
+          expr: absent(cnpg_newapi_catalog_models_visible{tier="free"})
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "catalog metrics absent for 15m"
+            description: >-
+              cnpg-newapi-catalog queries stopped producing series: the ConfigMap is not
+              referenced from newapi-pg's customQueriesConfigMap, the SQL errors, or the
+              PodMonitor is off. The catalog alerts above are blind until this clears.
