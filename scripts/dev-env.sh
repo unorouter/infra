@@ -14,11 +14,11 @@ export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/teleport-unorouter.yaml}"
 SRC="$(cd .. && pwd)/unorouter"
 [ -f "$SRC/.env.public" ] || { echo "no $SRC/.env.public" >&2; exit 1; }
 
-BT=$(sops -d secrets/openbao-init.sops.yaml | grep -oP 'root_token:\s*\K\S+')
+export BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:18200}"   # Teleport app proxy, OIDC token in ~/.bao-token
+bao token lookup >/dev/null 2>&1 || { echo "!! no OpenBao session: systemctl --user start tsh-openbao; bao login -method=oidc role=admin" >&2; exit 1; }
 
 cp "$SRC/.env.public" "$SRC/.env"
-printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- \
-  sh -c 'read -r BAO_TOKEN && export BAO_TOKEN && bao kv get -format=json secret/unorouter-env' \
+bao kv get -format=json secret/unorouter-env \
   | python3 -c '
 import sys, json
 d = json.load(sys.stdin)["data"]["data"]

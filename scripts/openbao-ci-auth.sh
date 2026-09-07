@@ -11,9 +11,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/teleport-unorouter.yaml}"
 
-BT=$(sops -d secrets/openbao-init.sops.yaml | grep -oP 'root_token:\s*\K\S+')
-BAO() { printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- \
-  sh -c "read -r BAO_TOKEN && export BAO_TOKEN && $*"; }
+export BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:18200}"   # Teleport app proxy, OIDC token in ~/.bao-token
+bao token lookup >/dev/null 2>&1 || { echo "!! no OpenBao session: systemctl --user start tsh-openbao; bao login -method=oidc role=admin" >&2; exit 1; }
+BAO() { sh -c "$*"; }
 
 echo ">> jwt auth mount trusting GitHub's OIDC provider"
 BAO "bao auth enable -path=jwt-github jwt" 2>/dev/null || echo "   (already enabled)"
@@ -22,19 +22,17 @@ BAO "bao write auth/jwt-github/config \
   bound_issuer=https://token.actions.githubusercontent.com" >/dev/null
 
 echo ">> ci-unorouter policy (read, one path)"
-printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- sh -c \
-  'read -r BAO_TOKEN && export BAO_TOKEN && cat > /tmp/p.hcl <<EOF && bao policy write ci-unorouter /tmp/p.hcl
+bao policy write ci-unorouter - <<'EOF' >/dev/null
 path "secret/data/unorouter-env" {
   capabilities = ["read"]
 }
-EOF' >/dev/null
+EOF
 
 echo ">> unorouter-ci role bound to the repo"
 # bound_claims is what makes the public endpoint safe: a JWT from any other repository is
 # rejected, so possession of the URL grants nothing. The ref binding keeps a branch with
 # an edited workflow (any collaborator can push one) from reading the build secrets.
-printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- sh -c \
-  'read -r BAO_TOKEN && export BAO_TOKEN && bao write auth/jwt-github/role/unorouter-ci - <<EOF
+bao write auth/jwt-github/role/unorouter-ci - <<'EOF' >/dev/null
 {
   "role_type": "jwt",
   "user_claim": "workflow",
@@ -44,7 +42,7 @@ printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- sh -c \
   "token_ttl": "10m",
   "token_max_ttl": "20m"
 }
-EOF' >/dev/null
+EOF
 
 echo ">> verify"
 BAO "bao read auth/jwt-github/role/unorouter-ci" | grep -E "bound_claims|token_policies|token_ttl"

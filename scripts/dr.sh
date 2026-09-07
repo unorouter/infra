@@ -2,7 +2,7 @@
 # One script, all DR/ops. The cert kubeconfig (kubeconfig.breakglass) is NOT kept on disk:
 # run `dr.sh kubeconfig` first to fetch it from a node over SSH, shred it when done; every
 # request with it pages (system:admin), day-to-day kubectl goes through Teleport.
-# Usage: ./scripts/dr.sh <ips|apply|destroy|bootstrap|restore|unseal|kubeconfig>
+# Usage: ./scripts/dr.sh <ips|apply|destroy|bootstrap|restore|unseal|kubeconfig|root>
 # Full runbook context: bootstrap/dr/README.md
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -35,7 +35,23 @@ print(s[0]['public_net']['ipv4']['ip'])
 # awk scopes the match to the unseal_keys block; a bare list-grep would swallow any other
 # YAML list ever added to the file and feed garbage into `bao operator unseal`.
 SOPS_KEYS() { sops -d secrets/openbao-init.sops.yaml | awk '/^unseal_keys:/{f=1;next} /^[^ ]/{f=0} f' | grep -oP '^\s*-\s*\K\S+'; }
-SOPS_ROOT() { sops -d secrets/openbao-init.sops.yaml | grep -oP '^root_token:\s*\K\S+'; }
+# No standing root token exists (revoked 2026-09-08): `dr.sh root` mints one from three unseal
+# keys for a DR session; revoke it again with `bao token revoke <token>` when done. Every request
+# with it pages OpenBaoRootUsed, and that is intended.
+generate_root() {
+  echo ">> generate-root from unseal keys"
+  local init nonce otp enc
+  init=$(kubectl -n openbao exec openbao-0 -- bao operator generate-root -init -format=json)
+  nonce=$(echo "$init" | python3 -c 'import sys,json;print(json.load(sys.stdin)["nonce"])')
+  otp=$(echo "$init" | python3 -c 'import sys,json;print(json.load(sys.stdin)["otp"])')
+  local n=0
+  while IFS= read -r k && [ "$n" -lt 3 ]; do
+    enc=$(kubectl -n openbao exec openbao-0 -- bao operator generate-root -nonce="$nonce" -format=json "$k" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("encoded_token",""))')
+    n=$((n+1))
+  done < <(SOPS_KEYS)
+  [ -n "$enc" ] || { echo "!! generate-root did not complete" >&2; exit 1; }
+  kubectl -n openbao exec openbao-0 -- bao operator generate-root -decode="$enc" -otp="$otp"
+}
 export KUBECONFIG="$PWD/kubeconfig.breakglass"
 
 # No -auto-approve: lesson 1 of INCIDENT 2026-07-23 (a blind apply -replace'd both nodes,
@@ -103,6 +119,7 @@ restore() {
   echo ">> DONE. Then: tsh login --proxy=teleport.unorouter.com"
 }
 
-cmd="${1:?usage: dr.sh <ips|apply|destroy|storage_apply|bootstrap|kubeconfig|unseal|restore>}"
+cmd="${1:?usage: dr.sh <ips|apply|destroy|storage_apply|bootstrap|kubeconfig|unseal|restore|root>}"
 shift
+root() { generate_root; }
 "$cmd" "$@"

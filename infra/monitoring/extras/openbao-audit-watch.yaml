@@ -84,7 +84,7 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, re, ssl, urllib.request, urllib.parse
+    import json, os, re, ssl, time, urllib.request, urllib.parse
 
     # Discord renders the body as markdown (usernames with underscores, paths, stars), so
     # everything after the bold header goes into a code fence with markdown stripped.
@@ -103,6 +103,24 @@ data:
         "kubernetes-external-secrets-external-secrets,kubernetes-openbao-openbao-snapshot,jwt-github-GHCR Image").split(","))
     SENSITIVE = re.compile(r"^(sys/(policies|policy|auth|mounts|audit|seal|unseal|rekey|generate-root|raft|rotate|internal/counters)|auth/token/(create|revoke$|revoke-accessor|roles)|auth/[^/]+/(config|role|roles)|identity/)")
     WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+    AM = os.environ.get("ALERTMANAGER_URL", "")
+
+    # No standing root token exists since 2026-09-08 (revoked; dr.sh root mints one from the
+    # unseal keys for DR). A request under the root policy is therefore break-glass or a breach.
+    def page(alertname, summary):
+        if not AM:
+            print("PAGE:", alertname, summary, flush=True)
+            return
+        now = time.time()
+        fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        body = json.dumps([{"labels": {"alertname": alertname, "severity": "critical", "source": "openbao-audit-watch"},
+                            "annotations": {"summary": summary[:500]},
+                            "startsAt": fmt(now), "endsAt": fmt(now + 2400)}]).encode()
+        req = urllib.request.Request(AM.rstrip("/") + "/api/v2/alerts", data=body, headers={"content-type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=30).read()
+        except Exception as e:
+            print("alertmanager post failed:", e, flush=True)
 
     def k8s(path):
         req = urllib.request.Request(API + path, headers={"Authorization": "Bearer " + TOKEN})
@@ -194,7 +212,10 @@ data:
         body = json.dumps({"username": "openbao audit", "content": fence(lines[0], lines[1:20])}).encode()
         req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "openbao-audit-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
-    print(f"pods={len(pods['items'])} callers={len(callers)}", flush=True)
+    root_hits = [(ident, remote, sum(c["reads"].values()) + len(c["ops"]) + c["mounts"]) for (ident, pol, remote), c in callers.items() if pol == "root"]
+    if root_hits:
+        page("OpenBaoRootUsed", "; ".join(f"{i} from {where(r)}: {n} requests" for i, r, n in root_hits[:5]))
+    print(f"pods={len(pods['items'])} callers={len(callers)} root={len(root_hits)}", flush=True)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -219,6 +240,9 @@ spec:
               image: python:3.12-alpine
               command: ["python3", "-u", "/app/watch.py"]
               envFrom: [{ secretRef: { name: openbao-audit-watch } }]
+              env:
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { memory: 128Mi }
