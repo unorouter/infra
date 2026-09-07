@@ -62,6 +62,12 @@ data:
         r"^system:apiserver$,^system:kube-controller-manager$,^system:kube-scheduler$").split(",")]
     PAGE_NS = set(os.environ.get("PAGE_NAMESPACES", "services,openbao,databases").split(","))
     SHELL = {"pods/exec", "pods/attach", "pods/portforward"}
+    # People who come in through Teleport under their own name: Teleport records every
+    # request and every exec session itself, so they get one digest a day here instead
+    # of the 5-minute post and never page. The shared admin cert is not a person.
+    NAMED = re.compile(os.environ.get("NAMED_USERS", r"^0-don$|^bishop076$"))
+    DIGEST_HOUR = int(os.environ.get("DIGEST_HOUR_UTC", "8"))
+    DIGEST = os.environ.get("DIGEST_FILE", "/state/named.json")
 
     def load_state():
         try:
@@ -105,6 +111,44 @@ data:
     def routine(user):
         return any(r.search(user) for r in ROUTINE)
 
+    def ident(ev):
+        """Teleport calls the API as its agent ServiceAccount and impersonates the SSO user;
+        the person is the identity, the agent only says how they came in."""
+        imp = ev.get("impersonatedUser") or {}
+        sa = (ev.get("user") or {}).get("username", "?")
+        if imp.get("username"):
+            return imp["username"], "via " + sa.split(":")[-1]
+        return sa, ""
+
+    def load_digest():
+        try:
+            return json.load(open(DIGEST))
+        except Exception:
+            return {"posted": "", "lines": []}
+
+    def digest_add(items):
+        d = load_digest()
+        for ev, kind, user, obj, via in items:
+            t = ev.get("stageTimestamp", "")[:19].replace("T", " ")
+            target = f"{obj.get('namespace', '')}/{obj.get('name', '')}".strip("/")
+            d["lines"].append(f"{t} {user} {via} from {', '.join(ev.get('sourceIPs') or [])[:40]}: {ev.get('verb', '?')} {kind} {target}")
+        d["lines"] = d["lines"][-2000:]
+        json.dump(d, open(DIGEST, "w"))
+
+    def digest_flush():
+        d = load_digest()
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        if d["posted"] == today or time.gmtime().tm_hour < DIGEST_HOUR:
+            return
+        if d["lines"]:
+            counts = defaultdict(int)
+            for l in d["lines"]:
+                counts[" ".join(l.split(" ")[2:4])] += 1
+            head = f"**k8s audit on {NODE}: named operator activity, daily digest** ({len(d['lines'])} requests)"
+            summary = [f"{who}: {n}" for who, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+            post(fence(head, summary[:5] + d["lines"][-14:]))
+        json.dump({"posted": today, "lines": []}, open(DIGEST, "w"))
+
     def cred(ev):
         extra = (ev.get("user") or {}).get("extra") or {}
         ids = extra.get("authentication.kubernetes.io/credential-id") or []
@@ -145,7 +189,7 @@ data:
             res = obj.get("resource", "")
             sub = obj.get("subresource", "")
             kind = f"{res}/{sub}" if sub else res
-            user = (ev.get("user") or {}).get("username", "?")
+            user, via = ident(ev)
             if kind == "secrets" and routine(user):
                 continue
             if kind == "serviceaccounts/token" and routine(user):
@@ -155,13 +199,19 @@ data:
             if kind == "pods/exec" and user == "system:serviceaccount:cnpg-system:cnpg-manager" \
                     and "command=%2Fcontroller%2Fmanager&command=backup" in ev.get("requestURI", ""):
                 continue
-            events.append((ev, kind, user, obj))
+            events.append((ev, kind, user, obj, via))
+        named = [e for e in events if NAMED.search(e[2])]
+        if named:
+            digest_add(named)
+        digest_flush()
+        events = [e for e in events if not NAMED.search(e[2])]
         if not events:
             return
-        groups = defaultdict(lambda: {"n": 0, "first": None, "last": None, "what": defaultdict(int), "ips": set(), "ua": set(), "verbs": set(), "code": set()})
+        groups = defaultdict(lambda: {"n": 0, "first": None, "last": None, "what": defaultdict(int), "ips": set(), "ua": set(), "verbs": set(), "code": set(), "via": ""})
         pages = defaultdict(list)
-        for ev, kind, user, obj in events:
+        for ev, kind, user, obj, via in events:
             key = (user, cred(ev))
+            groups[key]["via"] = via
             g = groups[key]
             t = ev.get("stageTimestamp", "")[11:19]
             g["first"] = g["first"] or t
@@ -186,7 +236,7 @@ data:
             what = ", ".join(f"{w} x{n}" if n > 1 else w for w, n in sorted(g["what"].items())[:8])
             if len(g["what"]) > 8:
                 what += f", and {len(g['what']) - 8} more"
-            who = f"`{user}`" + (f" cred {cid}" if cid else "")
+            who = f"`{user}`" + (f" {g['via']}" if g["via"] else "") + (f" cred {cid}" if cid else "")
             lines_out.append(f"{who} from {', '.join(sorted(g['ips'])[:3]) or '?'} ({', '.join(sorted(g['ua'])) or '?'}), {span} UTC, http {'/'.join(sorted(g['code']))}: {what}")
         print("\n".join(lines_out), flush=True)
         post(fence(lines_out[0], lines_out[1:20]))

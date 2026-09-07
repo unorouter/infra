@@ -144,6 +144,11 @@ data:
             # remote connection under that role is not.
             if user == "cnpg_metrics_exporter" and audit.get("class") == "READ" and rec.get("connection_from") == "[local]":
                 continue
+            # A reader session arriving from the Teleport database agent is a named SSO user
+            # (Teleport's db.session events carry the name and the queries); the same role from
+            # anywhere else, or any other role, still posts.
+            if user == "reader" and where(rec.get("connection_from", "")).startswith("teleport-agent/teleport-app-access"):
+                continue
             t = (rec.get("log_time") or "")[11:19]
             key = (name, user, rec.get("connection_from", "?"), rec.get("session_id", "?"), rec.get("backend_type", "?"), rec.get("session_start_time", "")[11:19])
             s = sessions[key]
