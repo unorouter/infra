@@ -85,6 +85,13 @@ metadata:
 data:
   watch.py: |
     import json, os, re, ssl, urllib.request, urllib.parse
+
+    # Discord renders the body as markdown (usernames with underscores, paths, stars), so
+    # everything after the bold header goes into a code fence with markdown stripped.
+    def fence(header, lines):
+        body = "\n".join(lines).replace("**", "").replace("`", "")
+        body = re.sub(r"<(https?://[^>]+)>", r"\1", body)
+        return header + "\n```\n" + body[:1700] + "\n```"
     from collections import defaultdict
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -184,7 +191,7 @@ data:
                 parts.append(f"and {len(c['ops']) - 8} more")
             lines.append(f"`{ident}` [{pol}] from {where(remote)}, {span} UTC: " + "; ".join(parts))
         print("\n".join(lines), flush=True)
-        body = json.dumps({"username": "openbao audit", "content": "\n".join(lines[:20])[:1900]}).encode()
+        body = json.dumps({"username": "openbao audit", "content": fence(lines[0], lines[1:20])}).encode()
         req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "openbao-audit-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
     print(f"pods={len(pods['items'])} callers={len(callers)}", flush=True)

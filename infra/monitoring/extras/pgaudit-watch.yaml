@@ -84,7 +84,14 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, ssl, urllib.request, urllib.parse
+    import json, os, ssl, urllib.request, urllib.parse, re
+
+    # Discord renders the body as markdown (usernames with underscores, paths, stars), so
+    # everything after the bold header goes into a code fence with markdown stripped.
+    def fence(header, lines):
+        body = "\n".join(lines).replace("**", "").replace("`", "")
+        body = re.sub(r"<(https?://[^>]+)>", r"\1", body)
+        return header + "\n```\n" + body[:1700] + "\n```"
     from collections import defaultdict
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -157,7 +164,7 @@ data:
             note = "" if backend == "client backend" else f" ({backend})"
             lines.append(f"`{user}` on {pod} from {where(src)}{note}, session {sid} opened {started}, {span} UTC: {ops}")
         print("\n".join(lines), flush=True)
-        req = urllib.request.Request(WEBHOOK, data=json.dumps({"username": "pgaudit", "content": "\n".join(lines)[:1900]}).encode(),
+        req = urllib.request.Request(WEBHOOK, data=json.dumps({"username": "pgaudit", "content": fence(lines[0], lines[1:])}).encode(),
                                      headers={"content-type": "application/json", "user-agent": "pgaudit-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
     print(f"pods={len(pods['items'])} sessions={len(sessions)}", flush=True)

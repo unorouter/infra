@@ -33,7 +33,14 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, urllib.request, urllib.error
+    import json, os, urllib.request, urllib.error, re
+
+    # Discord renders the body as markdown (usernames with underscores, paths, stars), so
+    # everything after the bold header goes into a code fence with markdown stripped.
+    def fence(header, lines):
+        body = "\n".join(lines).replace("**", "").replace("`", "")
+        body = re.sub(r"<(https?://[^>]+)>", r"\1", body)
+        return header + "\n```\n" + body[:1700] + "\n```"
 
     ORG = os.environ.get("GITHUB_ORG", "unorouter")
     ALLOW = set(x for x in os.environ.get("ALLOW_PUBLIC", "").split(",") if x)
@@ -111,8 +118,8 @@ data:
         findings.append("expected packages the API cannot find: " + ", ".join(missing) + " (deleted or renamed? update EXPECT_PACKAGES)")
     if findings:
         page("PublicPackageExposed", "; ".join(f.replace("`", "") for f in findings)[:400])
-        post("**ghcr: a container package that must be private is PUBLIC**\n" + "\n".join(findings)
-             + "\nFix: github.com/orgs/" + ORG + "/packages/container/<name>/settings, Danger Zone, change visibility. Then rotate whatever the image carried.")
+        post(fence("**ghcr: a container package that must be private is PUBLIC**", findings
+             + ["Fix: github.com/orgs/" + ORG + "/packages/container/<name>/settings, Danger Zone, change visibility. Then rotate whatever the image carried."]))
     print(f"packages={len(packages)} allowed_public={sorted(ALLOW)} findings={len(findings)}", flush=True)
 ---
 apiVersion: batch/v1

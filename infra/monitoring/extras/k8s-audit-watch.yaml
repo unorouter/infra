@@ -33,6 +33,13 @@ metadata:
 data:
   watch.py: |
     import json, os, re, time, urllib.request
+
+    # Discord renders the body as markdown (usernames with underscores, paths, stars), so
+    # everything after the bold header goes into a code fence with markdown stripped.
+    def fence(header, lines):
+        body = "\n".join(lines).replace("**", "").replace("`", "")
+        body = re.sub(r"<(https?://[^>]+)>", r"\1", body)
+        return header + "\n```\n" + body[:1700] + "\n```"
     from collections import defaultdict
 
     LOG = os.environ.get("AUDIT_LOG", "/audit/audit.log")
@@ -177,7 +184,7 @@ data:
             who = f"`{user}`" + (f" cred {cid}" if cid else "")
             lines_out.append(f"{who} from {', '.join(sorted(g['ips'])[:3]) or '?'} ({', '.join(sorted(g['ua'])) or '?'}), {span} UTC, http {'/'.join(sorted(g['code']))}: {what}")
         print("\n".join(lines_out), flush=True)
-        post("\n".join(lines_out[:20]))
+        post(fence(lines_out[0], lines_out[1:20]))
         for name, items in pages.items():
             page(name, f"{len(items)} on {NODE}: " + "; ".join(items[:5]))
 

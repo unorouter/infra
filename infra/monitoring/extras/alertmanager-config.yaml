@@ -119,9 +119,11 @@ spec:
           # to what you act on: what broke, where, and the one-line summary.
           title: '{{ if eq .Status "firing" }}[{{ .CommonLabels.severity | toUpper }}]{{ else }}[RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
           message: |-
+            ```
             {{ range .Alerts -}}
             {{ .Annotations.summary }}
             {{ end -}}
+            ```
   inhibitRules:
     # one root cause must not become an alert storm: a down node explains its pods, and
     # etcd degradation explains the NodeNotReady it causes (incident 2026-07-24).
