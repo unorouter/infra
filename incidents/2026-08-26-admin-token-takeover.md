@@ -45,10 +45,14 @@ in fact the attacker had the whole file and chose the one credential with admin 
 one-second gap between the last legitimate PAT call and the first hostile one was coincidence:
 no build or push happened that minute.
 
-Fixed the night of 2026-09-06: both packages private, images no longer contain `.env`
-(the frontend keeps only `.env.public`, the bot copies nothing), the pull secret rebuilt with a
-token that can read private packages, and every credential that was ever in an image rotated,
-including the Cloudflare account token, which was also the R2 backup credential.
+Fixed the night of 2026-09-06: both packages private, the pull secret rebuilt with a token
+that can read private packages, and every credential that was ever in an image rotated,
+including the Cloudflare account token, which was also the R2 backup credential. The first
+Dockerfile fix (copy `.env.public` over `.env` in the final stage) was wrong: the layer that
+copied the standalone build still held the full file, and every layer ships with a pull. A
+layer scanner written the next day caught it; the file is now removed in the builder stage
+before anything is copied, the affected versions were deleted, and every public image is
+scanned layer by layer every 15 minutes against known key formats and the live secret values.
 
 ## Timeline (UTC)
 
