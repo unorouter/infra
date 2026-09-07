@@ -23,3 +23,12 @@ GRANT SELECT (id, created_at) ON users TO cnpg_metrics_exporter;
 -- serves publicly through /api/pricing).
 GRANT SELECT ON abilities TO cnpg_metrics_exporter;
 GRANT SELECT ON options TO cnpg_metrics_exporter;
+-- `options` has row-level security (reader-least-privilege.sql); a grant alone shows
+-- the exporter zero rows. This policy is the whole allowlist: the seven map keys the
+-- catalog metrics count. Every other row, including the payment and SMTP secrets,
+-- stays invisible to the role. Verified: `select count(*) from options` as this role
+-- returns 7.
+CREATE POLICY metrics_exporter_catalog_maps ON public.options
+  FOR SELECT TO cnpg_metrics_exporter
+  USING (key IN ('AutoGroups', 'UserUsableGroups', 'GroupRatio', 'ModelRatio',
+                 'CompletionRatio', 'CacheRatio', 'ModelPrice'));
