@@ -128,7 +128,7 @@ spec:
                 # every package that must exist; merged with the API listing, which drops
                 # packages reachable only through repository-inherited access
                 - name: EXPECT_PACKAGES
-                  value: unorouter,unorouter-bot,new-api,new-api-sync,uno-cards,uno-import,comfyui-worker
+                  value: unorouter,unorouter-bot,new-api,new-api-sync,uno-cards,uno-import
               envFrom: [{ secretRef: { name: ghcr-visibility-watch } }]
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
