@@ -412,6 +412,37 @@ data:
     #
     # Labelled metric, so it is absent when idle by design; SecurityMetricsMissing
     # watches the unlabelled totals, not this one.
+    # Rejected credentials that reached the gateway from our own addresses. The
+    # gateway stamps those trusted, so newapi_invalid_credentials never sees them,
+    # yet nothing legitimate presents a dead credential from a node or pod: on
+    # 2026-09-07 this was the frontend's custom-forward relay carrying an attacker's
+    # dead admin token and the old guest key through node9 (Tor callers, 693 calls a
+    # day). Node addresses are the three Hetzner nodes; update on a node swap.
+    newapi_invalid_credentials_via_own_nodes:
+      query: |
+        SELECT substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') AS fingerprint,
+               substring(other from '"path":"([^"]*)"') AS path,
+               count(*)::float8 AS count
+        FROM logs
+        WHERE type = 3
+          AND created_at > extract(epoch from now())::bigint - 300
+          AND other LIKE '%"credential_fingerprint":"%'
+          AND (ip LIKE '10.42.%' OR ip IN ('116.203.88.111', '46.62.232.235', '204.168.247.53'))
+        GROUP BY 1, 2
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - fingerprint:
+            usage: "LABEL"
+            description: "HMAC fingerprint of the rejected credential"
+        - path:
+            usage: "LABEL"
+            description: "Gateway path it was presented on"
+        - count:
+            usage: "GAUGE"
+            description: "Rejections in the last 5 minutes that arrived from a node or pod address"
+
     newapi_invalid_credentials:
       query: |
         SELECT substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') AS fingerprint,

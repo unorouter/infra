@@ -175,6 +175,19 @@ spec:
               or ten times in 15m. An expired dashboard session looks different: one address, a
               handful of /api/user/self calls, then a fresh login. Query the logs table for the
               fingerprint to see paths and addresses; node IPs mean the frontend forwarded it.
+        - alert: InvalidCredentialViaOwnNodes
+          expr: cnpg_newapi_invalid_credentials_via_own_nodes_count > 0
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "Dead credential {{ $labels.fingerprint }} presented from our own address on {{ $labels.path }} ({{ $value }}x in 5m)"
+            description: >-
+              A rejected credential arrived from a node or pod address, so the gateway stamped it
+              trusted and the caller's real address is gone. Nothing of ours presents dead
+              credentials; something is relaying a caller's request through the cluster. Last
+              time it was the frontend's custom-forward proxy aimed at our own hosts (blocked
+              in safe-fetch since 2026-09-07). Find the relay: Cloudflare shows the node address
+              as the client with the relay's user agent, and the inbound call in the same minute.
         - alert: InvalidCredentialFromForeignNetwork
           expr: cnpg_newapi_invalid_credentials_count >= 10
           for: 0m
