@@ -56,6 +56,11 @@ spec:
         - ports:
             - { port: "6443", protocol: TCP }
             - { port: "443", protocol: TCP }
+    # OIDC auth: the server exchanges the login code with Dex and fetches its JWKS at
+    # https://dex.unorouter.com, which resolves to Cloudflare (Dex has no TLS in-cluster).
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
