@@ -307,3 +307,24 @@ spec:
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
+---
+# The kube-prometheus-stack admission hook Jobs (kps-admission-create/patch) run on every
+# ArgoCD sync under their own ServiceAccount and only talk to the API server.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: kps-admission
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { io.cilium.k8s.policy.serviceaccount: kps-admission }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
