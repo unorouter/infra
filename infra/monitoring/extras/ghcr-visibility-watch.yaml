@@ -124,7 +124,7 @@ spec:
                 # included); private packages count against the org's 500 MB / 1 GB per
                 # month GitHub Packages quota and pulls are BLOCKED once it is used up
                 - name: ALLOW_PUBLIC
-                  value: unorouter-bot,new-api,new-api-sync,uno-import,uno-cards
+                  value: unorouter,unorouter-bot,new-api,new-api-sync,uno-import,uno-cards
                 # every package that must exist; merged with the API listing, which drops
                 # packages reachable only through repository-inherited access
                 - name: EXPECT_PACKAGES
