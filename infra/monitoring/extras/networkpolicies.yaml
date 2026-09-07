@@ -1,0 +1,309 @@
+# Pod isolation for monitoring. Default-deny for every pod; the allows below are the scrape
+# map plus the alert delivery paths. Facts that shape the rules: Prometheus scrapes node
+# ports (kubelet 10250, etcd 2381, node-exporter 9100, cilium 9962/9963, API 6443) and the
+# local node shows up as the host entity while the other two control-plane nodes show up as
+# kube-apiserver (and remote-node), so those three entities travel together; the API server
+# calls the kps-operator admission webhook on 10250 from the same identities; kubelet probes
+# and kubectl port-forwards arrive as host. Grafana is reachable from Teleport app access
+# only, which closes the forged Teleport-JWT header from any other pod. node-exporter is
+# hostNetwork and outside pod policy. Jobs and watchers run under their own ServiceAccount
+# or `default`, so the `default` account gets one shared egress set (API server, alertmanager,
+# openbao for the blackbox probe, the internet on 443) rather than a policy per job name.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: monitoring
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: prometheus }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: grafana }
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports:
+            - { port: "9090", protocol: TCP }
+            - { port: "8080", protocol: TCP }
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "9090", protocol: TCP }
+            - { port: "8080", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+            - { port: "9153", protocol: TCP }
+    # In-namespace targets: alertmanager (alerts and scrape), grafana, kube-state-metrics,
+    # blackbox, the operator, and its own reloader.
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring }
+      toPorts:
+        - ports:
+            - { port: "9093", protocol: TCP }
+            - { port: "8080", protocol: TCP }
+            - { port: "8081", protocol: TCP }
+            - { port: "3000", protocol: TCP }
+            - { port: "9115", protocol: TCP }
+            - { port: "10250", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "9187", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+      toPorts:
+        - ports: [{ port: "2000", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: argocd, app.kubernetes.io/name: argocd-application-controller }
+        - matchLabels: { io.kubernetes.pod.namespace: argocd, app.kubernetes.io/name: argocd-server }
+        - matchLabels: { io.kubernetes.pod.namespace: argocd, app.kubernetes.io/name: argocd-repo-server }
+      toPorts:
+        - ports:
+            - { port: "8082", protocol: TCP }
+            - { port: "8083", protocol: TCP }
+            - { port: "8084", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cnpg-system, app.kubernetes.io/name: cloudnative-pg }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: velero, app.kubernetes.io/name: velero }
+      toPorts:
+        - ports: [{ port: "8085", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: cilium }
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, io.cilium/app: operator }
+      toPorts:
+        - ports:
+            - { port: "9962", protocol: TCP }
+            - { port: "9963", protocol: TCP }
+    # Node ports: kubelet, etcd, node-exporter (hostNetwork), cilium agent and operator
+    # (hostNetwork), and the API server for service discovery.
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports:
+            - { port: "6443", protocol: TCP }
+            - { port: "10250", protocol: TCP }
+            - { port: "2381", protocol: TCP }
+            - { port: "9100", protocol: TCP }
+            - { port: "9962", protocol: TCP }
+            - { port: "9963", protocol: TCP }
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: alertmanager }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+        - matchLabels: { app.kubernetes.io/name: grafana }
+        - matchLabels: { io.cilium.k8s.policy.serviceaccount: image-secret-scan }
+        - matchLabels: { io.cilium.k8s.policy.serviceaccount: default }
+      toPorts:
+        - ports:
+            - { port: "9093", protocol: TCP }
+            - { port: "8080", protocol: TCP }
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "9093", protocol: TCP }
+            - { port: "8080", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app: ntfy-bridge }
+        - matchLabels: { app: edge-mode }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: grafana }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports:
+            - { port: "9090", protocol: TCP }
+            - { port: "9093", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: kps-operator
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app: kps-operator }
+  ingress:
+    - fromEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "10250", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "10250", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: kube-state-metrics }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports:
+            - { port: "8080", protocol: TCP }
+            - { port: "8081", protocol: TCP }
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "8080", protocol: TCP }
+            - { port: "8081", protocol: TCP }
+  egress:
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+# Everything under the default ServiceAccount: blackbox, ntfy-bridge, edge-mode, the
+# k8s-audit-watch DaemonSet and the watcher CronJobs without their own account.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: default-account-workloads
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { io.cilium.k8s.policy.serviceaccount: default }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports:
+            - { port: "9115", protocol: TCP }
+            - { port: "8080", protocol: TCP }
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "9115", protocol: TCP }
+            - { port: "8080", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports: [{ port: "9093", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: openbao, app.kubernetes.io/name: openbao, component: server }
+      toPorts:
+        - ports: [{ port: "8200", protocol: TCP }]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+# Watchers with their own ServiceAccount (they read pod logs through the API server and
+# post to Discord); image-secret-scan also pages through alertmanager and pulls layers.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: watchers
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: io.cilium.k8s.policy.serviceaccount
+        operator: In
+        values: [image-secret-scan, openbao-audit-watch, pgaudit-watch, teleport-login-watch]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports: [{ port: "9093", protocol: TCP }]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
