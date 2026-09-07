@@ -21,5 +21,8 @@ spec:
         - 10.100.1.3:2381
         - 10.100.1.2:2381
   relabelings:
-    - sourceLabels: [__address__]
+    # action is what the CRD defaults to; stated so ArgoCD's compare of this atomic list
+    # matches the live object instead of reporting the app OutOfSync forever.
+    - action: replace
+      sourceLabels: [__address__]
       targetLabel: instance
