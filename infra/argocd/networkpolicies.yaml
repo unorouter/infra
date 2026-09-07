@@ -1,0 +1,229 @@
+# Pod isolation for ArgoCD (the chart ships ingress-only policies; these add default-deny and
+# the egress side). Controller: repo-server, redis, API server. Repo-server: redis, GitHub and
+# the chart registries on 443. API server pod: redis, repo-server, the bundled dex on 5556/5557,
+# the API server, and the internet on 443 for the OIDC issuer at dex.unorouter.com (it is
+# reached through the public hostname). Teleport app access fronts the UI on 8080; Prometheus
+# scrapes 8082/8083/8084; kubelet probes and kubectl port-forwards arrive as host.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: argocd
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: application-controller
+  namespace: argocd
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: argocd-application-controller }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "8082", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8082", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-repo-server }
+      toPorts:
+        - ports: [{ port: "8081", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-redis }
+      toPorts:
+        - ports: [{ port: "6379", protocol: TCP }]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: repo-server
+  namespace: argocd
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: argocd-repo-server }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-application-controller }
+        - matchLabels: { app.kubernetes.io/name: argocd-server }
+        - matchLabels: { app.kubernetes.io/name: argocd-notifications-controller }
+      toPorts:
+        - ports: [{ port: "8081", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "8084", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "8081", protocol: TCP }
+            - { port: "8084", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-redis }
+      toPorts:
+        - ports: [{ port: "6379", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: server
+  namespace: argocd
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: argocd-server }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "8083", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "8080", protocol: TCP }
+            - { port: "8083", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-redis }
+      toPorts:
+        - ports: [{ port: "6379", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-repo-server }
+      toPorts:
+        - ports: [{ port: "8081", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-dex-server }
+      toPorts:
+        - ports:
+            - { port: "5556", protocol: TCP }
+            - { port: "5557", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: redis
+  namespace: argocd
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: argocd-redis }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-application-controller }
+        - matchLabels: { app.kubernetes.io/name: argocd-server }
+        - matchLabels: { app.kubernetes.io/name: argocd-repo-server }
+      toPorts:
+        - ports: [{ port: "6379", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "6379", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: dex-server
+  namespace: argocd
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: argocd-dex-server }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-server }
+      toPorts:
+        - ports:
+            - { port: "5556", protocol: TCP }
+            - { port: "5557", protocol: TCP }
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "5556", protocol: TCP }
+            - { port: "5558", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+# applicationset and notifications controllers: API server only (notifications also reads
+# the repo-server for templates and could post to the internet, allowed on 443).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: auxiliary-controllers
+  namespace: argocd
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [argocd-applicationset-controller, argocd-notifications-controller]
+  ingress:
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "8080", protocol: TCP }
+            - { port: "8081", protocol: TCP }
+            - { port: "9001", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: argocd-repo-server }
+      toPorts:
+        - ports: [{ port: "8081", protocol: TCP }]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]

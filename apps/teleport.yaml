@@ -15,6 +15,7 @@ spec:
     - repoURL: https://github.com/unorouter/infra.git
       targetRevision: main
       ref: values
+      path: infra/teleport/policies
   destination:
     server: https://kubernetes.default.svc
     namespace: teleport

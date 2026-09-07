@@ -1,0 +1,42 @@
+# Pod isolation for Velero. The server, the node-agent DaemonSet and the kopia maintenance
+# Jobs all run under the velero-server ServiceAccount and need the same three things: DNS,
+# the API server, and R2 on 443. Prometheus scrapes the server on 8085; kubelet probes arrive
+# as host.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: velero
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: velero
+  namespace: velero
+spec:
+  endpointSelector:
+    matchLabels: { io.cilium.k8s.policy.serviceaccount: velero-server }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "8085", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8085", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
