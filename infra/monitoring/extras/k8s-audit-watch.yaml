@@ -42,13 +42,16 @@ data:
     WEBHOOK = os.environ["DISCORD_WEBHOOK"]
     AM = os.environ.get("ALERTMANAGER_URL", "")
     # Identities whose Secret reads are the platform working: the secret syncer, the
-    # image scanner, the operators. Anything else reading a Secret is a person or a
-    # foothold. Exec, attach and port-forward are never routine.
+    # image scanner, the operators, the CNPG instance accounts reading their own
+    # object-store secret, kubelets minting tokens. Anything else reading a Secret
+    # is a person or a foothold. Exec, attach and port-forward are never routine.
     ROUTINE = [re.compile(p) for p in os.environ.get("ROUTINE_USERS",
         r"^system:serviceaccount:external-secrets:,^system:serviceaccount:monitoring:image-secret-scan$,"
         r"^system:serviceaccount:cnpg-system:,^system:serviceaccount:kube-system:,^system:serviceaccount:argocd:,"
         r"^system:serviceaccount:velero:,^system:serviceaccount:cert-manager:,^system:serviceaccount:teleport:,"
         r"^system:serviceaccount:teleport-agent:,^system:serviceaccount:openbao:,^system:serviceaccount:cloudflared:,"
+        r"^system:serviceaccount:monitoring:(kps-|monitoring-kube-state-metrics$|monitoring-grafana$),"
+        r"^system:serviceaccount:databases:(newapi-pg|bot-pg)$,^system:k3s-supervisor$,^system:node:,"
         r"^system:apiserver$,^system:kube-controller-manager$,^system:kube-scheduler$").split(",")]
     PAGE_NS = set(os.environ.get("PAGE_NAMESPACES", "services,openbao,databases").split(","))
     SHELL = {"pods/exec", "pods/attach", "pods/portforward"}
