@@ -1,5 +1,29 @@
 #cloud-config
 write_files:
+  - path: /var/lib/rancher/k3s/server/audit-policy.yaml
+    permissions: "0600"
+    content: |
+      # Who touched a secret or got a shell. Metadata only: the request URI names the
+      # object (and the exec command), the body would carry the secret values.
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      omitStages: [RequestReceived]
+      rules:
+        - level: None
+          users: ["system:kube-controller-manager", "system:kube-scheduler", "system:apiserver"]
+          resources:
+            - group: ""
+              resources: [secrets]
+        - level: None
+          userGroups: ["system:nodes"]
+          resources:
+            - group: ""
+              resources: [secrets]
+        - level: Metadata
+          resources:
+            - group: ""
+              resources: [secrets, pods/exec, pods/attach, pods/portforward, serviceaccounts/token]
+        - level: None
   - path: /etc/sysctl.d/90-conntrack.conf
     content: |
       # The default 131k conntrack table fills under a SYN flood and every service on the node stalls.
@@ -46,6 +70,11 @@ runcmd:
       --kubelet-arg=image-gc-high-threshold=70 \
       --kubelet-arg=image-gc-low-threshold=55 \
       --tls-san=$PUBLIC_IP \
+      --kube-apiserver-arg=audit-policy-file=/var/lib/rancher/k3s/server/audit-policy.yaml \
+      --kube-apiserver-arg=audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log \
+      --kube-apiserver-arg=audit-log-maxage=30 \
+      --kube-apiserver-arg=audit-log-maxbackup=10 \
+      --kube-apiserver-arg=audit-log-maxsize=100 \
       --write-kubeconfig-mode 600"
 %{ if k3s_version != "" ~}
     export INSTALL_K3S_VERSION="${k3s_version}"
