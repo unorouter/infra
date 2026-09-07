@@ -1,0 +1,109 @@
+# Pod isolation for the Postgres clusters. Default-deny for every pod here; each CNPG cluster
+# gets its own allow set so bot-pg and newapi-pg cannot even talk to each other. Ingress:
+# 5432 from the application pods that own the database (plus Teleport database access for
+# newapi-pg), 8000 (instance manager) from the kubelet probes and the CNPG operator, 9187
+# from Prometheus, and the cluster's own instances on 5432 (replication) and 8000 (status).
+# Egress: DNS, the API server (the instance manager watches its own resources; the local
+# node's API server shows up as the host identity, hence both entities), the cluster's
+# own instances, and the internet on 443 for the R2 archive.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: databases
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: newapi-pg
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api }
+        - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
+        - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cnpg-system, app.kubernetes.io/name: cloudnative-pg }
+        - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "9187", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports:
+            - { port: "5432", protocol: TCP }
+            - { port: "8000", protocol: TCP }
+    - toEntities: [kube-apiserver, host]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: bot-pg
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: services, app: unorouter-bot }
+        - matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cnpg-system, app.kubernetes.io/name: cloudnative-pg }
+        - matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "9187", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports:
+            - { port: "5432", protocol: TCP }
+            - { port: "8000", protocol: TCP }
+    - toEntities: [kube-apiserver, host]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
