@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# One script, all DR/ops. Usage: ./scripts/dr.sh <ips|apply|destroy|bootstrap|restore|unseal|kubeconfig>
+# One script, all DR/ops. The cert kubeconfig (kubeconfig.breakglass) is NOT kept on disk:
+# run `dr.sh kubeconfig` first to fetch it from a node over SSH, shred it when done; every
+# request with it pages (system:admin), day-to-day kubectl goes through Teleport.
+# Usage: ./scripts/dr.sh <ips|apply|destroy|bootstrap|restore|unseal|kubeconfig>
 # Full runbook context: bootstrap/dr/README.md
 set -euo pipefail
 cd "$(dirname "$0")/.."
