@@ -132,6 +132,11 @@ data:
             if user in APP_ROLES:
                 continue
             audit = rec.get("audit", {})
+            # The CNPG metrics exporter scrapes options for the catalog metrics once a
+            # minute over the instance socket; that read is the platform, a write or a
+            # remote connection under that role is not.
+            if user == "cnpg_metrics_exporter" and audit.get("class") == "READ" and rec.get("connection_from") == "[local]":
+                continue
             t = (rec.get("log_time") or "")[11:19]
             key = (name, user, rec.get("connection_from", "?"), rec.get("session_id", "?"), rec.get("backend_type", "?"), rec.get("session_start_time", "")[11:19])
             s = sessions[key]
