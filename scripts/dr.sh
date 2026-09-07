@@ -33,7 +33,7 @@ print(s[0]['public_net']['ipv4']['ip'])
 # YAML list ever added to the file and feed garbage into `bao operator unseal`.
 SOPS_KEYS() { sops -d secrets/openbao-init.sops.yaml | awk '/^unseal_keys:/{f=1;next} /^[^ ]/{f=0} f' | grep -oP '^\s*-\s*\K\S+'; }
 SOPS_ROOT() { sops -d secrets/openbao-init.sops.yaml | grep -oP '^root_token:\s*\K\S+'; }
-export KUBECONFIG="$PWD/kubeconfig"
+export KUBECONFIG="$PWD/kubeconfig.breakglass"
 
 # No -auto-approve: lesson 1 of INCIDENT 2026-07-23 (a blind apply -replace'd both nodes,
 # 34min DB outage). tofu prompts; read the plan.
@@ -43,8 +43,8 @@ storage_apply() { (cd tofu/storage && set -a && . ../.env && set +a && tofu init
 
 kubeconfig() {
   local ip; ip=$(NODE_IP); ssh-keygen -R "$ip" >/dev/null 2>&1 || true
-  ssh -o StrictHostKeyChecking=no root@"$ip" 'cat /etc/rancher/k3s/k3s.yaml' | sed "s/127.0.0.1/$ip/" > kubeconfig
-  chmod 600 kubeconfig; echo "kubeconfig -> $ip"
+  ssh -o StrictHostKeyChecking=no root@"$ip" 'cat /etc/rancher/k3s/k3s.yaml' | sed "s/127.0.0.1/$ip/" > kubeconfig.breakglass
+  chmod 600 kubeconfig.breakglass; echo "kubeconfig.breakglass -> $ip"
 }
 
 # Fallback only: cloud-init auto-bootstraps Cilium+ArgoCD. Use if that path fails.

@@ -27,7 +27,7 @@ SRC="$ROOT/$REPO"
 [ -f "$SRC/Dockerfile" ] || { echo "no Dockerfile in $SRC" >&2; exit 1; }
 [ -f "$SRC/k8s/deployment.yaml" ] || { echo "no k8s/deployment.yaml in $SRC" >&2; exit 1; }
 
-export KUBECONFIG="$PWD/kubeconfig"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/teleport-unorouter.yaml}"
 # token via stdin, not argv: exec args land in the apiserver audit log + pod process table
 BAO() { printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- sh -c "read -r BAO_TOKEN && export BAO_TOKEN && $*"; }
 BT=$(sops -d secrets/openbao-init.sops.yaml | grep -oP 'root_token:\s*\K\S+')

@@ -9,7 +9,7 @@
 # The cloudflared route (openbao-ci.unorouter.com) IS in git -- infra/cloudflared.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export KUBECONFIG="$PWD/kubeconfig"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/teleport-unorouter.yaml}"
 
 BT=$(sops -d secrets/openbao-init.sops.yaml | grep -oP 'root_token:\s*\K\S+')
 BAO() { printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- \

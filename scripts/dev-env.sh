@@ -9,7 +9,7 @@
 # does the same for the build container, which is also outside the cluster.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export KUBECONFIG="$PWD/kubeconfig"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/teleport-unorouter.yaml}"
 
 SRC="$(cd .. && pwd)/unorouter"
 [ -f "$SRC/.env.public" ] || { echo "no $SRC/.env.public" >&2; exit 1; }
