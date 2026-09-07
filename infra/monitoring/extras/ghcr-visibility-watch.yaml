@@ -54,9 +54,27 @@ data:
         req = urllib.request.Request(WEBHOOK, data=body, headers={**UA, "content-type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
 
+    # critical Alertmanager alert (rings the phone); re-posted every run while it persists
+    def page(alertname, summary):
+        import time
+        am = os.environ.get("ALERTMANAGER_URL", "")
+        if not am:
+            return
+        now = time.time()
+        fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        body = json.dumps([{"labels": {"alertname": alertname, "severity": "critical", "source": "ghcr-visibility-watch"},
+                            "annotations": {"summary": summary[:500]},
+                            "startsAt": fmt(now), "endsAt": fmt(now + 2400)}]).encode()
+        req = urllib.request.Request(am.rstrip("/") + "/api/v2/alerts", data=body, headers={**UA, "content-type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=30).read()
+        except urllib.error.HTTPError as e:
+            print(f"alertmanager post failed HTTP {e.code}", flush=True)
+
     status, body = get(f"https://api.github.com/orgs/{ORG}/packages?package_type=container&per_page=100",
                        {"authorization": "Bearer " + GH, "accept": "application/vnd.github+json"})
     if status != 200:
+        page("PublicPackageExposed", f"ghcr visibility watch is BLIND: cannot list packages (HTTP {status}), GITHUB_TOKEN dead?")
         post(f"**ghcr visibility watch cannot list packages** (HTTP {status}); the GITHUB_TOKEN in secret/ghcr-push may be dead, the check is BLIND until fixed")
         raise SystemExit(1)
     packages = json.loads(body)
@@ -92,6 +110,7 @@ data:
     if missing:
         findings.append("expected packages the API cannot find: " + ", ".join(missing) + " (deleted or renamed? update EXPECT_PACKAGES)")
     if findings:
+        page("PublicPackageExposed", "; ".join(f.replace("`", "") for f in findings)[:400])
         post("**ghcr: a container package that must be private is PUBLIC**\n" + "\n".join(findings)
              + "\nFix: github.com/orgs/" + ORG + "/packages/container/<name>/settings, Danger Zone, change visibility. Then rotate whatever the image carried.")
     print(f"packages={len(packages)} allowed_public={sorted(ALLOW)} findings={len(findings)}", flush=True)
@@ -120,6 +139,8 @@ spec:
               env:
                 - name: GITHUB_ORG
                   value: unorouter
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
                 # images proven secret-free by image-secret-scan (every layer, live values
                 # included); private packages count against the org's 500 MB / 1 GB per
                 # month GitHub Packages quota and pulls are BLOCKED once it is used up

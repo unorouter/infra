@@ -71,7 +71,7 @@ spec:
             value: critical
           - name: alertname
             matchType: "=~"
-            value: "^(PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork)$"
+            value: "^(PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork|ImageSecretLeak|PublicPackageExposed)$"
           - name: pod
             matchType: "!~"
             value: "unorouter.*"
