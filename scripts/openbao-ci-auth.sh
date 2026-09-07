@@ -31,14 +31,15 @@ EOF' >/dev/null
 
 echo ">> unorouter-ci role bound to the repo"
 # bound_claims is what makes the public endpoint safe: a JWT from any other repository is
-# rejected, so possession of the URL grants nothing.
+# rejected, so possession of the URL grants nothing. The ref binding keeps a branch with
+# an edited workflow (any collaborator can push one) from reading the build secrets.
 printf '%s\n' "$BT" | kubectl -n openbao exec -i openbao-0 -- sh -c \
   'read -r BAO_TOKEN && export BAO_TOKEN && bao write auth/jwt-github/role/unorouter-ci - <<EOF
 {
   "role_type": "jwt",
   "user_claim": "workflow",
   "bound_audiences": ["https://github.com/unorouter"],
-  "bound_claims": { "repository": "unorouter/unorouter" },
+  "bound_claims": { "repository": "unorouter/unorouter", "ref": "refs/heads/main" },
   "token_policies": ["ci-unorouter"],
   "token_ttl": "10m",
   "token_max_ttl": "20m"
