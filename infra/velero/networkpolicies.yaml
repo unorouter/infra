@@ -17,8 +17,13 @@ metadata:
   name: velero
   namespace: velero
 spec:
+  # velero-server-upgrade-crds is the chart's pre-sync hook Job (applies CRDs through the API
+  # server); without it in the selector the hook is default-denied and the sync hangs.
   endpointSelector:
-    matchLabels: { io.cilium.k8s.policy.serviceaccount: velero-server }
+    matchExpressions:
+      - key: io.cilium.k8s.policy.serviceaccount
+        operator: In
+        values: [velero-server, velero-server-upgrade-crds]
   ingress:
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
