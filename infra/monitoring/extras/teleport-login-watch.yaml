@@ -87,7 +87,8 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, re, ssl, urllib.request, urllib.parse
+    import json
+    import time, os, re, ssl, urllib.request, urllib.parse
 
     # Discord renders the body as markdown (usernames with underscores, paths, stars), so
     # everything after the bold header goes into a code fence with markdown stripped.
@@ -103,6 +104,29 @@ data:
     SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
     WEBHOOK = os.environ["DISCORD_WEBHOOK"]
     WANT = {"user.login", "auth"}
+    # Privilege changes inside Teleport: a role, a connector mapping or a user's role set
+    # is how a stolen editor session escalates, and it is silent otherwise. Always paged.
+    PRIV = {"role.created", "role.updated", "role.deleted", "github.created", "github.updated", "github.deleted",
+            "saml.created", "saml.updated", "saml.deleted", "oidc.created", "oidc.updated", "oidc.deleted",
+            "user.create", "user.update", "user.delete", "trusted_cluster.create", "trusted_cluster.delete"}
+    # Write-capable DB sessions: pgaudit only sees the role, this line names the person.
+    DB_ADMIN_USERS = set(os.environ.get("DB_ADMIN_USERS", "dbadmin,postgres").split(","))
+    AM = os.environ.get("ALERTMANAGER_URL", "")
+
+    def page(alertname, summary):
+        if not AM:
+            print("PAGE:", alertname, summary, flush=True)
+            return
+        now = time.time()
+        fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        body = json.dumps([{"labels": {"alertname": alertname, "severity": "critical", "source": "teleport-login-watch"},
+                            "annotations": {"summary": summary[:500]},
+                            "startsAt": fmt(now), "endsAt": fmt(now + 2400)}]).encode()
+        req = urllib.request.Request(AM.rstrip("/") + "/api/v2/alerts", data=body, headers={"content-type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=30).read()
+        except Exception as e:
+            print("alertmanager post failed:", e, flush=True)
 
     def k8s(path):
         req = urllib.request.Request(API + path, headers={"Authorization": "Bearer " + TOKEN})
@@ -123,6 +147,7 @@ data:
 
     pods = json.loads(k8s("/api/v1/namespaces/teleport/pods?labelSelector=app.kubernetes.io%2Fcomponent%3Dauth"))
     lines = []
+    priv = []
     for pod in pods["items"]:
         name = pod["metadata"]["name"]
         q = urllib.parse.urlencode({"sinceSeconds": SINCE})
@@ -133,7 +158,17 @@ data:
                 ev = json.loads(line[line.index("{"):])
             except ValueError:
                 continue
-            if ev.get("event") not in WANT:
+            e = ev.get("event")
+            if e in PRIV:
+                who = ev.get("user", "?")
+                what = f"{e} `{ev.get('name', '')}`" + (f" roles {ev.get('roles')}" if ev.get("roles") else "")
+                lines.append(f"**PRIVILEGE CHANGE** by `{who}` from `{ev.get('addr.remote', '?')}`: {what}")
+                priv.append(f"{who}: {what}")
+                continue
+            if e == "db.session.start" and ev.get("db_user") in DB_ADMIN_USERS:
+                lines.append(f"**db admin session** `{ev.get('user', '?')}` as `{ev.get('db_user')}` on {ev.get('db_service')}/{ev.get('db_name')} ({ev.get('user_agent', '')[:30]})")
+                continue
+            if e not in WANT:
                 continue
             ok = ev.get("success", True)
             method = ev.get("method", "local")
@@ -175,7 +210,9 @@ data:
         body = json.dumps({"username": "teleport logins", "content": fence("**teleport / dex logins** (last %ds)" % SINCE, lines[:20])}).encode()
         req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "teleport-login-watch/1"}, method="POST")
         urllib.request.urlopen(req, timeout=30).read()
-    print(f"pods={len(pods['items'])} events={len(lines)}", flush=True)
+    if priv:
+        page("TeleportPrivilegeChange", f"{len(priv)} change(s): " + "; ".join(priv[:5]))
+    print(f"pods={len(pods['items'])} events={len(lines)} priv={len(priv)}", flush=True)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -200,6 +237,9 @@ spec:
               image: python:3.12-alpine
               command: ["python3", "-u", "/app/watch.py"]
               envFrom: [{ secretRef: { name: teleport-login-watch } }]
+              env:
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { memory: 128Mi }
