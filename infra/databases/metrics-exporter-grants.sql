@@ -16,3 +16,10 @@ GRANT SELECT (id, user_id) ON tokens TO cnpg_metrics_exporter;
 
 -- card top-up velocity (cnpg-security-queries newapi_creem_topup_velocity) needs the account age
 GRANT SELECT (id, created_at) ON users TO cnpg_metrics_exporter;
+
+-- Catalog metrics (monitoring/extras/cnpg-catalog-queries.yaml): models exposed to
+-- users and the size of every option map the sync writes. Whole-table reads; neither
+-- table holds secrets (abilities is routing, options is the map set the gateway
+-- serves publicly through /api/pricing).
+GRANT SELECT ON abilities TO cnpg_metrics_exporter;
+GRANT SELECT ON options TO cnpg_metrics_exporter;
