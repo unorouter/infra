@@ -116,6 +116,9 @@ spec:
         - matchLabels: { app.kubernetes.io/name: prometheus }
         - matchLabels: { app.kubernetes.io/name: grafana }
         - matchLabels: { io.cilium.k8s.policy.serviceaccount: image-secret-scan }
+        - matchLabels: { io.cilium.k8s.policy.serviceaccount: teleport-login-watch }
+        - matchLabels: { io.cilium.k8s.policy.serviceaccount: pgaudit-watch }
+        - matchLabels: { io.cilium.k8s.policy.serviceaccount: openbao-audit-watch }
         - matchLabels: { io.cilium.k8s.policy.serviceaccount: default }
       toPorts:
         - ports:
@@ -166,6 +169,12 @@ spec:
         - ports:
             - { port: "53", protocol: UDP }
             - { port: "53", protocol: TCP }
+    # Teleport JWT auth: Grafana fetches the proxy's JWKS at teleport.unorouter.com, which the
+    # CoreDNS rewrite resolves to the proxy Service in-cluster (container port 3080).
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: teleport, app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: proxy }
+      toPorts:
+        - ports: [{ port: "3080", protocol: TCP }]
     - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: prometheus }
         - matchLabels: { app.kubernetes.io/name: alertmanager }

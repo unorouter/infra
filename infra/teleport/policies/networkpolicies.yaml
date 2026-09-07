@@ -25,6 +25,8 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
         - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
         - matchLabels: { io.kubernetes.pod.namespace: monitoring, app: blackbox-exporter }
+        # Grafana verifies Teleport JWTs against the proxy's JWKS through the CoreDNS rewrite
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: grafana }
       toPorts:
         - ports: [{ port: "3080", protocol: TCP }]
     - fromEntities: [host]
