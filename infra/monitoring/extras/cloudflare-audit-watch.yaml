@@ -61,7 +61,14 @@ data:
         action = (e.get("action") or {}).get("type", "?")
         res = (e.get("resource") or {}).get("type", "?")
         meta = e.get("metadata") or {}
-        what = meta.get("name") or meta.get("zone_name") or meta.get("zone") or ""
+        rec = e.get("newValueJson") or e.get("oldValueJson") or {}
+        # Let's Encrypt DNS-01: paired create/delete of _acme-challenge.* and
+        # _acme-check.* TXT records, dozens a day from the netcup Traefik.
+        if res == "dns.record" and rec.get("type") == "TXT" and str(rec.get("name", "")).startswith(("_acme-challenge.", "_acme-check.")):
+            continue
+        what = rec.get("name") or meta.get("name") or meta.get("zone_name") or meta.get("zone") or ""
+        if rec.get("type"):
+            what = f"{rec['type']} {what}"
         via = e.get("interface") or ""
         when = (e.get("when") or "")[11:19]
         lines.append(f"{when}Z `{who}` from `{ip}`: {action} {res} {what} {('via ' + via) if via else ''}".rstrip())
