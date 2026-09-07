@@ -120,9 +120,11 @@ spec:
               env:
                 - name: GITHUB_ORG
                   value: unorouter
-                # images that hold no secrets and are pulled without a pull secret
+                # images proven secret-free by image-secret-scan (every layer, live values
+                # included); private packages count against the org's 500 MB / 1 GB per
+                # month GitHub Packages quota and pulls are BLOCKED once it is used up
                 - name: ALLOW_PUBLIC
-                  value: ""
+                  value: unorouter-bot,new-api,new-api-sync,uno-import,uno-cards
                 # every package that must exist; merged with the API listing, which drops
                 # packages reachable only through repository-inherited access
                 - name: EXPECT_PACKAGES
