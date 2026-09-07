@@ -1,0 +1,249 @@
+# Pod isolation for the application namespace. Every workload gets exactly the peers it uses:
+# the tunnel in, the gateway and Redis and Postgres out, the internet on the ports the code can
+# dial. Ports are container ports. Kubelet probes arrive as host. No DNS L7 rules on this cluster
+# (the transparent DNS proxy drops redirected queries here), so DNS is a plain L4 allow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: services
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Gateway. Callers: the tunnel (api.unorouter.com), the frontend BFF, the bot, the sync jobs, the
+# hosted MCP (it relays through the public host today, the allow keeps parity with
+# new-api/k8s/networkpolicy.yaml). Out: Redis, the newapi-pg instances, the bot (free rate-limit
+# perks), upstream providers and payment/auth vendors on 443, Resend SMTP on 587.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: new-api
+  namespace: services
+spec:
+  endpointSelector:
+    matchLabels: { app: new-api }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+        - matchLabels: { app: unorouter }
+        - matchLabels: { app: unorouter-bot }
+        - matchLabels: { app: new-api-sync }
+        - matchLabels: { app: new-api-sync-full }
+        - matchLabels: { app: unorouter-mcp }
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app: newapi-redis }
+      toPorts:
+        - ports: [{ port: "6379", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { app: unorouter-bot }
+      toPorts:
+        - ports: [{ port: "4000", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports:
+            - { port: "443", protocol: TCP }
+            - { port: "587", protocol: TCP }
+---
+# Frontend (Next.js BFF). In from the tunnel only. Out: the gateway, the bot (BOT_INTERNAL_URL),
+# and the internet on 80 and 443, which is exactly the port set safe-fetch accepts for
+# user-supplied URLs (Turso, PostHog, Tavily, Runware and cards.unorouter.com are 443).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: unorouter
+  namespace: services
+spec:
+  endpointSelector:
+    matchLabels: { app: unorouter }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app: new-api }
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { app: unorouter-bot }
+      toPorts:
+        - ports: [{ port: "4000", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports:
+            - { port: "80", protocol: TCP }
+            - { port: "443", protocol: TCP }
+---
+# Discord bot. In from the tunnel (bot.unorouter.com), the frontend and the gateway. Out: the
+# gateway, its own Postgres, Discord and the vote sites on 443.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: unorouter-bot
+  namespace: services
+spec:
+  endpointSelector:
+    matchLabels: { app: unorouter-bot }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+        - matchLabels: { app: unorouter }
+        - matchLabels: { app: new-api }
+      toPorts:
+        - ports: [{ port: "4000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "4000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app: new-api }
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+# Hosted MCP. In from the tunnel (mcp.unorouter.com). Out: npm at start (npx fetches the
+# package) and the public gateway host; it forwards no client header, so it stays on the public
+# path where the caller's address survives.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: unorouter-mcp
+  namespace: services
+spec:
+  endpointSelector:
+    matchLabels: { app: unorouter-mcp }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+# Card importer behind a gluetun sidecar. In from the tunnel (cards.unorouter.com). Out: only
+# the PIA OpenVPN tunnel and PIA's API; every card site is fetched inside the tunnel.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: uno-import
+  namespace: services
+spec:
+  endpointSelector:
+    matchLabels: { app: uno-import }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+      toPorts:
+        - ports: [{ port: "4000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "4000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [world]
+      toPorts:
+        - ports:
+            - { port: "1197", protocol: UDP }
+            - { port: "1198", protocol: UDP }
+            - { port: "443", protocol: TCP }
+---
+# Sync CronJobs (15-minute and nightly full). Nothing in. Out: the gateway and the upstream
+# catalogs on 443.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: new-api-sync
+  namespace: services
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [new-api-sync, new-api-sync-full]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app: new-api }
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+# Redis. In from the gateway and the kubelet probe. No egress at all.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: newapi-redis
+  namespace: services
+spec:
+  endpointSelector:
+    matchLabels: { app: newapi-redis }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app: new-api }
+      toPorts:
+        - ports: [{ port: "6379", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "6379", protocol: TCP }]
