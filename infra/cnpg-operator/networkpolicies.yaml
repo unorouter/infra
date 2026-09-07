@@ -1,0 +1,81 @@
+# Pod isolation for the CNPG operator and the Barman Cloud plugin. The operator serves the
+# admission webhook on 9443 for the API server (host, remote-node or kube-apiserver identity
+# depending on the serving node), is scraped by Prometheus on 8080, and talks to the API
+# server, the barman-cloud plugin on 9090 and the instance managers on 8000 in `databases`.
+# The plugin pod serves 9090 to the operator (and the kubelet TCP probe) and needs the API
+# server plus the object store on 443 for the backup and WAL work it drives.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: cnpg-system
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: operator
+  namespace: cnpg-system
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: cloudnative-pg }
+  ingress:
+    - fromEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports:
+            - { port: "9443", protocol: TCP }
+            - { port: "8080", protocol: TCP }
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app: barman-cloud }
+      toPorts:
+        - ports: [{ port: "9090", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: barman-cloud
+  namespace: cnpg-system
+spec:
+  endpointSelector:
+    matchLabels: { app: barman-cloud }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: cloudnative-pg }
+      toPorts:
+        - ports: [{ port: "9090", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "9090", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]

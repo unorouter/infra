@@ -5,3 +5,4 @@ kind: Kustomization
 resources:
   - https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.0/cnpg-1.30.0.yaml
   - https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.15.0/manifest.yaml
+  - networkpolicies.yaml
