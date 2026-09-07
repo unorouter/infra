@@ -3,3 +3,4 @@ kind: Kustomization
 namespace: openbao
 resources:
   - snapshot-cronjob.yaml
+  - networkpolicies.yaml

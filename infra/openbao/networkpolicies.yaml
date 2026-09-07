@@ -1,0 +1,86 @@
+# Pod isolation for OpenBao. Default-deny for every pod here; the server accepts 8200 only
+# from the identities that legitimately read it (ESO controller, the blackbox probe, the
+# tunnel for openbao-ci.unorouter.com, Teleport app access for the UI, the snapshot job) and
+# talks out only to DNS and the API server (Kubernetes auth token review). Root-token work
+# goes through kubectl exec and never crosses the network. The snapshot job needs the server,
+# DNS and R2 (world on 443). Probes are exec, so no host ingress rule is needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: openbao
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: openbao-server
+  namespace: openbao
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: openbao
+      component: server
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: external-secrets
+            app.kubernetes.io/name: external-secrets
+        - matchLabels:
+            io.kubernetes.pod.namespace: monitoring
+            app: blackbox-exporter
+        - matchLabels:
+            io.kubernetes.pod.namespace: cloudflared
+            app: cloudflared
+        - matchLabels:
+            io.kubernetes.pod.namespace: teleport-agent
+            app: teleport-app-access
+        - matchLabels:
+            io.kubernetes.pod.namespace: openbao
+            io.cilium.k8s.policy.serviceaccount: openbao-snapshot
+      toPorts:
+        - ports: [{ port: "8200", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [kube-apiserver]
+      toPorts:
+        - ports:
+            - { port: "6443", protocol: TCP }
+            - { port: "443", protocol: TCP }
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: openbao-snapshot
+  namespace: openbao
+spec:
+  endpointSelector:
+    matchLabels:
+      io.cilium.k8s.policy.serviceaccount: openbao-snapshot
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: openbao
+            component: server
+      toPorts:
+        - ports: [{ port: "8200", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
