@@ -150,6 +150,11 @@ data:
                 continue
             if kind == "serviceaccounts/token" and routine(user):
                 continue
+            # The CNPG operator runs every backup by exec-ing its own manager binary in an
+            # instance; that is the platform, any other exec by that account is not.
+            if kind == "pods/exec" and user == "system:serviceaccount:cnpg-system:cnpg-manager" \
+                    and "command=%2Fcontroller%2Fmanager&command=backup" in ev.get("requestURI", ""):
+                continue
             events.append((ev, kind, user, obj))
         if not events:
             return
