@@ -11,9 +11,8 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, watch]
-  - apiGroups: [""]
-    resources: [pods/exec, pods/portforward]
-    verbs: [create]
+  # No exec, no port-forward: either one dumps a pod's environment, and a pod
+  # in services carries the service secrets (2026-09-07).
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get, list, watch]

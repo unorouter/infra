@@ -15,4 +15,4 @@ spec:
       - kind: "pod"
         name: "*"
         namespace: "services"
-        verbs: ["get", "list", "watch", "exec", "portforward"]
+        verbs: ["get", "list", "watch"]
