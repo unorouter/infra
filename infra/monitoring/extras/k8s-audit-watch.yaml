@@ -1,0 +1,238 @@
+# Tails the kube-apiserver audit log on every server (a file under
+# /var/lib/rancher/k3s/server/logs, written by the policy in tofu/cloud-init*.tftpl:
+# Metadata events for secrets, pods/exec, pods/attach, pods/portforward and
+# serviceaccounts/token, nothing else) and posts to Discord every Secret read that is
+# not the routine machinery, and every exec, attach or port-forward whoever did it.
+# A Secret read in services, openbao or databases and any exec also page through
+# Alertmanager. Each server logs only what it served, so one tail per server is the
+# whole picture. The pod runs as root because the log is root 0600; it mounts the
+# directory read-only, keeps its offset in an emptyDir, and holds no credential
+# beyond the Discord webhook.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: k8s-audit-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: k8s-audit-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: DISCORD_WEBHOOK
+      remoteRef: { key: alertmanager, property: discordWebhook }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-audit-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, re, time, urllib.request
+    from collections import defaultdict
+
+    LOG = os.environ.get("AUDIT_LOG", "/audit/audit.log")
+    STATE = os.environ.get("STATE_FILE", "/state/offset.json")
+    INTERVAL = int(os.environ.get("INTERVAL_SECONDS", "300"))
+    NODE = os.environ.get("NODE_NAME", "?")
+    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+    AM = os.environ.get("ALERTMANAGER_URL", "")
+    # Identities whose Secret reads are the platform working: the secret syncer, the
+    # image scanner, the operators. Anything else reading a Secret is a person or a
+    # foothold. Exec, attach and port-forward are never routine.
+    ROUTINE = [re.compile(p) for p in os.environ.get("ROUTINE_USERS",
+        r"^system:serviceaccount:external-secrets:,^system:serviceaccount:monitoring:image-secret-scan$,"
+        r"^system:serviceaccount:cnpg-system:,^system:serviceaccount:kube-system:,^system:serviceaccount:argocd:,"
+        r"^system:serviceaccount:velero:,^system:serviceaccount:cert-manager:,^system:serviceaccount:teleport:,"
+        r"^system:serviceaccount:teleport-agent:,^system:serviceaccount:openbao:,^system:serviceaccount:cloudflared:,"
+        r"^system:apiserver$,^system:kube-controller-manager$,^system:kube-scheduler$").split(",")]
+    PAGE_NS = set(os.environ.get("PAGE_NAMESPACES", "services,openbao,databases").split(","))
+    SHELL = {"pods/exec", "pods/attach", "pods/portforward"}
+
+    def load_state():
+        try:
+            return json.load(open(STATE))
+        except Exception:
+            return {"inode": None, "offset": 0}
+
+    def save_state(st):
+        json.dump(st, open(STATE, "w"))
+
+    def read_new(st):
+        """New complete lines since the saved offset; a changed inode means rotation,
+        so the previous file is drained first and the new one starts at 0."""
+        out = []
+        try:
+            cur = os.stat(LOG)
+        except FileNotFoundError:
+            return out
+        if st["inode"] is None:
+            # First start: history is on disk for grep, only new events are posted.
+            st["inode"], st["offset"] = cur.st_ino, cur.st_size
+            return out
+        if st["inode"] != cur.st_ino:
+            for name in sorted(os.listdir(os.path.dirname(LOG))):
+                path = os.path.join(os.path.dirname(LOG), name)
+                if name != os.path.basename(LOG) and os.stat(path).st_ino == st["inode"]:
+                    with open(path, "rb") as f:
+                        f.seek(st["offset"])
+                        out += f.read().splitlines()
+            st["offset"] = 0
+        st["inode"] = cur.st_ino
+        with open(LOG, "rb") as f:
+            f.seek(st["offset"])
+            data = f.read()
+        if data and not data.endswith(b"\n"):
+            data = data[: data.rfind(b"\n") + 1]
+        st["offset"] += len(data)
+        out += data.splitlines()
+        return out
+
+    def routine(user):
+        return any(r.search(user) for r in ROUTINE)
+
+    def cred(ev):
+        extra = (ev.get("user") or {}).get("extra") or {}
+        ids = extra.get("authentication.kubernetes.io/credential-id") or []
+        return ids[0].split("=")[-1][:12] if ids else ""
+
+    def post(text):
+        body = json.dumps({"username": "k8s audit", "content": text[:1900]}).encode()
+        req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "k8s-audit-watch/1"}, method="POST")
+        urllib.request.urlopen(req, timeout=30).read()
+
+    # Same shape as image-secret-scan: critical alert, re-raised while it recurs, gone after 40 min.
+    def page(alertname, summary):
+        if not AM:
+            print("PAGE:", alertname, summary, flush=True)
+            return
+        now = time.time()
+        fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        body = json.dumps([{"labels": {"alertname": alertname, "severity": "critical", "source": "k8s-audit-watch", "node": NODE},
+                            "annotations": {"summary": summary[:500]},
+                            "startsAt": fmt(now), "endsAt": fmt(now + 2400)}]).encode()
+        req = urllib.request.Request(AM.rstrip("/") + "/api/v2/alerts", data=body, headers={"content-type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=30).read()
+        except Exception as e:
+            print("alertmanager post failed:", e, flush=True)
+
+    def cycle(st):
+        lines = read_new(st)
+        events = []
+        for raw in lines:
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                continue
+            if ev.get("stage") != "ResponseComplete":
+                continue
+            obj = ev.get("objectRef") or {}
+            res = obj.get("resource", "")
+            sub = obj.get("subresource", "")
+            kind = f"{res}/{sub}" if sub else res
+            user = (ev.get("user") or {}).get("username", "?")
+            if kind == "secrets" and routine(user):
+                continue
+            if kind == "serviceaccounts/token" and routine(user):
+                continue
+            events.append((ev, kind, user, obj))
+        if not events:
+            return
+        groups = defaultdict(lambda: {"n": 0, "first": None, "last": None, "what": defaultdict(int), "ips": set(), "ua": set(), "verbs": set(), "code": set()})
+        pages = defaultdict(list)
+        for ev, kind, user, obj in events:
+            key = (user, cred(ev))
+            g = groups[key]
+            t = ev.get("stageTimestamp", "")[11:19]
+            g["first"] = g["first"] or t
+            g["last"] = t
+            g["n"] += 1
+            target = f"{obj.get('namespace', '')}/{obj.get('name', '')}".strip("/")
+            if kind in SHELL:
+                cmd = re.findall(r"command=([^&]+)", ev.get("requestURI", ""))
+                target += " " + " ".join(urllib.request.unquote(c) for c in cmd[:4]) if cmd else ""
+            g["what"][f"{ev.get('verb', '?')} {kind} {target}"] += 1
+            g["ips"].update(ev.get("sourceIPs") or [])
+            g["ua"].add((ev.get("userAgent") or "")[:40])
+            g["verbs"].add(ev.get("verb", "?"))
+            g["code"].add(str((ev.get("responseStatus") or {}).get("code", "")))
+            if kind in SHELL:
+                pages["K8sPodExec"].append(f"{user} {ev.get('verb')} {kind} {target}")
+            elif kind == "secrets" and obj.get("namespace") in PAGE_NS:
+                pages["K8sSecretRead"].append(f"{user} {ev.get('verb')} {target}")
+        lines_out = [f"**k8s audit on {NODE}: non-routine API activity** (last {INTERVAL}s)"]
+        for (user, cid), g in sorted(groups.items(), key=lambda kv: -kv[1]["n"]):
+            span = g["first"] if g["first"] == g["last"] else f"{g['first']} to {g['last']}"
+            what = ", ".join(f"{w} x{n}" if n > 1 else w for w, n in sorted(g["what"].items())[:8])
+            if len(g["what"]) > 8:
+                what += f", and {len(g['what']) - 8} more"
+            who = f"`{user}`" + (f" cred {cid}" if cid else "")
+            lines_out.append(f"{who} from {', '.join(sorted(g['ips'])[:3]) or '?'} ({', '.join(sorted(g['ua'])) or '?'}), {span} UTC, http {'/'.join(sorted(g['code']))}: {what}")
+        print("\n".join(lines_out), flush=True)
+        post("\n".join(lines_out[:20]))
+        for name, items in pages.items():
+            page(name, f"{len(items)} on {NODE}: " + "; ".join(items[:5]))
+
+    st = load_state()
+    while True:
+        try:
+            cycle(st)
+            save_state(st)
+        except Exception as e:
+            print("cycle failed:", repr(e), flush=True)
+        time.sleep(INTERVAL)
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: k8s-audit-watch
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels: { app: k8s-audit-watch }
+  template:
+    metadata:
+      labels: { app: k8s-audit-watch }
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+      automountServiceAccountToken: false
+      containers:
+        - name: watch
+          image: python:3.12-alpine
+          command: ["python3", "-u", "/app/watch.py"]
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: ALERTMANAGER_URL
+              value: http://kps-alertmanager.monitoring.svc:9093
+          envFrom: [{ secretRef: { name: k8s-audit-watch } }]
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          volumeMounts:
+            - { name: app, mountPath: /app }
+            - { name: audit, mountPath: /audit, readOnly: true }
+            - { name: state, mountPath: /state }
+      volumes:
+        - name: app
+          configMap: { name: k8s-audit-watch }
+        - name: audit
+          hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
+        - name: state
+          emptyDir: {}
