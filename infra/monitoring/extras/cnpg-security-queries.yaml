@@ -557,7 +557,8 @@ data:
           -- session transcript, 6f5b3c0d6061 a session scratchpad file, 4a5636408f21
           -- OpenBao unorouter-env (also the k8s Secret and the frontend pod env),
           -- 96f6822b9e0c the k8s-only Secret services/edge-canary.
-          AND substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') IN ('3390e9840e4a', '44033c6511ed', '4f21fbceef44', '65d200bee45f', '71aa796122a9', '7d1ca3dfe341', '8d862b3cfbc3', '90b721d68ecb', 'abd24fcea20c', 'ac01ce008cd0', 'c0d1f8be9d0b', 'cdf9db226058', 'e243a3be0e7d', 'ef3822f6317c', '3d7e8dfb1638', 'af35ba3a29a5', '6f5b3c0d6061', '4a5636408f21', '96f6822b9e0c')
+          -- d8437c723cab a .env in a dormant MEGA-synced project: only the MEGA cloud mirror serves it.
+          AND substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') IN ('3390e9840e4a', '44033c6511ed', '4f21fbceef44', '65d200bee45f', '71aa796122a9', '7d1ca3dfe341', '8d862b3cfbc3', '90b721d68ecb', 'abd24fcea20c', 'ac01ce008cd0', 'c0d1f8be9d0b', 'cdf9db226058', 'e243a3be0e7d', 'ef3822f6317c', '3d7e8dfb1638', 'af35ba3a29a5', '6f5b3c0d6061', '4a5636408f21', '96f6822b9e0c', 'd8437c723cab')
       primary: true
       target_databases:
         - newapi
