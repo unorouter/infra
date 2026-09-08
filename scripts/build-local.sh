@@ -65,19 +65,8 @@ WT="$RUN_TMP/src"
 git -C "$LIVE" worktree add -q --detach "$WT" "$SHA"
 SRC="$WT"
 
-# The build context is a clean worktree, so any .env a Dockerfile expects must be
-# written into it here; nothing can be inherited from the live checkout any more.
-# The frontend receives server secrets only at runtime. The bot only COPYs
-# its .env into the image and the pod overrides every key from the bot-env secret,
-# but the COPY still fails on a missing file, so it gets the same secret rendered.
-if [ "$REPO" = "unorouter-bot" ]; then
-  echo ">> materialize .env from OpenBao (secret/bot-env)"
-  BAO "bao kv get -format=json secret/bot-env" | python3 -c '
-import sys, json
-d = json.load(sys.stdin)["data"]["data"]
-print("\n".join(f"{k}={v}" for k, v in sorted(d.items())))
-' > "$SRC/.env"
-fi
+# The build context is a clean worktree; no secret is ever written into it.
+# Every app receives its secrets at runtime from its ExternalSecret.
 if [ "$REPO" = "new-api-sync" ]; then
   # bun.lock is gitignored in that repo, but the Dockerfile COPYs it and installs
   # with --frozen-lockfile, so the worktree needs the live one.
