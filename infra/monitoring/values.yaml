@@ -104,6 +104,12 @@ grafana:
     dashboards:
       enabled: true
       searchNamespace: ALL
+      # One cluster, so the multi-cluster rollups have nothing to roll up.
+      multicluster:
+        global:
+          enabled: false
+        etcd:
+          enabled: false
 
 prometheus:
   prometheusSpec:
@@ -141,6 +147,17 @@ prometheus:
     ruleSelectorNilUsesHelmValues: false
     probeSelectorNilUsesHelmValues: false
     scrapeConfigSelectorNilUsesHelmValues: false
+
+# Dashboards for platforms this cluster does not have. Verified against the live TSDB before
+# switching off: node_uname_info{sysname="AIX"} and {sysname="Darwin"} both return 0 series,
+# all three nodes are Linux. Deleting them in the UI does not stick, the chart recreates them
+# on the next sync, so they are disabled at the source.
+nodeExporter:
+  operatingSystems:
+    aix:
+      enabled: false
+    darwin:
+      enabled: false
 
 # Histogram buckets from the apiserver and kubelet dominate cardinality (~300k series on a
 # 3-node cluster, over half from the kubelet job alone) and grow the TSDB, the Prometheus
