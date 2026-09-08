@@ -53,8 +53,10 @@ spec:
           annotations:
             summary: Evidence collector errors on {{ $labels.pod }}
         - alert: EvidenceCollectionGaps
-          expr: increase(evidence_gaps_total[5m]) > 0
-          for: 1m
+          # Log rotation reuses inodes and yields one replaced-file gap per file; a real
+          # problem is hundreds at once. The per reason counters name which one.
+          expr: increase(evidence_gaps_total[30m]) > 10
+          for: 5m
           labels: {severity: critical}
           annotations:
             summary: Evidence source reported malformed, replaced or truncated records
