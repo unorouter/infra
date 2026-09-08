@@ -38,10 +38,20 @@ metadata:
 data:
   postgres.yaml: |
     apiVersion: 1
-    datasources:
+    # Provisioning never removes a datasource that was renamed, so the old "NewAPI"
+    # entry would linger next to the new one and keep answering health checks.
+    deleteDatasources:
       - name: NewAPI
+        orgId: 1
+    datasources:
+      # Name MUST equal the uid: the dashboards-as-code schema (dashboard.grafana.app/v2)
+      # stores a panel's datasource reference as {name: ...} and resolves it against the
+      # datasource NAME, so a display name of "NewAPI" against a uid of "newapi-pg" left
+      # every panel unable to resolve its datasource and silently issuing no query at all.
+      - name: newapi-pg
         uid: newapi-pg
-        type: postgres
+        # The plugin registers under this id, not the legacy "postgres".
+        type: grafana-postgresql-datasource
         access: proxy
         # -ro, never -rw: an ad-hoc panel query must not be able to load the
         # primary. A full scan of `logs` is ~23s and the primary serves the gateway.
