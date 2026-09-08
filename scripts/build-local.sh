@@ -128,8 +128,15 @@ if [ -f "$LIVE/package.json" ] && grep -q '"typecheck"' "$LIVE/package.json"; th
   fi
 fi
 
+# Optional source-map upload key supplied by the operator, never written to .env.
+build_secrets=()
+if [ "$REPO" = "unorouter" ] && [ -n "${POSTHOG_UPLOAD_KEY:-}" ]; then
+  export POSTHOG_UPLOAD_KEY
+  build_secrets+=(--secret id=posthog_upload_key,env=POSTHOG_UPLOAD_KEY)
+fi
+
 echo ">> build ghcr.io/unorouter/$REPO:$SHA (amd64)"
-docker buildx build --platform linux/amd64 \
+docker buildx build --platform linux/amd64 "${build_secrets[@]}" \
   --build-arg GIT_SHA="$SHA" \
   -t "ghcr.io/unorouter/$REPO:$SHA" \
   --push "$SRC"
