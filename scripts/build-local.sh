@@ -8,8 +8,7 @@
 #
 # Safe to run several at once (one per Claude Code instance): each run builds from its own
 # throwaway worktree of the commit it captured, and only the final pin/push takes a lock.
-# Any .env a Dockerfile needs is rendered from OpenBao into that worktree (unorouter bakes
-# secrets at build time; the bot merely COPYs the file). GIT_SHA is passed to every repo
+# Frontend builds use only committed public configuration. GIT_SHA is passed to every repo
 # but only unorouter declares the ARG; the others ignore it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -68,7 +67,7 @@ SRC="$WT"
 
 # The build context is a clean worktree, so any .env a Dockerfile expects must be
 # written into it here; nothing can be inherited from the live checkout any more.
-# unorouter bakes secrets at build time (Next.js inlines them). The bot only COPYs
+# The frontend receives server secrets only at runtime. The bot only COPYs
 # its .env into the image and the pod overrides every key from the bot-env secret,
 # but the COPY still fails on a missing file, so it gets the same secret rendered.
 if [ "$REPO" = "unorouter-bot" ]; then
@@ -85,19 +84,8 @@ if [ "$REPO" = "new-api-sync" ]; then
   cp "$LIVE/bun.lock" "$SRC/bun.lock"
 fi
 if [ "$REPO" = "unorouter" ]; then
-  # .env is written into the worktree only. The live checkout's .env (which the dev
-  # server reads) is never touched, so nothing needs stashing or restoring.
-  echo ">> materialize .env from OpenBao (gitignored; .env.public holds the public half)"
+  # Docker also creates this from the sole allowed public env file.
   cp "$SRC/.env.public" "$SRC/.env"
-  BAO "bao kv get -format=json secret/unorouter-env" | python3 -c '
-import sys, json
-d = json.load(sys.stdin)["data"]["data"]
-# INTERNAL_API_URL is a ClusterIP; the SSG prerender fetches it at build time and this
-# machine is not in the cluster. Same service, public route.
-d["INTERNAL_API_URL"] = d.get("NEXT_PUBLIC_API_URL", "https://api.unorouter.com")
-# public vars already came from .env.public; only the real secrets are appended
-print("\n".join(f"{k}={v}" for k, v in sorted(d.items()) if not k.startswith("NEXT_PUBLIC_")))
-' >> "$SRC/.env"
 fi
 
 # Every request this script makes to unorouter.com goes through the same edge rules a
