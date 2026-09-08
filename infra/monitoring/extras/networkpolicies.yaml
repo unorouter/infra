@@ -182,6 +182,17 @@ spec:
         - ports:
             - { port: "9090", protocol: TCP }
             - { port: "9093", protocol: TCP }
+    # The NewAPI datasource reads the gateway's pre-aggregated tables as the
+    # column-masked `reader` role. Replicas only: a dashboard query must never
+    # land on the primary that serves the gateway. The databases policy carries
+    # the matching ingress rule.
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: databases
+            cnpg.io/cluster: newapi-pg
+            cnpg.io/podRole: instance
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
     - toEntities: [host, remote-node, kube-apiserver]
       toPorts:
         - ports: [{ port: "6443", protocol: TCP }]
