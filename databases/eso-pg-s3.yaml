@@ -69,6 +69,27 @@ spec:
     - extract:
         key: newapi-pg-reader
 ---
+# Grafana's datasource role. Separate from newapi-pg-reader because reader is cert-only
+# for Teleport and pg_hba is first-match-wins: one role cannot serve a cert client and a
+# password client. The role itself is declared in new-api/k8s/pg.yaml with
+# inRoles: [reader], so the column masking is inherited rather than duplicated.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-grafana-reader
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: newapi-pg-grafana-reader
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: newapi-pg-grafana-reader
+---
 # client CA (own CA + Teleport db-client CA bundle) for newapi-pg cert auth; pair lives in
 # OpenBao (DR). cnpg.io/reload label makes the instance reload on change.
 apiVersion: external-secrets.io/v1
