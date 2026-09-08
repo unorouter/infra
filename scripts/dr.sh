@@ -60,10 +60,19 @@ apply() { (cd tofu && set -a && . ./.env && set +a && tofu init -input=false >/d
 destroy() { (cd tofu && set -a && . ./.env && set +a && tofu init -input=false >/dev/null && tofu destroy); }
 storage_apply() { (cd tofu/storage && set -a && . ../.env && set +a && tofu init -input=false >/dev/null && tofu apply); }
 
+# Nodes have no public SSH (Hetzner firewall: Tailscale UDP 41641 and ICMP only) and no
+# authorized_keys: root comes only through Tailscale SSH (2-don identity, 12h check, lock).
+# The kubeconfig points at the node's tailnet address; the Hetzner console is the last resort.
+TS_IP() { tailscale status --json | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for p in list(d['Peer'].values())+[d['Self']]:
+    if p['HostName']=='$1': print(p['TailscaleIPs'][0]); break
+"; }
 kubeconfig() {
-  local ip; ip=$(NODE_IP); ssh-keygen -R "$ip" >/dev/null 2>&1 || true
-  ssh -o StrictHostKeyChecking=no root@"$ip" 'cat /etc/rancher/k3s/k3s.yaml' | sed "s/127.0.0.1/$ip/" > kubeconfig.breakglass
-  chmod 600 kubeconfig.breakglass; echo "kubeconfig.breakglass -> $ip"
+  local ip; ip=$(TS_IP "${1:-unorouter-node8}"); [ -n "$ip" ] || { echo "!! node not on the tailnet" >&2; exit 1; }
+  ssh -o StrictHostKeyChecking=accept-new root@"$ip" 'cat /etc/rancher/k3s/k3s.yaml' | sed "s/127.0.0.1/$ip/" > kubeconfig.breakglass
+  chmod 600 kubeconfig.breakglass; echo "kubeconfig.breakglass -> $ip (shred -u it when done)"
 }
 
 # Fallback only: cloud-init auto-bootstraps Cilium+ArgoCD. Use if that path fails.
