@@ -1,0 +1,28 @@
+// unorouter admin plane. Daily access is Teleport; this tailnet is the break-glass and node
+// plane. Tailnet Lock is on (signers: arch-laptop, netcup-don), new devices need approval,
+// and root over Tailscale SSH re-checks the identity every 12h.
+{
+	"tagOwners": {
+		"tag:node": ["autogroup:admin"],
+		"tag:ops":  ["autogroup:admin"],
+	},
+	"grants": [
+		// the operator's devices -> cluster nodes: ssh + kube api
+		{"src": ["2-don@github"], "dst": ["tag:node"], "ip": ["22", "6443"]},
+		// operator -> netcup box
+		{"src": ["2-don@github"], "dst": ["tag:ops"], "ip": ["22"]},
+		// netcup box may reach the nodes too (sniper, future automation)
+		{"src": ["tag:ops"], "dst": ["tag:node"], "ip": ["22", "6443"]},
+		// nodes among themselves (kubeconfig from any node)
+		{"src": ["tag:node"], "dst": ["tag:node"], "ip": ["*"]},
+	],
+	"ssh": [
+		{
+			"action":      "check",
+			"checkPeriod": "12h",
+			"src":         ["2-don@github"],
+			"dst":         ["tag:node", "tag:ops"],
+			"users":       ["root", "don", "autogroup:nonroot"],
+		},
+	],
+}
