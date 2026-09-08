@@ -4,6 +4,7 @@
 #   . scripts/sops-env.sh
 # Break-glass files (secrets/openbao-init, secrets/tailnet-lock) use the other key, which is
 # only on the VeraCrypt volume: export SOPS_AGE_KEY_FILE=/run/media/veracrypt1/unorouter/sops-age-keys.txt
+export PATH="$HOME/.local/bin:$PATH"   # bao, tsh, tctl live there
 export BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:18200}"
 bao token lookup >/dev/null 2>&1 || { echo "!! no OpenBao session: systemctl --user start tsh-openbao; bao login -method=oidc role=admin" >&2; return 1 2>/dev/null || exit 1; }
 export SOPS_AGE_KEY=$(bao kv get -field=key secret/sops-age)

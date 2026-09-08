@@ -11,6 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/teleport-unorouter.yaml}"
 
+export PATH="$HOME/.local/bin:$PATH"   # bao, tsh, tctl live there
 export BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:18200}"   # Teleport app proxy, OIDC token in ~/.bao-token
 bao token lookup >/dev/null 2>&1 || { echo "!! no OpenBao session: systemctl --user start tsh-openbao; bao login -method=oidc role=admin" >&2; exit 1; }
 BAO() { sh -c "$*"; }
