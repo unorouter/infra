@@ -29,7 +29,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-a5fe24b9b556
+  name: k8s-audit-watch-40478a4d09ad
   namespace: monitoring
 data:
   expected.json: |
@@ -512,11 +512,11 @@ data:
                         pages.add('UnexpectedSecretUsingJob')
                         lines.append(event['id'][:16] + ' Job Pod UID=' + str(snapshot.get('uid')) +
                                      ' uses Secret references outside the expected sync job; review archived snapshot')
-            ref = ev.get('objectRef', {})
+            if not event['source'].startswith('k8s-') or ev.get('stage') not in ('ResponseComplete', 'ResponseStarted', 'Panic'):
+                continue
+            ref = ev.get('objectRef') or {}
             user = (ev.get('impersonatedUser') or {}).get('username') or (ev.get('user') or {}).get('username', '')
             verb, resource, sub = ev.get('verb'), ref.get('resource'), ref.get('subresource', '')
-            if ev.get('stage') not in ('ResponseComplete', 'ResponseStarted', 'Panic'):
-                continue
             if resource not in ('secrets', 'serviceaccounts') and sub not in ('exec','attach','portforward') and verb not in ('create','patch','update','delete','deletecollection'):
                 continue
             access = [user, verb, ref.get('apiGroup', ''), resource, sub,
@@ -705,7 +705,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "a5fe24b9b556dca519c48a216b623e8e8f17e8d6f3e739ffb2613b02f0b8631a"
+        evidence.unorouter.com/code-sha256: "40478a4d09adcf7517e2009087dfd03455d50da1fb797c31035fcd9cadd1aa9b"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -755,7 +755,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-a5fe24b9b556 }
+          configMap: { name: k8s-audit-watch-40478a4d09ad }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
