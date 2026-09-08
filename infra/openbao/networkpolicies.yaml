@@ -61,6 +61,12 @@ spec:
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
+    # auth/jwt-teleport verifies Teleport JWTs against the proxy JWKS; the CoreDNS rewrite
+    # sends teleport.unorouter.com to the proxy pod on 3080.
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: teleport, app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: proxy }
+      toPorts:
+        - ports: [{ port: "3080", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

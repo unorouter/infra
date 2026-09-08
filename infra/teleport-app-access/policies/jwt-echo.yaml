@@ -1,0 +1,62 @@
+# Echoes the request headers back. Registered in Teleport as the app `openbao-jwt` so that
+# `tsh proxy app openbao-jwt` returns the `Teleport-Jwt-Assertion` the proxy signs for the
+# caller; scripts/bao-login.sh trades it for an OpenBao token at auth/jwt-teleport. The pod
+# has no egress and accepts only the Teleport agent.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jwt-echo
+  namespace: teleport-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: jwt-echo }
+  template:
+    metadata:
+      labels: { app: jwt-echo }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: whoami
+          image: traefik/whoami@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab  # v1.11.0
+          args: ["--port=8080"]
+          ports: [{ containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { memory: 32Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jwt-echo
+  namespace: teleport-agent
+spec:
+  selector: { app: jwt-echo }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: jwt-echo
+  namespace: teleport-agent
+spec:
+  endpointSelector:
+    matchLabels: { app: jwt-echo }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app: teleport-app-access }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]

@@ -66,6 +66,13 @@ apps:
     rewrite:
       redirect:
         - monitoring-grafana.monitoring.svc.cluster.local
+  # Header echo: `tsh proxy app openbao-jwt` returns the Teleport-signed JWT the proxy adds
+  # to every app request, which scripts/bao-login.sh trades for an OpenBao token
+  # (auth/jwt-teleport, bound to aud openbao-jwt.unorouter.com). No DNS record on purpose.
+  - name: openbao-jwt
+    uri: http://jwt-echo.teleport-agent.svc.cluster.local:80
+    public_addr: openbao-jwt.unorouter.com
+    labels: { env: internal }
 
 # single node, no HA yet
 highAvailability:

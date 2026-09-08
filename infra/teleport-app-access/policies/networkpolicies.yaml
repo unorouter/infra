@@ -56,6 +56,10 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
       toPorts:
         - ports: [{ port: "5432", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { app: jwt-echo }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
     - toEntities: [host, remote-node, kube-apiserver]
       toPorts:
         - ports: [{ port: "6443", protocol: TCP }]

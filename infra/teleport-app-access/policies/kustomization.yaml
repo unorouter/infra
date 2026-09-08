@@ -3,3 +3,4 @@ kind: Kustomization
 namespace: teleport-agent
 resources:
   - networkpolicies.yaml
+  - jwt-echo.yaml
