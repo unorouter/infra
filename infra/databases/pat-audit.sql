@@ -63,7 +63,11 @@ REVOKE ALL ON public.pat_change_audit FROM PUBLIC, newapi;
 REVOKE ALL ON SEQUENCE public.pat_change_audit_id_seq FROM PUBLIC, newapi;
 REVOKE ALL ON FUNCTION public.capture_pat_change() FROM PUBLIC, newapi;
 DROP TRIGGER IF EXISTS evidence_pat_update ON public.users;
-CREATE TRIGGER evidence_pat_update AFTER UPDATE OF access_token ON public.users
+-- Not scoped with UPDATE OF access_token: a column list pins the trigger to the
+-- column and makes ALTER TABLE ... ALTER COLUMN access_token TYPE fail with
+-- SQLSTATE 0A000, which crash-looped the gateway on its startup migration.
+-- capture_pat_change() already returns early when the token is unchanged.
+CREATE TRIGGER evidence_pat_update AFTER UPDATE ON public.users
   FOR EACH ROW
   EXECUTE FUNCTION public.capture_pat_change();
 DROP TRIGGER IF EXISTS evidence_pat_insert ON public.users;
@@ -82,15 +86,14 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
   IF session_user = 'postgres' THEN RETURN; END IF;
   -- Checking names alone permits CREATE OR REPLACE TRIGGER to install a no-op.
-  -- Validate the function, firing conditions and updated column as well.
+  -- Validate the function and firing conditions as well. Both triggers must be
+  -- unscoped (empty tgattr), matching the definitions above.
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.users'::regclass
       AND tgenabled IN ('O','A') AND NOT tgisinternal
       AND tgfoid = 'public.capture_pat_change()'::regprocedure
-      AND tgqual IS NULL AND tgnargs = 0
-      AND ((tgname = 'evidence_pat_insert' AND tgtype = 5 AND tgattr = ''::int2vector)
-        OR (tgname = 'evidence_pat_update' AND tgtype = 17
-          AND tgattr::text = (SELECT attnum::text FROM pg_attribute
-            WHERE attrelid = 'public.users'::regclass AND attname = 'access_token' AND NOT attisdropped)))) <> 2 THEN
+      AND tgqual IS NULL AND tgnargs = 0 AND tgattr = ''::int2vector
+      AND ((tgname = 'evidence_pat_insert' AND tgtype = 5)
+        OR (tgname = 'evidence_pat_update' AND tgtype = 17))) <> 2 THEN
     RAISE EXCEPTION 'PAT audit trigger definitions require database administrator maintenance';
   END IF;
 END;
