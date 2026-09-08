@@ -5,6 +5,8 @@ creation_rules:
   # whole-file encryption (no encrypted_regex): raw secret files, every value must encrypt
   - path_regex: secrets/openbao-init\.sops\.ya?ml$
     age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
+  - path_regex: secrets/tailnet-lock\.sops\.ya?ml$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
   - path_regex: secrets/.*\.(ya?ml|json|env)$
     encrypted_regex: ^(data|stringData)$
     age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
