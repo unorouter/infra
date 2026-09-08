@@ -64,6 +64,14 @@ grafana:
   grafana.ini:
     server:
       root_url: https://grafana.unorouter.com
+    security:
+      # Every POST (including /api/ds/query, which is how a panel fetches its data)
+      # is CSRF-checked against the request Origin. Grafana sits behind the
+      # Cloudflare tunnel and the Teleport proxy, so the origin does not match what
+      # it derives locally and every panel query was refused with a bare
+      # "origin not allowed" 403: dashboards rendered "No data" with no error.
+      csrf_trusted_origins: grafana.unorouter.com
+      csrf_additional_headers: X-Forwarded-Host
     auth:
       # no second login: Teleport already authenticated the user at the tunnel edge, so the
       # JWT below logs them straight in. The form would only be a redundant prompt.
