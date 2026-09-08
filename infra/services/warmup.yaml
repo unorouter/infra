@@ -19,7 +19,8 @@ spec:
           restartPolicy: Never
           containers:
             - name: ping
-              image: ghcr.io/unorouter/unorouter-bot:29400ae194747cb5792344ef92eae4d4e3dbfda9
+              image: oven/bun:1-alpine
+              imagePullPolicy: IfNotPresent
               envFrom:
                 - secretRef: { name: bot-env }
                 - secretRef: { name: bot-warmup, optional: true }
