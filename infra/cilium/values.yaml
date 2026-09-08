@@ -19,6 +19,28 @@ envoy:
   enabled: false
 
 hubble:
+  export:
+    static:
+      enabled: true
+      filePath: /var/run/cilium/hubble/evidence.log
+      fileMaxSizeMb: 10
+      fileMaxBackups: 10
+      allowList:
+        - '{"source_pod":["services/"],"destination_port":["443"]}'
+      fieldMask:
+        - time
+        - verdict
+        - IP
+        - l4
+        - source.namespace
+        - source.pod_name
+        - source.identity
+        - destination.namespace
+        - destination.pod_name
+        - destination.identity
+        - node_name
+        - traffic_direction
+        - drop_reason_desc
   # relay kept for cluster-wide `hubble observe` (CLI). UI removed 2026-07-23: rarely opened,
   # flows are reachable via `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe`.
   relay:

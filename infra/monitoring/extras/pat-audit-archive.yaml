@@ -1,0 +1,136 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: evidence-pg
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}
+  target: {name: evidence-pg, creationPolicy: Owner}
+  dataFrom:
+    - extract: {key: evidence-pg}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pat-audit-archive
+  namespace: monitoring
+data:
+  archive.ts: |
+    import { SQL, S3Client } from "bun";
+    import { createHash } from "node:crypto";
+
+    const db = new SQL(process.env.EVIDENCE_SQL_DSN!, { max: 1, connectionTimeout: 10 });
+    const archive = new S3Client({
+      accessKeyId: process.env.ARCHIVE_ACCESS_KEY,
+      secretAccessKey: process.env.ARCHIVE_SECRET_KEY,
+      endpoint: process.env.ARCHIVE_ENDPOINT,
+      bucket: process.env.ARCHIVE_BUCKET,
+      region: "auto",
+    });
+    try {
+      const rows = await db`
+        SELECT a.id::text, a.changed_at, a.user_id::text, a.change_kind,
+               a.db_user, a.requested_role, a.app_name, a.client_addr::text,
+               a.client_port, a.backend_pid, a.transaction_id::text
+        FROM public.pat_change_audit a
+        LEFT JOIN public.pat_change_archive_ack ack ON ack.event_id = a.id
+        WHERE ack.event_id IS NULL ORDER BY a.id LIMIT 100`;
+      for (const row of rows) {
+        const body = JSON.stringify({ schema: 1, source: process.env.PAT_ARCHIVE_SOURCE || "postgres-pat-change", event: row });
+        const hash = createHash("sha256").update(body).digest("hex");
+        const file = archive.file(`incidents/postgres-pat-change/${hash}.json`);
+        try {
+          await file.write(body, { type: "application/json" });
+        } catch {
+          // A lost PUT acknowledgement or locked duplicate is safe only after
+          // readback confirms identical bytes. Errors never acknowledge a row.
+          if (await file.text() !== body) throw new Error("Archive readback mismatch");
+        }
+        await db`INSERT INTO public.pat_change_archive_ack(event_id)
+                 VALUES (${row.id}) ON CONFLICT DO NOTHING`;
+      }
+      console.log(JSON.stringify({ event: "security.pat_archive_batch", archived: rows.length }));
+    } catch {
+      console.error("PAT archive failed; unacknowledged database rows retained");
+      process.exitCode = 1;
+    } finally {
+      await db.close();
+    }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pat-audit-archive
+  namespace: monitoring
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 55
+      backoffLimit: 0
+      template:
+        metadata:
+          labels: {app: pat-audit-archive}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext: {runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true}
+          containers:
+            - name: archive
+              image: oven/bun:1.4.2-alpine
+              command: [bun, /app/archive.ts]
+              envFrom:
+                - secretRef: {name: evidence-pg}
+                - secretRef: {name: evidence-archive}
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              resources:
+                requests: {cpu: 10m, memory: 32Mi}
+                limits: {memory: 128Mi}
+              volumeMounts:
+                - {name: app, mountPath: /app, readOnly: true}
+          volumes:
+            - name: app
+              configMap: {name: pat-audit-archive}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: pat-audit-archive
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: {app: pat-audit-archive}
+  egress:
+    - toEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+    - toEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg}
+      toPorts:
+        - ports: [{port: "5432", protocol: TCP}]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{port: "443", protocol: TCP}]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: pat-audit-archive
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: {cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: pat-audit-archive}
+      toPorts:
+        - ports: [{port: "5432", protocol: TCP}]

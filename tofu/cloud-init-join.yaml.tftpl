@@ -9,20 +9,22 @@ write_files:
       kind: Policy
       omitStages: [RequestReceived]
       rules:
-        - level: None
-          users: ["system:kube-controller-manager", "system:kube-scheduler", "system:apiserver"]
-          resources:
-            - group: ""
-              resources: [secrets]
-        - level: None
-          userGroups: ["system:nodes"]
-          resources:
-            - group: ""
-              resources: [secrets]
         - level: Metadata
           resources:
             - group: ""
-              resources: [secrets, pods/exec, pods/attach, pods/portforward, serviceaccounts/token]
+              resources: [secrets, pods, pods/exec, pods/attach, pods/portforward, serviceaccounts, serviceaccounts/token, replicationcontrollers]
+            - group: apps
+              resources: [deployments, daemonsets, statefulsets, replicasets]
+            - group: batch
+              resources: [jobs, cronjobs]
+            - group: external-secrets.io
+              resources: [externalsecrets, secretstores, clustersecretstores, clusterexternalsecrets]
+            - group: networking.k8s.io
+              resources: [networkpolicies]
+            - group: cilium.io
+              resources: [ciliumnetworkpolicies, ciliumclusterwidenetworkpolicies]
+            - group: rbac.authorization.k8s.io
+              resources: [roles, rolebindings, clusterroles, clusterrolebindings]
         - level: None
   - path: /etc/sysctl.d/90-conntrack.conf
     content: |

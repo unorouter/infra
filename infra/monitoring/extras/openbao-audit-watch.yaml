@@ -1,9 +1,8 @@
 # Reads the OpenBao audit device (file audit to stdout, see infra/openbao/values.yaml)
 # from the pod log every five minutes and posts to Discord everything that is not the
-# routine machinery: any caller other than external-secrets, the snapshot job and the
-# CI JWT role; every root-token use; and any change to policies, auth methods, mounts,
+# expected identity, operation and resource combinations; CI reads are not suppressed; every root-token use; and any change to policies, auth methods, mounts,
 # audit devices, seal state or token creation, whoever did it. The pod log rotates
-# within a day, so the Discord copy is also the only durable trail. Secret values never
+# within a day; the evidence collector independently archives sanitized records. Secret values never
 # appear in the audit log (HMAC'd by OpenBao), only paths and identities are posted.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
@@ -99,8 +98,35 @@ data:
     API = "https://kubernetes.default.svc"
     CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
     SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
-    ROUTINE = set(os.environ.get("ROUTINE_IDENTITIES",
-        "kubernetes-external-secrets-external-secrets,kubernetes-openbao-openbao-snapshot,jwt-github-GHCR Image,oidc-don.cryptus@gmail.com,jwt-teleport-0-don").split(","))
+    # Explicit ESO KV reads from the committed ExternalSecret inventory.
+    # Operator and CI reads are intentionally not silently trusted.
+    EXPECTED_READS = {("kubernetes-external-secrets-external-secrets", "read", "secret/data/" + key) for key in (
+        'alertmanager',
+        'argocd-scm',
+        'bot-env',
+        'cloudflare-edge',
+        'cloudflared',
+        'dex-sso',
+        'evidence-archive',
+        'evidence-pg',
+        'ghcr-pull',
+        'grafana',
+        'newapi-env',
+        'newapi-pg-ca',
+        'newapi-pg-client-ca',
+        'newapi-pg-grafana-reader',
+        'newapi-pg-reader',
+        'ntfy',
+        'pg-s3',
+        'r2-backups',
+        'sync-env',
+        'teleport-app-join',
+        'uno-import-env',
+        'uno-import-pull',
+        'unorouter-env',
+        'velero',
+    )}
+    EXPECTED_READS.add(("kubernetes-openbao-openbao-snapshot", "read", "sys/storage/raft/snapshot"))
     SENSITIVE = re.compile(r"^(sys/(policies|policy|auth|mounts|audit|seal|unseal|rekey|generate-root|raft|rotate|internal/counters)|auth/token/(create|revoke$|revoke-accessor|roles)|auth/[^/]+/(config|role|roles)|identity/)")
     WEBHOOK = os.environ["DISCORD_WEBHOOK"]
     AM = os.environ.get("ALERTMANAGER_URL", "")
@@ -172,7 +198,7 @@ data:
             # UI plumbing: every page load reads these, logged-in or not. The login itself
             # (auth/*/callback, auth/*/login) and anything sensitive still get reported.
             plumbing = path.startswith(("sys/internal/ui/", "sys/health", "sys/seal-status", "sys/capabilities-self", "auth/token/lookup-self", "auth/token/revoke-self")) or path.endswith("/auth_url")
-            routine = ident in ROUTINE or plumbing or (ident == "unauthenticated" and is_login)
+            routine = (ident, op, path) in EXPECTED_READS
             # A routine identity's reads are silent; its writes, deletes and anything sensitive
             # still post (the named operator's OIDC session is routine for reads only).
             if (plumbing or is_login or (routine and op in ("read", "list"))) and not sensitive and not is_root:

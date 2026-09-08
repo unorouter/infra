@@ -543,6 +543,23 @@ data:
             usage: "LABEL"
             description: "Refusal reasons seen in the window (underpaid, missing_request_id)."
 
+    newapi_pat_archive:
+      query: |
+        SELECT count(*)::float8 AS pending,
+               coalesce(extract(epoch from now() - min(a.changed_at)), 0)::float8 AS oldest_seconds
+        FROM public.pat_change_audit a
+        LEFT JOIN public.pat_change_archive_ack ack ON ack.event_id = a.id
+        WHERE ack.event_id IS NULL
+      primary: true
+      target_databases: [newapi]
+      metrics:
+        - pending:
+            usage: GAUGE
+            description: "Committed PAT changes awaiting archive acknowledgement"
+        - oldest_seconds:
+            usage: GAUGE
+            description: "Age of the oldest unarchived PAT change"
+
     newapi_honeytoken_hits:
       query: |
         SELECT count(*)::float8 AS count,
@@ -550,18 +567,13 @@ data:
         FROM logs
         WHERE type = 3
           AND created_at > extract(epoch from now())::bigint - 300
-          -- One fingerprint per bait, so a hit says which one was lifted. Values and
-          -- labels live in the operator's local state file, never here.
-          -- 2026-09-08 leak-path canaries, one value per location so the fingerprint
-          -- names the channel: 3d7e8dfb1638 laptop .env files, af35ba3a29a5 a Claude
-          -- Each bait is listed twice: once hashed under CRYPTO_SECRET v23 and once under
-          -- v24 (rotated 2026-09-08), so rows written either side of that rotation match.
-          -- session transcript, 6f5b3c0d6061 a session scratchpad file, 4a5636408f21
-          -- OpenBao unorouter-env (also the k8s Secret and the frontend pod env),
-          -- 96f6822b9e0c the k8s-only Secret services/edge-canary.
-          -- d8437c723cab a .env in a dormant MEGA-synced project: only the MEGA cloud mirror serves it.
-          -- 5f6cc8e9553f bot-env in OpenBao (and its k8s Secret and the bot pod env): a hit means that path is read.
-          AND substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') IN ('00c7df46dd5b', '026036d49758', '2428d0663b74', '24fbd886e659', '3390e9840e4a', '3410f9e86346', '35d6fde6659e', '3d7e8dfb1638', '401dde8b3b13', '44033c6511ed', '4a5636408f21', '4c5f8987edbe', '4f21fbceef44', '5e8594021fc8', '5f6cc8e9553f', '65d200bee45f', '68cc0fab0e2f', '6afb18679134', '6f5b3c0d6061', '71aa796122a9', '74a8b88d28ac', '7a313553ab18', '7d1ca3dfe341', '8615a9b8fd32', '88298a9a7678', '8d862b3cfbc3', '90b721d68ecb', '96f6822b9e0c', 'a064735963ab', 'abd24fcea20c', 'ac01ce008cd0', 'af35ba3a29a5', 'c0d1f8be9d0b', 'c55d6d4fba59', 'cdf9db226058', 'd1df439fc357', 'd70d47957fa1', 'd8437c723cab', 'e243a3be0e7d', 'ef3822f6317c', 'f9a379e3cf90')
+          -- Historical shared baits are detection-only. Their fingerprints cannot
+          -- uniquely identify a storage location or human operator.
+          -- Independent v1 canaries keep plaintext only in their own compartment;
+          -- the private registry contains fingerprints and location metadata only.
+          AND (substring(other from '"credential_fingerprint":"([0-9a-f]{12})"') IN ('3ac2d6660718', '8cda13483b1a', '00c7df46dd5b', '026036d49758', '2428d0663b74', '24fbd886e659', '3390e9840e4a', '3410f9e86346', '35d6fde6659e', '3d7e8dfb1638', '401dde8b3b13', '44033c6511ed', '4a5636408f21', '4c5f8987edbe', '4f21fbceef44', '5e8594021fc8', '5f6cc8e9553f', '65d200bee45f', '68cc0fab0e2f', '6afb18679134', '6f5b3c0d6061', '71aa796122a9', '74a8b88d28ac', '7a313553ab18', '7d1ca3dfe341', '8615a9b8fd32', '88298a9a7678', '8d862b3cfbc3', '90b721d68ecb', '96f6822b9e0c', 'a064735963ab', 'abd24fcea20c', 'ac01ce008cd0', 'af35ba3a29a5', 'c0d1f8be9d0b', 'c55d6d4fba59', 'cdf9db226058', 'd1df439fc357', 'd70d47957fa1', 'd8437c723cab', 'e243a3be0e7d', 'ef3822f6317c', 'f9a379e3cf90')
+            OR (other LIKE '%"audit_key_version":"2026-09-08-v1"%' AND other LIKE '%"audit_credential_fingerprint":"1482729002426f94c229b099d96378f56d394709d7084652e0dd3014f81d7268"%') -- gitleaks:allow inert canary HMAC fingerprint
+            OR (other LIKE '%"audit_key_version":"2026-09-08-v1"%' AND other LIKE '%"audit_credential_fingerprint":"c36e025ef8d4e67a4cef70131e97edbb37b3440a04478ff70a1d71b7ce89e9ee"%')) -- gitleaks:allow inert canary HMAC fingerprint
       primary: true
       target_databases:
         - newapi
