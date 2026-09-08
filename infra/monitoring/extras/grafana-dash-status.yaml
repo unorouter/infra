@@ -29,7 +29,7 @@ data:
           "title": "Models tracked",
           "type": "stat",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -41,7 +41,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "table",
@@ -71,7 +71,7 @@ data:
           "title": "Fleet uptime",
           "type": "stat",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -83,7 +83,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "table",
@@ -130,7 +130,7 @@ data:
           "title": "Models down now",
           "type": "stat",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -142,7 +142,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "table",
@@ -189,7 +189,7 @@ data:
           "title": "Open incidents",
           "type": "stat",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -201,7 +201,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "table",
@@ -247,7 +247,7 @@ data:
           "title": "Errors (range)",
           "type": "stat",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -259,7 +259,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "table",
@@ -289,7 +289,7 @@ data:
           "title": "Snapshot freshness",
           "type": "stat",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -301,7 +301,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "table",
@@ -348,7 +348,7 @@ data:
           "title": "Requests and errors",
           "type": "timeseries",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -360,7 +360,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "time_series",
@@ -382,7 +382,7 @@ data:
           "title": "Latency p50 / p95",
           "type": "timeseries",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -394,7 +394,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "time_series",
@@ -417,7 +417,7 @@ data:
           "title": "Worst uptime by model",
           "type": "table",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -429,7 +429,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "table",
@@ -449,7 +449,7 @@ data:
           "title": "Recent incidents",
           "type": "table",
           "datasource": {
-            "type": "postgres",
+            "type": "grafana-postgresql-datasource",
             "uid": "newapi-pg"
           },
           "gridPos": {
@@ -461,7 +461,7 @@ data:
           "targets": [
             {
               "datasource": {
-                "type": "postgres",
+                "type": "grafana-postgresql-datasource",
                 "uid": "newapi-pg"
               },
               "format": "table",
