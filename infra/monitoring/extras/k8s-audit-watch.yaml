@@ -27,8 +27,9 @@ spec:
 ---
 apiVersion: v1
 kind: ConfigMap
+immutable: true
 metadata:
-  name: k8s-audit-watch
+  name: k8s-audit-watch-68e1097e2cdd
   namespace: monitoring
 data:
   expected.json: |
@@ -538,13 +539,13 @@ data:
                        'annotations': {'summary': text}, 'startsAt': now.isoformat(),
                        'endsAt': (now + dt.timedelta(minutes=10)).isoformat()} for name in sorted(pages)]
             request = urllib.request.Request(am.rstrip('/') + '/api/v2/alerts', data=encode(alerts),
-                                            headers={'Content-Type': 'application/json'}, method='POST')
+                                            headers={'Content-Type': 'application/json', 'User-Agent': 'unorouter-evidence/1'}, method='POST')
             with urllib.request.urlopen(request, timeout=10):
                 pass
         url = os.environ.get('DISCORD_WEBHOOK')
         if url:
             request = urllib.request.Request(url, data=encode({'content': text, 'allowed_mentions': {'parse': []}}),
-                                             headers={'Content-Type': 'application/json'}, method='POST')
+                                             headers={'Content-Type': 'application/json', 'User-Agent': 'unorouter-evidence/1'}, method='POST')
             with urllib.request.urlopen(request, timeout=10):
                 pass
 
@@ -576,7 +577,7 @@ data:
                 queue.deliver(archive_s3, notify)
             except Exception as error:
                 METRICS['errors_total'] += 1
-                print('delivery_error', type(error).__name__, flush=True)
+                print('delivery_error', type(error).__name__, getattr(error, 'sqlite_errorname', ''), getattr(error, 'code', ''), flush=True)
             time.sleep(1)
 
 
@@ -702,7 +703,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "cd4f89cc675d503eeb57ad361adb07b484ec74fa6fc4bdb547ce439b533e7bec"
+        evidence.unorouter.com/code-sha256: "68e1097e2cddb0816df355972d4734b42a56f567e18a6f564e1caf7b9ed30d0a"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -736,6 +737,11 @@ spec:
             capabilities: { drop: [ALL] }
           ports:
             - { name: metrics, containerPort: 9090 }
+          readinessProbe:
+            exec:
+              command: [python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9090/metrics', timeout=2).read()"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
           resources:
             requests: { cpu: 25m, memory: 64Mi }
             limits: { memory: 256Mi }
@@ -747,7 +753,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch }
+          configMap: { name: k8s-audit-watch-68e1097e2cdd }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble

@@ -217,3 +217,18 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: evidence-workload-watch}
 subjects:
   - {kind: ServiceAccount, name: evidence-collector, namespace: monitoring}
+
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: alertmanager-evidence-ingress
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: {app.kubernetes.io/name: alertmanager}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {io.cilium.k8s.policy.serviceaccount: evidence-collector}
+      toPorts:
+        - ports: [{port: "9093", protocol: TCP}]
