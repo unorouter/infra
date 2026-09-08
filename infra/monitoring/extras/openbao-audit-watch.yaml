@@ -100,7 +100,7 @@ data:
     CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
     SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
     ROUTINE = set(os.environ.get("ROUTINE_IDENTITIES",
-        "kubernetes-external-secrets-external-secrets,kubernetes-openbao-openbao-snapshot,jwt-github-GHCR Image,oidc-don.cryptus@gmail.com").split(","))
+        "kubernetes-external-secrets-external-secrets,kubernetes-openbao-openbao-snapshot,jwt-github-GHCR Image,oidc-don.cryptus@gmail.com,jwt-teleport-0-don").split(","))
     SENSITIVE = re.compile(r"^(sys/(policies|policy|auth|mounts|audit|seal|unseal|rekey|generate-root|raft|rotate|internal/counters)|auth/token/(create|revoke$|revoke-accessor|roles)|auth/[^/]+/(config|role|roles)|identity/)")
     WEBHOOK = os.environ["DISCORD_WEBHOOK"]
     AM = os.environ.get("ALERTMANAGER_URL", "")

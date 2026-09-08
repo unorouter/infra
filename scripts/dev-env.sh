@@ -16,7 +16,7 @@ SRC="$(cd .. && pwd)/unorouter"
 
 export PATH="$HOME/.local/bin:$PATH"   # bao, tsh, tctl live there
 export BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:18200}"   # Teleport app proxy, OIDC token in ~/.bao-token
-bao token lookup >/dev/null 2>&1 || { echo "!! no OpenBao session: systemctl --user start tsh-openbao; bao login -method=oidc role=reader (24h, read-only; role=admin for writes, 1h)" >&2; exit 1; }
+bao token lookup >/dev/null 2>&1 || { echo "!! no OpenBao session: systemctl --user start tsh-openbao; ./scripts/bao-login.sh (24h, read-only; `bao-login.sh admin` for writes, 1h)" >&2; exit 1; }
 
 cp "$SRC/.env.public" "$SRC/.env"
 bao kv get -format=json secret/unorouter-env \
