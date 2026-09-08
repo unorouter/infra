@@ -1,25 +1,28 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: bot-warmup
+  name: svc-warmup
   namespace: services
 spec:
   schedule: "* * * * *"
-  concurrencyPolicy: Forbid
+  concurrencyPolicy: Replace
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       ttlSecondsAfterFinished: 180
-      backoffLimit: 2
+      backoffLimit: 1
+      activeDeadlineSeconds: 90
       template:
         metadata:
           labels: { app: unorouter-bot }
         spec:
           restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull
           containers:
             - name: ping
-              image: oven/bun:1-alpine
+              image: ghcr.io/unorouter/unorouter-bot:614381d6cfc7818bcfa09756791f5c2e8968d185
               imagePullPolicy: IfNotPresent
               envFrom:
                 - secretRef: { name: bot-env }
