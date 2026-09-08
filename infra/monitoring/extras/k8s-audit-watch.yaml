@@ -29,7 +29,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-dc5e3b70f0eb
+  name: k8s-audit-watch-681c5fcf86fa
   namespace: monitoring
 data:
   expected.json: |
@@ -166,6 +166,7 @@ data:
                 return {'status': 'uid_mismatch'}
             result = {'status': 'watch_observed' if observed_in_watch else 'observed_after_event', 'observedAt': time.time(),
                       'uid': meta.get('uid'), 'resourceVersion': meta.get('resourceVersion'),
+                      'deletionTimestamp': meta.get('deletionTimestamp'),
                       'owners': [{k: o[k] for k in ('apiVersion','kind','name','uid','controller') if k in o}
                                  for o in meta.get('ownerReferences', [])]}
             spec = obj.get('spec', {})
@@ -523,7 +524,11 @@ data:
                     expected_sync = job and job['metadata']['uid'] == owners[0]['uid'] and refs == {'sync-env'} and any(
                         o.get('kind') == 'CronJob' and o.get('name') in ('new-api-sync', 'new-api-sync-full')
                         for o in job['metadata'].get('ownerReferences', []))
-                    if not expected_sync:
+                    # The cronjob controller prunes finished sync Jobs to the history limit and
+                    # the pod gets its deletionTimestamp in the same second, so the Job lookup
+                    # returns nothing for a pod that already passed this check while it ran.
+                    torn_down = job is None and bool(snapshot.get('deletionTimestamp'))
+                    if not expected_sync and not torn_down:
                         archive_s3(event, encode(event), prefix='incidents')
                         pages.add('UnexpectedSecretUsingJob')
                         lines.append(event['id'][:16] + ' Job Pod UID=' + str(snapshot.get('uid')) +
@@ -737,7 +742,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "dc5e3b70f0eb3df8f5408ec0cac398c880d2a7e6c6ab8ba1f75085adc2c4a2ca"
+        evidence.unorouter.com/code-sha256: "681c5fcf86fa9383870f66386af1b1dd0e026808932b1d3bfe43f76d9dc49efa"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -787,7 +792,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-dc5e3b70f0eb }
+          configMap: { name: k8s-audit-watch-681c5fcf86fa }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
