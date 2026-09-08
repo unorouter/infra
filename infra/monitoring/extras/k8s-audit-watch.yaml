@@ -29,7 +29,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-bc1631ffb740
+  name: k8s-audit-watch-dc5e3b70f0eb
   namespace: monitoring
 data:
   expected.json: |
@@ -480,6 +480,22 @@ data:
     def notify(events):
         notifications_enabled = os.environ.get('NOTIFICATIONS_ENABLED', 'false') == 'true'
         expected = json.loads(os.environ.get('EXPECTED_ACCESSES') or Path('/app/expected.json').read_text())
+        EXPECTED_IDENTITIES = {
+            'system:serviceaccount:external-secrets:external-secrets',
+            'system:serviceaccount:external-secrets:external-secrets-cert-controller',
+            'system:serviceaccount:argocd:argocd-application-controller',
+            'system:serviceaccount:argocd:argocd-applicationset-controller',
+            'system:serviceaccount:argocd:argocd-server',
+            'system:serviceaccount:argocd:argocd-repo-server',
+            'system:serviceaccount:cnpg-system:cnpg-manager',
+            'system:serviceaccount:cert-manager:cert-manager',
+            'system:serviceaccount:cert-manager:cert-manager-cainjector',
+            'system:serviceaccount:kube-system:generic-garbage-collector',
+            'system:serviceaccount:kube-system:job-controller',
+            'system:serviceaccount:kube-system:cronjob-controller',
+            'system:serviceaccount:databases:newapi-pg',
+            'system:serviceaccount:databases:bot-pg',
+        }
         lines, pages = [], set()
         for event in events:
             if event['historical']:
@@ -517,7 +533,20 @@ data:
             ref = ev.get('objectRef') or {}
             user = (ev.get('impersonatedUser') or {}).get('username') or (ev.get('user') or {}).get('username', '')
             verb, resource, sub = ev.get('verb'), ref.get('resource'), ref.get('subresource', '')
+            # watch and list open an informer stream, they do not read one secret's contents:
+            # every operator (cert-manager, cnpg, eso, argocd, cilium, kps) and every kubelet
+            # holds them permanently, which is 1600+ distinct tuples no allowlist can track.
+            # An attacker reading a secret shows up as get, and that still alerts.
+            if verb in ('watch', 'list'):
+                continue
             if resource not in ('secrets', 'serviceaccounts') and sub not in ('exec','attach','portforward') and verb not in ('create','patch','update','delete','deletecollection'):
+                continue
+            # Controllers whose whole purpose is this access. ESO reads every secret it
+            # syncs and argocd reconciles RBAC on every pass, so naming their objects one
+            # by one is a list that grows with the platform and never finishes. A stolen
+            # token for either shows up as its own identity, which is what the OpenBao and
+            # pgaudit watchers cover.
+            if user in EXPECTED_IDENTITIES:
                 continue
             access = [user, verb, ref.get('apiGroup', ''), resource, sub,
                       ref.get('namespace', ''), ref.get('name', '')]
@@ -708,7 +737,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "bc1631ffb74037d4eeb108fe8b627a2fe682a510462ccad74c0829ccbd80a505"
+        evidence.unorouter.com/code-sha256: "dc5e3b70f0eb3df8f5408ec0cac398c880d2a7e6c6ab8ba1f75085adc2c4a2ca"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -758,7 +787,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-bc1631ffb740 }
+          configMap: { name: k8s-audit-watch-dc5e3b70f0eb }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
