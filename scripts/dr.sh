@@ -80,6 +80,21 @@ kubeconfig() {
   chmod 600 kubeconfig.breakglass; echo "kubeconfig.breakglass -> $ip (shred -u it when done)"
 }
 
+# Read one OpenBao KV field with no Teleport and no operator token: ESO's kubernetes-auth
+# role (policy eso-read, secret/*) is exchanged inside the pod for a short token, the value
+# comes back on stdout and nothing touches disk. Needs kubeconfig.breakglass (an exec is
+# audited as system:admin and pages K8sPodExec, which is the point). Port-forwarding to
+# OpenBao is dropped by its network policy, exec is the only in-cluster path.
+bao_read() {
+  local path="${1:?secret path, e.g. teleport-github}" field="${2:?field}"
+  local sat; sat=$(kubectl -n external-secrets create token external-secrets --duration=10m)
+  printf '%s\n' "$sat" | kubectl -n openbao exec -i openbao-0 -- sh -c '
+    read -r J; export BAO_ADDR=http://127.0.0.1:8200
+    T=$(printf "%s" "$J" | bao write -field=token auth/kubernetes/login role=eso jwt=-) || exit 1
+    BAO_TOKEN="$T" bao kv get -field='"$field"' secret/'"$path"'; rc=$?
+    BAO_TOKEN="$T" bao token revoke -self >/dev/null 2>&1; exit $rc'
+}
+
 # Fallback only: cloud-init auto-bootstraps Cilium+ArgoCD. Use if that path fails.
 bootstrap() {
   local cil=1.19.6
@@ -139,4 +154,5 @@ restore() {
 cmd="${1:?usage: dr.sh <ips|apply|destroy|storage_apply|bootstrap|kubeconfig|unseal|restore|root>}"
 shift
 root() { generate_root; }
+bao-read() { bao_read "$@"; }
 "$cmd" "$@"

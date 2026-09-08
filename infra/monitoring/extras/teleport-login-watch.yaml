@@ -182,6 +182,11 @@ data:
             link = f"<https://github.com/{who}>" if method == "github" and who else (f"`{who}`" if who else "(no username)")
             ua = (ev.get("user_agent") or "")[:80]
             lines.append(f"**login FAILED** {link} via {method} from `{addr}`: {ev.get('error','')[:120]}" + (f"  ua `{ua}`" if ua else ""))
+            # GitHub refusing our client credentials means the connector lost its secret
+            # (a `tctl create --force` from `tctl get` output does that); every SSO login
+            # is dead until it is rebuilt from the repo file plus OpenBao teleport-github.
+            if "incorrect_client_credentials" in (ev.get("error") or ""):
+                page("TeleportSSOBroken", f"GitHub rejects the Teleport connector credentials ({method} login from {addr}); rebuild the connector from infra/teleport/resources/github-connector.yaml plus OpenBao secret/teleport-github")
 
     # Dex fronts ArgoCD, OpenBao and Grafana with the same GitHub org gate, and unlike
     # Teleport it names the refused user, which is the whole point of this watcher.

@@ -21,8 +21,13 @@ OpenBao has no Teleport dependency of its own: `bao login -method=oidc role=admi
 - Cluster: `./scripts/dr.sh kubeconfig [node]` pulls `/etc/rancher/k3s/k3s.yaml` over Tailscale
   into `kubeconfig.breakglass`. It authenticates as `system:admin`, so every request fires
   `K8sSecretRead` / `K8sPodExec`. `shred -u` it when done.
-- OpenBao: `./scripts/dr.sh root` runs `generate-root` with three unseal keys. Fires
-  `OpenBaoRootUsed`. `bao token revoke` it when done.
+- OpenBao, one value: `./scripts/dr.sh bao-read <path> <field>` reads a KV field through
+  ESO's kubernetes-auth role inside the pod (no Teleport, no operator token, nothing on
+  disk); an exec, so it pages `K8sPodExec`. This is how the Teleport connector secret is
+  recovered when SSO itself is down.
+- OpenBao, full: `./scripts/dr.sh root` needs an authenticated sudo token in 2.6 and is
+  therefore only a path while some login still works; a true lockout is a snapshot restore
+  (`dr.sh restore`).
 - No Tailscale: Hetzner console for the nodes, netcup SCP console for the VPS boxes.
 - Offline (VeraCrypt volume plus Bitwarden): unseal keys, tailnet lock disablement secrets,
   break-glass sops age key, the Hetzner operator SSH key. Nothing of this is in OpenBao, so a
