@@ -33,9 +33,13 @@ alertmanager:
 grafana:
   nodeSelector:
     kubernetes.io/hostname: unorouter-node9
+  # Grafana 13 builds its bleve search index in memory (one per resource kind,
+  # evicted on expiry and rebuilt on the next search), so steady state is ~230Mi
+  # and it drifts to ~370Mi as indexes are rebuilt. The old 384Mi limit sat inside
+  # that drift and paged ContainerMemoryNearLimit on 2026-09-08 without ever OOMing.
   resources:
-    requests: { cpu: 50m, memory: 128Mi }
-    limits: { cpu: 500m, memory: 384Mi }
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 640Mi }
   persistence:
     enabled: true
     storageClassName: local-path
