@@ -1,0 +1,480 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dash-status
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  status.json: |
+    {
+      "uid": "uno-status",
+      "title": "UnoRouter / Model Status",
+      "tags": [
+        "unorouter",
+        "status"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "1m",
+      "time": {
+        "from": "now-24h",
+        "to": "now"
+      },
+      "editable": true,
+      "panels": [
+        {
+          "id": 1,
+          "title": "Models tracked",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 0,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT count(DISTINCT model) AS value FROM model_status_pings WHERE $__unixEpochFilter(timestamp)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 2,
+          "title": "Fleet uptime",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 4,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT round(100.0 * (\n        sum(CASE WHEN status = 'success' THEN 1 ELSE 0 END)\n        + 0.5 * sum(CASE WHEN status = 'degraded' THEN 1 ELSE 0 END)\n      ) / NULLIF(sum(CASE WHEN status <> 'empty' THEN 1 ELSE 0 END), 0), 2) AS value\nFROM model_status_pings WHERE $__unixEpochFilter(timestamp)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 95
+                  },
+                  {
+                    "color": "green",
+                    "value": 99
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "Degraded counts half, matching UptimeByModelSince in the gateway, so this agrees with unorouter.com/status. 'empty' minutes (no channels at all) are excluded rather than counted as down."
+        },
+        {
+          "id": 3,
+          "title": "Models down now",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 8,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT count(*) AS value FROM model_status_pings p\nWHERE p.timestamp = (SELECT max(timestamp) FROM model_status_pings)\n  AND p.status = 'error'",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1
+                  },
+                  {
+                    "color": "red",
+                    "value": 5
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "Models whose every channel is disabled, as of the most recent snapshot minute."
+        },
+        {
+          "id": 4,
+          "title": "Open incidents",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 12,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT count(*) AS value FROM model_status_incidents WHERE resolved_at IS NULL",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1
+                  },
+                  {
+                    "color": "red",
+                    "value": 10
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 5,
+          "title": "Errors (range)",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 16,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT sum(error_count) AS value FROM model_status_pings WHERE $__unixEpochFilter(timestamp)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 6,
+          "title": "Snapshot freshness",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT extract(epoch from now()) - max(timestamp) AS value FROM model_status_pings",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 300
+                  },
+                  {
+                    "color": "red",
+                    "value": 900
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "Age of the newest snapshot. The writer runs once a minute on the master pod, so >300s means it stopped and this whole dashboard is stale."
+        },
+        {
+          "id": 10,
+          "title": "Requests and errors",
+          "type": "timeseries",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT timestamp AS time, 'requests' AS metric, sum(request_count) AS value\nFROM model_status_pings WHERE $__unixEpochFilter(timestamp) GROUP BY 1\nUNION ALL\nSELECT timestamp AS time, 'errors' AS metric, sum(error_count) AS value\nFROM model_status_pings WHERE $__unixEpochFilter(timestamp) GROUP BY 1\nORDER BY 1",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {}
+        },
+        {
+          "id": 11,
+          "title": "Latency p50 / p95",
+          "type": "timeseries",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT timestamp AS time, 'p50' AS metric,\n       round(avg(NULLIF(p50_latency_ms, 0))) AS value\nFROM model_status_pings WHERE $__unixEpochFilter(timestamp) GROUP BY 1\nUNION ALL\nSELECT timestamp AS time, 'p95' AS metric,\n       round(avg(NULLIF(p95_latency_ms, 0))) AS value\nFROM model_status_pings WHERE $__unixEpochFilter(timestamp) GROUP BY 1\nORDER BY 1",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "options": {},
+          "description": "Percentiles are computed per minute per model by the gateway; averaging them across models is an approximation, not a true fleet percentile."
+        },
+        {
+          "id": 20,
+          "title": "Worst uptime by model",
+          "type": "table",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT model,\n       round(100.0 * (\n         sum(CASE WHEN status = 'success' THEN 1 ELSE 0 END)\n         + 0.5 * sum(CASE WHEN status = 'degraded' THEN 1 ELSE 0 END)\n       ) / NULLIF(sum(CASE WHEN status <> 'empty' THEN 1 ELSE 0 END), 0), 2) AS uptime_pct,\n       sum(request_count) AS requests,\n       sum(error_count) AS errors,\n       round(avg(NULLIF(p95_latency_ms, 0))) AS p95_ms\nFROM model_status_pings WHERE $__unixEpochFilter(timestamp)\nGROUP BY model\nHAVING sum(CASE WHEN status <> 'empty' THEN 1 ELSE 0 END) > 0\nORDER BY uptime_pct ASC, requests DESC LIMIT 25",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {}
+        },
+        {
+          "id": 21,
+          "title": "Recent incidents",
+          "type": "table",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT c.model_name AS model, i.title,\n       to_timestamp(i.started_at) AS started,\n       CASE WHEN i.resolved_at IS NULL THEN NULL ELSE to_timestamp(i.resolved_at) END AS resolved,\n       CASE WHEN i.resolved_at IS NULL THEN 'ONGOING'\n            ELSE (i.resolved_at - i.started_at) || 's' END AS duration\nFROM model_status_incidents i\nLEFT JOIN model_status_components c ON c.id = i.component_id\nWHERE $__unixEpochFilter(i.started_at) OR i.resolved_at IS NULL\nORDER BY i.started_at DESC LIMIT 25",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {}
+        }
+      ]
+    }

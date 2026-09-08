@@ -1,0 +1,449 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dash-performance
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  performance.json: |
+    {
+      "uid": "uno-performance",
+      "title": "UnoRouter / Model Performance",
+      "tags": [
+        "unorouter",
+        "performance"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "1m",
+      "time": {
+        "from": "now-24h",
+        "to": "now"
+      },
+      "editable": true,
+      "panels": [
+        {
+          "id": 1,
+          "title": "Avg latency",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 0,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT round(sum(total_latency_ms)::numeric / NULLIF(sum(request_count), 0)) AS value\nFROM perf_metrics WHERE $__unixEpochFilter(bucket_ts)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 2,
+          "title": "Avg TTFT",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 4,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT round(sum(ttft_sum_ms)::numeric / NULLIF(sum(ttft_count), 0)) AS value\nFROM perf_metrics WHERE $__unixEpochFilter(bucket_ts)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "Time to first token, streaming requests only (ttft_count, not request_count)."
+        },
+        {
+          "id": 3,
+          "title": "Success rate",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 8,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT round(100.0 * sum(success_count) / NULLIF(sum(request_count), 0), 2) AS value\nFROM perf_metrics WHERE $__unixEpochFilter(bucket_ts)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 90
+                  },
+                  {
+                    "color": "green",
+                    "value": 97
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 4,
+          "title": "Output tokens/sec",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 12,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT round(sum(output_tokens)::numeric / NULLIF(sum(generation_ms) / 1000.0, 0), 1) AS value\nFROM perf_metrics WHERE $__unixEpochFilter(bucket_ts)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 5,
+          "title": "Channel flips",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 16,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT count(*) AS value FROM channel_diagnostics\nWHERE $__unixEpochFilter(created_at) AND probe_only = false",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "Enable/disable transitions in the range. A high number means channels are flapping."
+        },
+        {
+          "id": 6,
+          "title": "Data freshness",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT extract(epoch from now()) - max(bucket_ts) AS value FROM perf_metrics",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 7200
+                  },
+                  {
+                    "color": "red",
+                    "value": 21600
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "perf_metrics buckets hourly and flushes every 5 min, so this sits under ~1h in normal operation. The current hour is always partial until its flush lands."
+        },
+        {
+          "id": 10,
+          "title": "Latency by model",
+          "type": "timeseries",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT bucket_ts AS time, model_name AS metric,\n       round(sum(total_latency_ms)::numeric / NULLIF(sum(request_count), 0)) AS value\nFROM perf_metrics WHERE $__unixEpochFilter(bucket_ts)\n  AND model_name IN (\n    SELECT model_name FROM perf_metrics WHERE $__unixEpochFilter(bucket_ts)\n    GROUP BY model_name ORDER BY sum(request_count) DESC LIMIT 10)\nGROUP BY 1, 2 ORDER BY 1",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "options": {},
+          "description": "Top 10 models by volume. Capped deliberately: charting all 1,195 is unreadable and slow."
+        },
+        {
+          "id": 11,
+          "title": "TTFT by model",
+          "type": "timeseries",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT bucket_ts AS time, model_name AS metric,\n       round(sum(ttft_sum_ms)::numeric / NULLIF(sum(ttft_count), 0)) AS value\nFROM perf_metrics WHERE $__unixEpochFilter(bucket_ts) AND ttft_count > 0\n  AND model_name IN (\n    SELECT model_name FROM perf_metrics WHERE $__unixEpochFilter(bucket_ts) AND ttft_count > 0\n    GROUP BY model_name ORDER BY sum(request_count) DESC LIMIT 10)\nGROUP BY 1, 2 ORDER BY 1",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "options": {}
+        },
+        {
+          "id": 20,
+          "title": "Model performance",
+          "type": "table",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 0,
+            "y": 13
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT model_name,\n       sum(request_count) AS requests,\n       round(100.0 * sum(success_count) / NULLIF(sum(request_count), 0), 1) AS success_pct,\n       round(sum(total_latency_ms)::numeric / NULLIF(sum(request_count), 0)) AS latency_ms,\n       round(sum(ttft_sum_ms)::numeric / NULLIF(sum(ttft_count), 0)) AS ttft_ms,\n       round(sum(output_tokens)::numeric / NULLIF(sum(generation_ms) / 1000.0, 0), 1) AS tok_per_s\nFROM perf_metrics WHERE $__unixEpochFilter(bucket_ts)\nGROUP BY model_name HAVING sum(request_count) > 10\nORDER BY requests DESC LIMIT 30",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {}
+        },
+        {
+          "id": 21,
+          "title": "Flapping channels",
+          "type": "table",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 12,
+            "y": 13
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT channel_name, channel_id,\n       count(*) AS transitions,\n       sum(CASE WHEN to_status <> 1 THEN 1 ELSE 0 END) AS disables,\n       max(status_code) AS last_code,\n       max(to_timestamp(created_at)) AS last_seen\nFROM channel_diagnostics\nWHERE $__unixEpochFilter(created_at) AND probe_only = false\nGROUP BY channel_name, channel_id\nORDER BY transitions DESC LIMIT 25",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {},
+          "description": "Channels flipping enabled/disabled most often. Repeated flips usually mean a dying upstream key or a rate-limited provider."
+        }
+      ]
+    }

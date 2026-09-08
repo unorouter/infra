@@ -51,6 +51,12 @@ grafana:
       secretName: grafana-dex-sso
       mountPath: /etc/secrets/grafana-oidc
       readOnly: true
+    # Password for the masked `reader` role, read via $__file{} by the NewAPI
+    # postgres datasource in extras/grafana-postgres-datasource.yaml.
+    - name: grafana-pg-reader
+      secretName: grafana-pg-reader
+      mountPath: /etc/secrets/grafana-pg-reader
+      readOnly: true
   grafana.ini:
     server:
       root_url: https://grafana.unorouter.com

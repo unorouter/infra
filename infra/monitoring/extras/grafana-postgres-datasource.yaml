@@ -1,0 +1,65 @@
+# Grafana reads the gateway's own pre-aggregated tables over SQL.
+#
+# new-api collects far more than it exposes: quota_data (hourly usage cube, 8
+# dimensions, no retention), model_status_pings (1 row per model per minute with
+# p50/p95), perf_metrics (latency/TTFT/success per model+group, never pruned) and
+# channel_diagnostics. None of it reaches Prometheus, and re-exporting it there
+# would be wrong twice over: the per-user and per-model labels are the classic
+# cardinality explosion, and Prometheus is explicitly not built for figures that
+# have to be right (a scrape missed over a pod restart silently undercounts).
+# Prometheus also keeps 15 days here, while quota_data goes back to January.
+#
+# So the numbers are read from the source of truth instead, as the column-masked
+# `reader` role against the -ro replica. Never point this at -rw.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: grafana-pg-reader
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: grafana-pg-reader
+    creationPolicy: Owner
+  data:
+    - secretKey: password
+      remoteRef: { key: newapi-pg-reader, property: password }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource-postgres
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  postgres.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: NewAPI
+        uid: newapi-pg
+        type: postgres
+        access: proxy
+        # -ro, never -rw: an ad-hoc panel query must not be able to load the
+        # primary. A full scan of `logs` is ~23s and the primary serves the gateway.
+        url: newapi-pg-ro.databases.svc.cluster.local:5432
+        user: reader
+        database: newapi
+        editable: false
+        secureJsonData:
+          # Read from the mounted file, like the dex client secret, so the value
+          # never lands in a ConfigMap or in the pod environment.
+          password: $__file{/etc/secrets/grafana-pg-reader/password}
+        jsonData:
+          sslmode: require
+          postgresVersion: 1700
+          # A dashboard refresh opens one connection per panel query. The replica
+          # also serves CNPG's own traffic, so this stays small on purpose.
+          maxOpenConns: 3
+          maxIdleConns: 1
+          maxIdleConnsAuto: false
+          connMaxLifetime: 14400
+          timescaledb: false

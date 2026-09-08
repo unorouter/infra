@@ -28,6 +28,10 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api }
         - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
         - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+        # Grafana reads the pre-aggregated tables (quota_data, model_status_pings,
+        # perf_metrics, channel_diagnostics) as the column-masked `reader` role. Its
+        # datasource points at the -ro service, so dashboards never touch the primary.
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: grafana }
       toPorts:
         - ports: [{ port: "5432", protocol: TCP }]
     - fromEndpoints:

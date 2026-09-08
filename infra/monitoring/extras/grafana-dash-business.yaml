@@ -1,0 +1,528 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dash-business
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  business.json: |
+    {
+      "uid": "uno-business",
+      "title": "UnoRouter / Business",
+      "tags": [
+        "unorouter",
+        "business"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "1m",
+      "time": {
+        "from": "now-24h",
+        "to": "now"
+      },
+      "editable": true,
+      "panels": [
+        {
+          "id": 1,
+          "title": "Revenue (range)",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 0,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT sum(quota)/500000.0 AS value FROM quota_data WHERE $__unixEpochFilter(created_at)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "currencyUSD"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "quota / 500000 = USD (QuotaPerUnit in common/constants.go)."
+        },
+        {
+          "id": 2,
+          "title": "Requests",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 4,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT sum(count) AS value FROM quota_data WHERE $__unixEpochFilter(created_at)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 3,
+          "title": "Active users",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 8,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT count(DISTINCT user_id) AS value FROM quota_data WHERE $__unixEpochFilter(created_at)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 4,
+          "title": "Paying users",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 12,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT count(DISTINCT user_id) AS value FROM quota_data WHERE $__unixEpochFilter(created_at) AND quota > 0",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "Users with non-zero spend in the range. Free-tier traffic bills 0."
+        },
+        {
+          "id": 5,
+          "title": "Top-user share",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 16,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT round(100.0 * max(u.q) / NULLIF(sum(u.q),0), 1) AS value\nFROM (SELECT user_id, sum(quota) q FROM quota_data WHERE $__unixEpochFilter(created_at) GROUP BY user_id) u",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 50
+                  },
+                  {
+                    "color": "red",
+                    "value": 75
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "Share of spend from the single largest account. Concentration risk: a handful of accounts carry the revenue, so one client changing behaviour moves the whole line."
+        },
+        {
+          "id": 6,
+          "title": "Models used",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 0
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT count(DISTINCT model_name) AS value FROM quota_data WHERE $__unixEpochFilter(created_at)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "id": 10,
+          "title": "Revenue over time (USD)",
+          "type": "timeseries",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT created_at AS time,\n       CASE WHEN model_name LIKE '%:free' THEN 'free' ELSE 'paid' END AS metric,\n       sum(quota)/500000.0 AS value\nFROM quota_data WHERE $__unixEpochFilter(created_at)\nGROUP BY 1, 2 ORDER BY 1",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "currencyUSD"
+            },
+            "overrides": []
+          },
+          "options": {},
+          "description": "quota_data is the gateway's own hourly usage cube, so these are billed figures, not sampled metrics."
+        },
+        {
+          "id": 11,
+          "title": "Requests over time",
+          "type": "timeseries",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "time_series",
+              "rawQuery": true,
+              "rawSql": "SELECT created_at AS time,\n       CASE WHEN model_name LIKE '%:free' THEN 'free' ELSE 'paid' END AS metric,\n       sum(count) AS value\nFROM quota_data WHERE $__unixEpochFilter(created_at)\nGROUP BY 1, 2 ORDER BY 1",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {}
+        },
+        {
+          "id": 20,
+          "title": "Top models by revenue",
+          "type": "barchart",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT model_name, sum(quota)/500000.0 AS usd\nFROM quota_data WHERE $__unixEpochFilter(created_at)\nGROUP BY model_name HAVING sum(quota) > 0\nORDER BY usd DESC LIMIT 15",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "currencyUSD"
+            },
+            "overrides": []
+          },
+          "options": {}
+        },
+        {
+          "id": 21,
+          "title": "Top users by revenue",
+          "type": "table",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT username, user_id,\n       sum(quota)/500000.0 AS usd,\n       sum(count) AS requests,\n       count(DISTINCT model_name) AS models\nFROM quota_data WHERE $__unixEpochFilter(created_at)\nGROUP BY username, user_id HAVING sum(quota) > 0\nORDER BY usd DESC LIMIT 20",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {}
+        },
+        {
+          "id": 30,
+          "title": "Free-tier volume by model",
+          "type": "barchart",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 21
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT model_name, sum(count) AS requests\nFROM quota_data WHERE $__unixEpochFilter(created_at) AND model_name LIKE '%:free'\nGROUP BY model_name ORDER BY requests DESC LIMIT 15",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {},
+          "description": "Free traffic bills nothing but consumes upstream capacity. This is what the free tier actually costs in load."
+        },
+        {
+          "id": 31,
+          "title": "Data freshness",
+          "type": "stat",
+          "datasource": {
+            "type": "postgres",
+            "uid": "newapi-pg"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 21
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "postgres",
+                "uid": "newapi-pg"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT extract(epoch from now()) - max(created_at) AS value FROM quota_data",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 900
+                  },
+                  {
+                    "color": "red",
+                    "value": 3600
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "description": "Age of the newest quota_data row. The aggregator flushes every 5 min, so this normally sits under ~600s. A climbing value means the collector stopped and every panel above is quietly stale."
+        }
+      ]
+    }
