@@ -32,12 +32,6 @@ server:
 
         service_registration "kubernetes" {}
 
-# BREAK-GLASS ONLY, remove after use. OpenBao >= 2.5 refuses the unauthenticated
-# sys/generate-root endpoints by default (CVE-2026-5807) and >= 2.6 needs a token for
-# sys/generate-root-token; with no root token and no working auth method, this flag
-# is the only way back in: flip, restart, unseal, generate-root, repair, flip back.
-disable_unauthed_generate_root_endpoints = false
-
         # Audit log. MUST be declared here: `bao audit enable` over the API returns
         # 400 "cannot enable audit device via API" since v2.3.2, which is the fix for
         # CVE-2025-54997 (a file audit device could be pointed at /etc/cron.d and its
