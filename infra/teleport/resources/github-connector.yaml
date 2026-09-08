@@ -19,7 +19,10 @@ spec:
     # Deliberately no preset `access`/`editor`.
     - organization: unorouter
       team: readonly
-      roles: ["auditor", "newapi-db-reader", "kube-viewer"]
+      # grafana-viewer, not `access`: `access` is app_labels {'*': '*'} and would
+      # hand this tier argocd and openbao too. Without it the proxy 404s on
+      # grafana.unorouter.com, because an app the caller cannot see does not exist.
+      roles: ["auditor", "newapi-db-reader", "kube-viewer", "grafana-viewer"]
     # Exec tier stacked on readonly: shell/port-forward into services pods only
     # (kube-debugger + kube-debugger-rbac.yaml). GitHub-side the team carries
     # pull on unorouter for the fork-PR flow (main takes no direct pushes from it).

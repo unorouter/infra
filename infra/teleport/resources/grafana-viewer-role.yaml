@@ -1,0 +1,23 @@
+# App access role: Grafana only, for the readonly tier.
+#
+# Teleport routes an app request by looking up the apps the CALLER is allowed to see,
+# so a user whose roles carry no app_labels has an empty app list and the proxy answers
+# 404 rather than 403: the app is invisible rather than forbidden. That is what the
+# readonly tier hit -- auditor, kube-viewer and newapi-db-reader all have no app_labels,
+# so grafana.unorouter.com returned a bare "Not Found" and Grafana never saw the request.
+#
+# Scoped to tier=observability, NOT env=internal: argocd and openbao carry env=internal
+# too, so matching on it would grant the deploy console and the secret store as well.
+# `access` is not the answer either, it is app_labels {'*': '*'}.
+#
+# Grafana maps its own permissions from the teleport roles in the JWT
+# (role_attribute_path in monitoring values.yaml): no `editor` here, so a holder of this
+# role lands as a Grafana Viewer. Applied via tctl create -f.
+kind: role
+version: v7
+metadata:
+  name: grafana-viewer
+spec:
+  allow:
+    app_labels:
+      tier: observability

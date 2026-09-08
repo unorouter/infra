@@ -59,7 +59,10 @@ apps:
   - name: grafana
     uri: http://monitoring-grafana.monitoring.svc.cluster.local:80
     public_addr: grafana.unorouter.com
-    labels: { env: internal }
+    # tier=observability is what the grafana-viewer role matches on. env=internal
+    # cannot be used for that: argocd and openbao carry it too, so scoping a role to
+    # it would hand out the deploy console and the secret store as well.
+    labels: { env: internal, tier: observability }
     rewrite:
       redirect:
         - monitoring-grafana.monitoring.svc.cluster.local
