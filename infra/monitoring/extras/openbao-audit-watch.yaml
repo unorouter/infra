@@ -175,7 +175,7 @@ data:
             routine = ident in ROUTINE or plumbing or (ident == "unauthenticated" and is_login)
             # A routine identity's reads are silent; its writes, deletes and anything sensitive
             # still post (the named operator's OIDC session is routine for reads only).
-            if routine and not sensitive and not is_root and op in ("read", "list"):
+            if (plumbing or is_login or (routine and op in ("read", "list"))) and not sensitive and not is_root:
                 continue
             t = d.get("time", "")[11:19]
             c = callers[(ident or "?", "root" if is_root else policies[:40], remote)]
