@@ -171,11 +171,20 @@ sops:
     age:
         - enc: |
             -----BEGIN AGE ENCRYPTED FILE-----
-            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSAxQ0lFWDdlVWp2RDdjSGxw
-            Q1RkMUg3cjJwR3V4Z1d1bXpoZkFwOWlwU0ZZCit5VWV5SEg5cktiNHNoS1pvcFg5
-            MkRuNkVubzkvU0JlbThYay9UeXZJY2MKLS0tIDBxekVrdFJld1JTamtja0h1RHNL
-            Y2MwN2J1Yjl6N2Rld2QzUHMvS1Q2OGsK/7zV2PEQgS7FtFTqJ6FP62r1vDsJxOTi
-            q/+4Q2Ug/DzJ2T8eN0AD6EGgBJDYfmNaqGfn4qi4jHFwb2/LJbC+Gg==
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSAvNkh3eERvT1RhV3Bmc2cw
+            Ymh0a0Vzbk16OTVYV0NWYUkxNzNUOHZybTJrCk1EVmFzQ0VCcERVMjRHM0NGeU1L
+            VERmTTl5RjRUWUJXbU1oNkdGSGlacFkKLS0tIEx5dVVvU1VncmhZSVRSbU5neUR0
+            VENhSHNUL1k3bUloeHVLMWJMbEU1VkUK9kJ6RG6AX5zhtcHQ8VqdBVECQoCjTjUJ
+            558MabP0UjnsNvcACFKsMeO1IjMV2Bqz1HTU1tyqanj1MXYaepyvTA==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age13wzs2a2ef2ma0ajwqwylpnu796vjvypwxef4uhndkf90gzq4zepq0lqjav
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBSUGMrWkZMVDRlUXdpK3Z6
+            N3Z3NEFMQ2NqYk02ek9wV2J2Q1pCcjlEa1JBCk1WZy9KL09aNHNRK1hmeFhQaXda
+            dUtYUUdwYnR3aGNlS2V5d0ZDZ1RGVDQKLS0tIForbjkySmZWTWlkVGlMVE12MnZp
+            S0R1TG4vQzNWckd0cnRoNFhZZkh5TTgKEf8CLaar7gcnqGnkNk82R2bIliFqmpoX
+            k8S43WMRnGcCP70P5bXDE2HnqgHkgwEO/fnhiL6mDajD+LeLLjPqPA==
             -----END AGE ENCRYPTED FILE-----
           recipient: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
     lastmodified: "2026-09-07T15:20:05Z"

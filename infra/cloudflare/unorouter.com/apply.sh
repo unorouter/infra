@@ -11,6 +11,8 @@ ZONE=bc178db579d52011b4b2998da622b9e3
 cd "$(dirname "$0")"
 MODE=normal; case "${1:-}" in attack|normal) MODE=$1; shift;; esac
 FILE=rules.sops.yaml; [ "$MODE" = attack ] && FILE=rules.attack.sops.yaml
+# daily sops key from OpenBao (Teleport app proxy + OIDC token), never a file on disk
+[ -n "${SOPS_AGE_KEY:-}" ] || export SOPS_AGE_KEY=$(BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:18200}" bao kv get -field=key secret/sops-age)
 if [ -n "${CF_API_TOKEN:-}" ]; then AUTH=(-H "Authorization: Bearer $CF_API_TOKEN"); else AUTH=(-H "X-Auth-Email: $CF_EMAIL" -H "X-Auth-Key: $CF_API_KEY"); fi
 echo "mode: $MODE ($FILE)"
 sops -d "$FILE" | python3 -c '
