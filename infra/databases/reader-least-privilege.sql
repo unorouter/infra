@@ -122,7 +122,11 @@ GRANT SELECT ("value") ON public.options_backup_20260818_glmcg TO reader;
 GRANT SELECT ON public.passkey_credentials TO reader;
 GRANT SELECT ON public.perf_metrics TO reader;
 GRANT SELECT ON public.prefill_groups TO reader;
-GRANT SELECT ON public.push_subscriptions TO reader;
+-- public.push_subscriptions: withholding auth, p256dh, endpoint. auth (22 chars) and
+-- p256dh (87) are the RFC 8291 keypair and the endpoint URL carries the per-device
+-- FCM/Apple registration token; the three together are enough to push to a user's
+-- browser. endpoint_hash keeps the row identifiable without them.
+GRANT SELECT ("id", "endpoint_hash", "topics", "locale", "user_agent", "created_at", "last_seen_at", "failure_count") ON public.push_subscriptions TO reader;
 GRANT SELECT ON public.quota_audit TO reader;
 GRANT SELECT ON public.quota_data TO reader;
 -- public.redemptions: withholding key
