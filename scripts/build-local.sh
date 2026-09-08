@@ -29,12 +29,12 @@ SRC="$ROOT/$REPO"
 
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/teleport-unorouter.yaml}"
 # OpenBao through the Teleport app proxy (systemd --user tsh-openbao, port 18200) with the
-# operator's own OIDC token (~/.bao-token from `bao login -method=oidc role=admin`), so the
+# operator's own OIDC token (~/.bao-token from `bao login -method=oidc role=reader`, 24h read-only), so the
 # audit log names a person. No root token, no kubectl exec.
 export PATH="$HOME/.local/bin:$PATH"   # bao, tsh, tctl live there
 export BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:18200}"
 BAO() { sh -c "$*"; }
-bao token lookup >/dev/null 2>&1 || { echo "!! no OpenBao session: systemctl --user start tsh-openbao; bao login -method=oidc role=admin" >&2; exit 1; }
+bao token lookup >/dev/null 2>&1 || { echo "!! no OpenBao session: systemctl --user start tsh-openbao; bao login -method=oidc role=reader (24h, read-only; role=admin for writes, 1h)" >&2; exit 1; }
 
 # Several of these can run at once (one per Claude Code instance). Everything a run
 # touches is private to it: a throwaway worktree of the exact commit being built, and
