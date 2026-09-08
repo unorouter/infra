@@ -351,6 +351,17 @@ spec:
           annotations:
             summary: "{{ $labels.instance }} root disk >75% full and image GC cannot help"
             description: "Image GC trims at 70%. Above that it is PVC data: check prometheus retention and pg size."
+        # A PVC in Terminating state while its pod still runs is a loaded gun: the pod
+        # keeps the volume mounted, but the moment it restarts the claim finalizes and the
+        # local-path provisioner deletes the directory. That is how the OpenBao raft data
+        # vanished on 2026-09-08 (restored from the R2 snapshot). Page immediately.
+        - alert: PVCTerminating
+          expr: kube_persistentvolumeclaim_deletion_timestamp > 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is Terminating"
+            description: "Do NOT restart its pod. Copy the data off first, or recreate the claim, or set the PV to Retain."
         # Catches a runaway writer (log loop, WAL that stops archiving, a stuck backup)
         # long before a threshold does: 6h of trend projected 24h ahead hits full.
         # predict_linear on a disk is honest in a way it is not on a warming cache,
