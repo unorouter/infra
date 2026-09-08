@@ -26,7 +26,7 @@ spec:
     creationPolicy: Owner
   data:
     - secretKey: password
-      remoteRef: { key: newapi-pg-reader, property: password }
+      remoteRef: { key: newapi-pg-grafana-reader, property: password }
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -56,7 +56,7 @@ data:
         # -ro, never -rw: an ad-hoc panel query must not be able to load the
         # primary. A full scan of `logs` is ~23s and the primary serves the gateway.
         url: newapi-pg-ro.databases.svc.cluster.local:5432
-        user: reader
+        user: grafana_reader
         database: newapi
         editable: false
         secureJsonData:
