@@ -149,6 +149,13 @@ data:
             # anywhere else, or any other role, still posts.
             if user == "reader" and where(rec.get("connection_from", "")).startswith("teleport-agent/teleport-app-access"):
                 continue
+            # The pat-audit-archive CronJob reads pat_change_audit once a minute from a pod that
+            # is pruned before this job runs, so its IP rarely resolves to a name. The role can
+            # only SELECT that table; a read of it from inside the pod network is the archiver,
+            # the same role from anywhere else still posts.
+            if user == "evidence_archiver" and audit.get("class") == "READ" and audit.get("object_name") == "public.pat_change_audit" \
+                    and rec.get("connection_from", "").startswith("10.42."):
+                continue
             t = (rec.get("log_time") or "")[11:19]
             key = (name, user, rec.get("connection_from", "?"), rec.get("session_id", "?"), rec.get("backend_type", "?"), rec.get("session_start_time", "")[11:19])
             s = sessions[key]
