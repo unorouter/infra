@@ -185,7 +185,7 @@ spec:
             description: "5 failures self-recovered unnoticed on 2026-07-22. One failure per primary change is the barman plugin refusing to overwrite the timeline .history file and is expected; check last_failed_wal in pg_stat_archiver before treating this as an S3 problem."
         - alert: OpenBaoSnapshotStale
           # the 6h raft-snapshot cron is the ONLY OpenBao DR source (node loss wipes the
-          # local-path PV); a silently-dead cron is invisible until `make restore` needs it
+          # local-path PV); a silently-dead cron is invisible until `dr.sh restore` needs it
           expr: >
             (time() - kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-raft-snapshot"}) > 8 * 3600
             or absent(kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-raft-snapshot"})
