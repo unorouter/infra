@@ -293,6 +293,11 @@ spec:
     - toEntities: [host, remote-node, kube-apiserver]
       toPorts:
         - ports: [{ port: "6443", protocol: TCP }]
+    # k8s-audit-watch archives through the s3-gateway (it encrypts on the way to Hetzner)
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
+      toPorts:
+        - ports: [{ port: "8443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]

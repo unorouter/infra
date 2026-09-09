@@ -134,9 +134,10 @@ spec:
         - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg}
       toPorts:
         - ports: [{port: "5432", protocol: TCP}]
-    - toEntities: [world]
+    - toEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway}
       toPorts:
-        - ports: [{port: "443", protocol: TCP}]
+        - ports: [{port: "8443", protocol: TCP}]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
