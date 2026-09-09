@@ -105,9 +105,11 @@ sidecar:
     # collector pages as K8sSecretRead
     resource: configmap
     folderAnnotation: k8s-sidecar-target-directory
+    # rule ConfigMaps live next to Loki; a cluster-wide list is what OOM-killed it at 64Mi
+    searchNamespace: monitoring
   resources:
-    requests: { cpu: 10m, memory: 32Mi }
-    limits: { memory: 64Mi }
+    requests: { cpu: 10m, memory: 64Mi }
+    limits: { memory: 192Mi }
 backend: { replicas: 0 }
 read: { replicas: 0 }
 write: { replicas: 0 }
