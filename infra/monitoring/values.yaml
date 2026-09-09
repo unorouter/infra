@@ -318,3 +318,9 @@ defaultRules:
     kubeControllerManager: false
     kubeProxy: false
     etcd: false
+    # apiserver SLO machinery: the burnrate group alone took 2.7s of every 30s rule
+    # evaluation (80% of Prometheus's rule time, 2026-09-09) for KubeAPIErrorBudgetBurn
+    # alerts that never fired on anything actionable on a 3-node cluster.
+    kubeApiserverBurnrate: false
+    kubeApiserverSlos: false
+    kubeApiserverAvailability: false
