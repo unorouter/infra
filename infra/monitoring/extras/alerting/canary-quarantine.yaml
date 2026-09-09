@@ -1,0 +1,295 @@
+# Canary responder. Alertmanager posts every pod create in services here (Loki rule
+# K8sCanaryWorkload, severity none). The responder lists the namespace, and for each pod it
+# has not seen yet checks whether the spec references the honeytoken Secret
+# credential-canary-v1. A hit is logged as a SECURITY_EVIDENCE line (Vector archives it) and
+# posted to Alertmanager as a critical K8sCanaryWorkload; with AUTO_QUARANTINE=true the pod is
+# labelled and an egress deny CiliumNetworkPolicy is created for it. Same bail-outs as the
+# retired collector: a pod not owned by exactly one Job, the two sync CronJobs, a pod with host
+# access, a reference that is gone by the time it looks. It holds no credential beyond its own
+# service account, which can label pods and create policies in services and nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: canary-quarantine
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: canary-quarantine
+  namespace: services
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, patch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get]
+  - apiGroups: [cilium.io]
+    resources: [ciliumnetworkpolicies]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: canary-quarantine
+  namespace: services
+subjects:
+  - kind: ServiceAccount
+    name: canary-quarantine
+    namespace: monitoring
+roleRef:
+  kind: Role
+  name: canary-quarantine
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canary-quarantine
+  namespace: monitoring
+data:
+  server.py: |
+    import hashlib, json, os, ssl, threading, time, urllib.error, urllib.parse, urllib.request
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    CANARY = "credential-canary-v1"
+    LABEL = "security.unorouter.com/quarantine-uid"
+    AUTO = os.environ.get("AUTO_QUARANTINE") == "true"
+    AM = os.environ.get("ALERTMANAGER_URL", "")
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    TLS = ssl.create_default_context(cafile=SA + "/ca.crt")
+    handled = {}
+    lock = threading.Lock()
+
+    def kube(path, method="GET", body=None):
+        token = open(SA + "/token").read().strip()
+        ctype = "application/json-patch+json" if method == "PATCH" else "application/json"
+        req = urllib.request.Request("https://kubernetes.default.svc" + path, method=method,
+                                     headers={"Authorization": "Bearer " + token, "Content-Type": ctype},
+                                     data=json.dumps(body).encode() if body is not None else None)
+        try:
+            with urllib.request.urlopen(req, context=TLS, timeout=5) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and method == "GET":
+                return None
+            raise
+
+    def secret_refs(spec):
+        refs = [v.get("secret", {}).get("secretName") for v in spec.get("volumes", [])]
+        for v in spec.get("volumes", []):
+            refs.extend(s.get("secret", {}).get("name") for s in v.get("projected", {}).get("sources", []))
+        for c in spec.get("containers", []) + spec.get("initContainers", []) + spec.get("ephemeralContainers", []):
+            refs.extend(e.get("secretRef", {}).get("name") for e in c.get("envFrom", []))
+            refs.extend(e.get("valueFrom", {}).get("secretKeyRef", {}).get("name") for e in c.get("env", []))
+        return refs
+
+    def host_access(spec):
+        cs = spec.get("containers", []) + spec.get("initContainers", []) + spec.get("ephemeralContainers", [])
+        if any(spec.get(k) for k in ("hostNetwork", "hostPID", "hostIPC")) or any("hostPath" in v for v in spec.get("volumes", [])):
+            return True
+        return any(c.get("securityContext", {}).get("privileged") or
+                   set(c.get("securityContext", {}).get("capabilities", {}).get("add", [])) & {"SYS_ADMIN", "NET_ADMIN", "ALL"} for c in cs)
+
+    def contain(pod):
+        meta, spec, uid = pod["metadata"], pod.get("spec", {}), pod["metadata"]["uid"]
+        owners = meta.get("ownerReferences") or []
+        if len(owners) != 1 or owners[0].get("kind") != "Job":
+            return "manual_review"
+        if not AUTO:
+            return "manual_review"
+        job = kube("/apis/batch/v1/namespaces/services/jobs/" + urllib.parse.quote(owners[0]["name"], safe=""))
+        if not job or job["metadata"]["uid"] != owners[0].get("uid"):
+            return "manual_review"
+        if any(o.get("name") in ("new-api-sync", "new-api-sync-full") for o in job["metadata"].get("ownerReferences", [])):
+            return "protected_workload"
+        live = kube("/api/v1/namespaces/services/pods/" + urllib.parse.quote(meta["name"], safe=""))
+        if not live or live["metadata"]["uid"] != uid:
+            return "target_gone_or_replaced"
+        if CANARY not in secret_refs(live.get("spec", {})):
+            return "canary_reference_no_longer_present"
+        if host_access(live.get("spec", {})):
+            return "host_access_requires_manual_containment"
+        if (live["metadata"].get("labels") or {}).get(LABEL) != uid:
+            # uid and resourceVersion tests refuse a replacement or a concurrently changed pod
+            patch = [{"op": "test", "path": "/metadata/uid", "value": uid},
+                     {"op": "test", "path": "/metadata/resourceVersion", "value": live["metadata"]["resourceVersion"]}]
+            if "labels" not in live["metadata"]:
+                patch.append({"op": "add", "path": "/metadata/labels", "value": {LABEL: uid}})
+            else:
+                patch.append({"op": "add", "path": "/metadata/labels/security.unorouter.com~1quarantine-uid", "value": uid})
+            kube("/api/v1/namespaces/services/pods/" + urllib.parse.quote(meta["name"], safe=""), "PATCH", patch)
+        name = "quarantine-" + hashlib.sha256(uid.encode()).hexdigest()[:32]
+        base = "/apis/cilium.io/v2/namespaces/services/ciliumnetworkpolicies"
+        policy = {"apiVersion": "cilium.io/v2", "kind": "CiliumNetworkPolicy",
+                  "metadata": {"name": name, "namespace": "services"},
+                  "spec": {"endpointSelector": {"matchLabels": {LABEL: uid}}, "egressDeny": [{"toEntities": ["all"]}]}}
+        existing = kube(base + "/" + name)
+        if existing:
+            return "egress_deny_requested" if existing.get("spec") == policy["spec"] else "policy_conflict_requires_manual_review"
+        kube(base, "POST", policy)
+        return "egress_deny_requested"
+
+    def alert(pod, outcome):
+        if not AM:
+            return
+        now = time.time()
+        fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        body = [{"labels": {"alertname": "K8sCanaryWorkload", "severity": "critical", "source": "canary-quarantine",
+                            "node": pod.get("spec", {}).get("nodeName", "unknown")},
+                 "annotations": {"summary": pod["metadata"]["uid"][:16] + " containment=" + outcome + " pod=" + pod["metadata"]["name"]},
+                 "startsAt": fmt(now), "endsAt": fmt(now + 600)}]
+        req = urllib.request.Request(AM.rstrip("/") + "/api/v2/alerts", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json", "User-Agent": "canary-quarantine/1"}, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=10).read()
+        except Exception as e:
+            print("alertmanager post failed:", e, flush=True)
+
+    def sweep():
+        with lock:
+            cutoff = time.time() - 3600
+            for k in [k for k, t in handled.items() if t < cutoff]:
+                del handled[k]
+            pods = (kube("/api/v1/namespaces/services/pods") or {}).get("items", [])
+            for pod in pods:
+                uid = pod["metadata"]["uid"]
+                if uid in handled:
+                    continue
+                handled[uid] = time.time()
+                if CANARY not in secret_refs(pod.get("spec", {})):
+                    continue
+                try:
+                    outcome = contain(pod)
+                except Exception as e:
+                    outcome = "containment_error"
+                    print("containment failed:", e, flush=True)
+                owners = [{"kind": o.get("kind"), "name": o.get("name"), "uid": o.get("uid")} for o in pod["metadata"].get("ownerReferences", [])]
+                print("SECURITY_EVIDENCE " + json.dumps({"event": "security.canary_workload", "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                      "pod_name": pod["metadata"]["name"], "pod_uid": uid, "node": pod.get("spec", {}).get("nodeName"),
+                      "owners": owners, "outcome": outcome, "auto_quarantine": AUTO}, separators=(",", ":")), flush=True)
+                alert(pod, outcome)
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            body = json.dumps({"handled": len(handled), "auto_quarantine": AUTO}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0)); raw = self.rfile.read(n) if n else b"{}"
+            try:
+                p = json.loads(raw or b"{}")
+                names = {a.get("labels", {}).get("alertname") for a in p.get("alerts", [])}
+                if "K8sCanaryWorkload" in names and p.get("status") == "firing":
+                    threading.Thread(target=sweep, daemon=True).start()
+                self.send_response(200)
+            except Exception as e:
+                print("bad payload:", e, flush=True); self.send_response(400)
+            self.end_headers()
+
+    print(f"{time.strftime('%FT%T')} start, auto_quarantine={AUTO}", flush=True)
+    HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canary-quarantine
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: canary-quarantine }
+  template:
+    metadata:
+      labels: { app: canary-quarantine }
+    spec:
+      serviceAccountName: canary-quarantine
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions: [{ key: node-role.kubernetes.io/etcd, operator: Exists }]
+      securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534 }
+      containers:
+        - name: canary-quarantine
+          image: python:3.12-alpine
+          command: ["python3", "-u", "/app/server.py"]
+          env:
+            - { name: ALERTMANAGER_URL, value: http://kps-alertmanager.monitoring.svc:9093 }
+            - { name: AUTO_QUARANTINE, value: "false" }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /, port: 8080 }, periodSeconds: 10 }
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 5m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes:
+        - name: app
+          configMap: { name: canary-quarantine }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-quarantine
+  namespace: monitoring
+spec:
+  selector: { app: canary-quarantine }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: canary-quarantine
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app: canary-quarantine }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+    # kubelet readiness probe
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports: [{ port: "9093", protocol: TCP }]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+# both ends of the alertmanager flows, pruned with this file
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: alertmanager-canary-quarantine
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: alertmanager }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app: canary-quarantine }
+      toPorts:
+        - ports: [{ port: "9093", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { app: canary-quarantine }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
