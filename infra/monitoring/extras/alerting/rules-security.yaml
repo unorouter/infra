@@ -410,6 +410,28 @@ spec:
               More than two card top-ups in 24h, or over $200 in 24h on an account under a
               week old (largest {{ with query "cnpg_newapi_creem_topup_velocity_max_usd" }}{{ . | first | value }}{{ end }} USD).
               Real whales are old accounts; check the buyer name against the account email.
+        - alert: CardTesting
+          expr: cnpg_newapi_card_testing_burst_users > 0
+          for: 2m
+          labels: { severity: warning }
+          annotations:
+            summary: "Card testing: {{ $value }} account(s) with 3+ checkouts in 15m and no success"
+            description: >-
+              Someone is trying cards through the checkout. List them:
+              SELECT user_id, count(*) FROM top_ups WHERE create_time > extract(epoch from now())::bigint - 900
+              GROUP BY user_id HAVING count(*) >= 3. Suspend the account, refund anything that
+              settled in the Creem dashboard before it becomes a chargeback (2026-09-09 Creem alert).
+        - alert: CardTestingSustained
+          expr: >-
+            cnpg_newapi_card_testing_checkouts_1h >= 15
+              and cnpg_newapi_card_testing_successes_1h / cnpg_newapi_card_testing_checkouts_1h < 0.15
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} card checkouts in 1h with under 15% settling"
+            description: >-
+              Normal hours run 5 to 15 checkouts with roughly a fifth settling. Sustained
+              volume with almost nothing settling is a testing run spread over accounts and IPs.
 
     - name: newapi.security.checkout
       rules:
