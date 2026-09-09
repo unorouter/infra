@@ -69,4 +69,4 @@ updateStrategy:
 # NOTE: these values are ALSO inlined in tofu/cloud-init.yaml.tftpl, because bootstrap
 # cannot reference git before ArgoCD exists. KEEP THE TWO IN SYNC.
 # Live changes go through node1's /var/lib/rancher/k3s/server/manifests/cilium.yaml
-# (helm-controller reconciles it); this file is docs + the `make bootstrap` fallback.
+# (helm-controller reconciles it); this file is docs + the `dr.sh bootstrap` fallback.
