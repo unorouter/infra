@@ -226,6 +226,12 @@ spec:
         - matchLabels: { app: new-api }
       toPorts:
         - ports: [{ port: "3000", protocol: TCP }]
+    # s3.unorouter.com resolves to the gateway ClusterIP in-cluster, so the verdict store is
+    # a pod endpoint, not world
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
+      toPorts:
+        - ports: [{ port: "8443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
