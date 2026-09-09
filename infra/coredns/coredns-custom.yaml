@@ -12,3 +12,10 @@ data:
       name exact teleport.unorouter.com teleport.teleport.svc.cluster.local
       answer auto
     }
+  # The encrypting S3 gateway for the backup writers. The name only exists inside the cluster;
+  # the Let's Encrypt certificate is what makes barman and Teleport trust it.
+  s3.override: |
+    rewrite stop {
+      name exact s3.unorouter.com s3-gateway.s3-gateway.svc.cluster.local
+      answer auto
+    }
