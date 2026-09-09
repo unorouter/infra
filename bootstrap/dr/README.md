@@ -413,3 +413,14 @@ manual auth steps.
   `kubectl rollout restart` (no image updater yet).
 - Drills passed 2026-07-23: node drain (30/30 probes 200), pg primary kill (promotion ~70s,
   25/25 probes 200, old primary auto-rejoined).
+
+## Object storage (2026-09-09)
+
+Everything is on Hetzner Object Storage, SSE-C encrypted with one key. Before the first
+restore byte you need `tofu/.env` (the Hetzner project key) and the break-glass age key for
+`secrets/backup-encryption.sops.yaml`; `dr.sh restore` reads both. The s3-gateway
+(`infra/monitoring/extras/s3-gateway.yaml`) comes up with the monitoring app and CNPG recovery
+waits for it: barman reads through `s3.unorouter.com`, which the CoreDNS rewrite must serve
+first. The CNPG bootstrap Jobs need the `cnpg-jobs` policy in `infra/databases/networkpolicies.yaml`
+(applied by hand, like the rest of that file). Full layout and the quarterly drill:
+`docs/backups.md`.
