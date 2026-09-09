@@ -31,7 +31,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-9c70f5101585
+  name: k8s-audit-watch-9b87a666c940
   namespace: monitoring
 data:
   expected.json: |
@@ -40,6 +40,7 @@ data:
     """Durable, sanitized Kubernetes audit collection with guarded canary containment."""
     import datetime as dt
     import hashlib
+    import re
     import gzip
     import hmac
     import http.server
@@ -271,6 +272,12 @@ data:
         def ingest_file(self, path, source, max_lines=10000, container=False, flow=False):
             stat = path.stat()
             key = 'file:' + str(stat.st_dev) + ':' + str(stat.st_ino)
+            # A rotated .gz never changes again, and seeking into one inflates it from the
+            # start: re-reading every retained archive each second was most of the CPU
+            # this DaemonSet used. Once read to its end it is only opened again if the
+            # inode was reused for different bytes.
+            if path.suffix == '.gz' and self.state(key + ':eof') == [stat.st_size, stat.st_mtime_ns]:
+                return 0
             pos = self.state(key, 0)
             entries = []
             with (gzip.open(path, 'rb') if path.suffix == '.gz' else path.open('rb')) as stream:
@@ -358,6 +365,10 @@ data:
             if partial:
                 pos = partial_pos
             self.enqueue(entries, key, pos)
+            if path.suffix == '.gz' and not next_line and not partial:
+                with self.db:
+                    self.db.execute('INSERT OR REPLACE INTO state VALUES (?,?)',
+                                    (key + ':eof', json.dumps([stat.st_size, stat.st_mtime_ns])))
             for reason in (e['event'].get('collectionGap') for e in entries):
                 if reason:
                     METRICS['gaps_total'] += 1
@@ -722,6 +733,9 @@ data:
         queue.enqueue([record], 'workload-rv' if version is not None else None, version)
 
 
+    CONTAINER_LOG = re.compile(r'^\d+\.log(\.\d{8}-\d{6}(\.gz)?)?$')
+
+
     def main():
         os.umask(0o077)
         state = Path(os.environ.get('STATE_DIR', '/state'))
@@ -747,6 +761,11 @@ data:
                     family = next((v for k, v in families.items() if directory.name.startswith(k)), None)
                     if family:
                         for path in directory.glob('*/*.log*'):
+                            # The kubelet gzips a rotated log into <name>.tmp and renames it
+                            # when done. Read as text, that half-written gzip is thousands
+                            # of "invalid CRI records" per rotation.
+                            if not CONTAINER_LOG.match(path.name):
+                                continue
                             q.ingest_file(path, family + '-' + directory.name.rsplit('_', 1)[-1], container=True)
                 METRICS['last_poll_timestamp_seconds'] = time.time()
             except Exception as error:
@@ -776,7 +795,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "9c70f5101585ff81af175da53ef73920aaff07cf2d1ba3c2ec3349620938cabb"
+        evidence.unorouter.com/code-sha256: "9b87a666c940187af27ffe7b1ca51d0db31c8a2c1b8967425a6811c3b698f22c"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -826,7 +845,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-9c70f5101585 }
+          configMap: { name: k8s-audit-watch-9b87a666c940 }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
