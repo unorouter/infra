@@ -9,19 +9,22 @@ Rules: `alerting/rules-unorouter.yaml` (platform, each from a real incident) and
 `alerting/rules-security.yaml` (account takeover, chargebacks, guest abuse), the latter fed by SQL
 over the gateway's audit rows in `scrape/cnpg-security-queries.yaml`.
 
-- **Watchers** (`watchers/*-watch.yaml`, CronJobs every 5 min plus the `k8s-audit-watch` DaemonSet)
-  speak only to Alertmanager through `watchers/watch-lib.yaml` (`notify.digest` for a severity
-  `info` digest: Discord only, deduplicated by a hash of its text, never RESOLVED; `notify.alert`
-  for a critical finding: Discord plus the phone). No watcher holds the Discord webhook. Pages:
-  non-routine Secret reads and any `exec` (`K8sSecretRead`, `K8sPodExec`), OpenBao root use
-  (`OpenBaoRootUsed`), Teleport role/connector/user changes (`TeleportPrivilegeChange`), a public
-  GHCR package (`PublicPackageExposed`), secret material in an image (`ImageSecretLeak`). Digests:
-  Cloudflare account audit, OpenBao non-routine activity, SSO
-  logins. Named Teleport operators (`NAMED_USERS`) go into one daily digest instead, since
-  Teleport records their sessions. A new platform component that reads Secrets belongs in
-  `ROUTINE_USERS`, not in silence. The owner's own Teleport identity (`OPERATOR_USERS`, `0-don`) is
-  recorded like everything else but posted as a 🔵 info digest, never paged; the same action by any
-  other identity is 🔴 critical and rings the phone.
+- **Log alerts are LogQL rules** in `infra/loki/logql-rules.yaml`, evaluated by Loki's ruler and
+  sent to the same Alertmanager, same routes. Groups: `pgaudit` (non-app role touching an audited
+  table), `openbao` (root policy in use pages; non-routine activity digests), `teleport` (role,
+  connector or user change pages; SSO connector broken pages; logins, failed logins and db admin
+  sessions digest), `dex` (org refusals and logins), `k8s-audit` (human and unknown actors:
+  `K8sPodExec`, `K8sSecretRead`, `K8sSecurityConfigurationChanged` critical, `K8sUnexpectedAccess`
+  warning; the owner's own Teleport identity `0-don` gets the same alert as a 🔵 info digest,
+  never a page). Every rule groups by the actor and strips source ports so one session is one
+  alert; the matching log lines are one Explore click away in Grafana.
+- **Watchers** (`watchers/`) are what a log cannot express: `k8s-audit-watch` (DaemonSet) keeps
+  the system-identity allowlist (`expected.json`), the S3 evidence archive and canary containment;
+  `cloudflare-audit-watch` and `ghcr-visibility-watch` poll APIs; `image-secret-scan` scans image
+  layers. They speak only to Alertmanager through `watchers/watch-lib.yaml` (`notify.digest` for
+  a severity `info` digest, `notify.alert` for a critical finding). No watcher holds the Discord
+  webhook. A new platform component that reads Secrets belongs in `EXPECTED_IDENTITIES` or
+  `expected.json`, not in silence.
 - **Discord and the phone both go through `alerting/ntfy-bridge.yaml`** (`/discord`, `/alert`): embeds
   are coloured by severity (🔴 critical, 🟠 warning, 🔵 info, ✅ resolved), which Alertmanager's own
   Discord notifier cannot do. The bridge logs one line per delivery with the Discord status code.
@@ -34,8 +37,8 @@ over the gateway's audit rows in `scrape/cnpg-security-queries.yaml`.
   `{job="k8s-audit"} | json | verb="create"`. Gateway logs carry IPs and emails, so the 90 days are
   also the PII retention for logs; Grafana is the only reader and sits behind Teleport. The ruler
   runs the LogQL rules in `infra/loki/logql-rules.yaml` (ConfigMaps labelled `loki_rule: "1"`,
-  alerts to the same Alertmanager, same routes): `PgauditNonAppRole` replaced the pgaudit
-  watcher. The openbao and teleport watchers are next, one at a time.
+  alerts to the same Alertmanager, same routes); they replaced the pgaudit, openbao and teleport
+  watchers and the human-actor half of the k8s audit watcher.
 - **Routing is drop-by-default**: root receiver `null`, only critical/warning reach Discord;
   critical also pages the phone via ntfy. Test with `amtool alert add` in the alertmanager pod.
 - **`CloudflaredStreamFlood`** is the L7 attack signal: pages, and fires `edge-mode`, which flips

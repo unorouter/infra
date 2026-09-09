@@ -116,8 +116,6 @@ spec:
         - matchLabels: { app.kubernetes.io/name: prometheus }
         - matchLabels: { app.kubernetes.io/name: grafana }
         - matchLabels: { io.cilium.k8s.policy.serviceaccount: image-secret-scan }
-        - matchLabels: { io.cilium.k8s.policy.serviceaccount: teleport-login-watch }
-        - matchLabels: { io.cilium.k8s.policy.serviceaccount: openbao-audit-watch }
         - matchLabels: { io.cilium.k8s.policy.serviceaccount: default }
       toPorts:
         - ports:
@@ -313,7 +311,7 @@ spec:
     matchExpressions:
       - key: io.cilium.k8s.policy.serviceaccount
         operator: In
-        values: [image-secret-scan, openbao-audit-watch, teleport-login-watch]
+        values: [image-secret-scan]
   egress:
     - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
