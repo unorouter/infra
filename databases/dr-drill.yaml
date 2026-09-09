@@ -1,5 +1,6 @@
 # Monthly restore rehearsal. Restores bot-pg from its base backup through the s3-gateway into a
-# one instance scratch cluster that never archives, counts the populated tables, prints
+# one instance scratch cluster that never archives, counts the populated tables of the largest
+# database (reltuples is catalog state and survives a restore, pg_stat does not), prints
 # DR_DRILL_OK and deletes the cluster again. DRDrillStale (alerting/rules-unorouter.yaml) warns
 # when no run succeeded in 35 days. The restore-from lineage below follows the pair in
 # unorouter-bot/k8s/pg.yaml: bump it with the pair on a DR create.
@@ -120,8 +121,8 @@ data:
               args:
                 - >-
                   set -e; export PGHOST=dr-bot-pg-rw PGUSER=postgres;
-                  db=\$(psql -d postgres -Atc "select datname from pg_database where datname not in ('postgres','template0','template1') order by 1 limit 1");
-                  n=\$(psql -d "\$db" -Atc "select count(*) from pg_stat_user_tables where n_live_tup > 0");
+                  db=\$(psql -d postgres -Atc "select datname from pg_database where datistemplate = false order by pg_database_size(datname) desc limit 1");
+                  n=\$(psql -d "\$db" -Atc "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind = 'r' and n.nspname not in ('pg_catalog','information_schema') and c.reltuples > 0");
                   rec=\$(psql -d "\$db" -Atc "select pg_is_in_recovery()");
                   echo "db=\$db populated_tables=\$n in_recovery=\$rec";
                   test "\$n" -gt 0
