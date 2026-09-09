@@ -1,3 +1,75 @@
+# Hetzner Object Storage has no at-rest encryption, so every writer sends SSE-C (directly, or
+# through the in-cluster s3-gateway for barman and Teleport). Object Lock can only be enabled
+# at creation and COMPLIANCE retention cannot be ended early: writers only insert, the bucket
+# lifecycle expires (set by CLI, the aws provider hangs on lifecycle PUT against RadosGW).
+# Velero is the one unlocked bucket: Kopia must delete session markers and rewrite indexes, so
+# versioning plus NoncurrentDays is its protection.
+resource "aws_s3_bucket" "backups" {
+  bucket              = "unorouter-backups"
+  object_lock_enabled = true
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "backups" {
+  bucket = aws_s3_bucket.backups.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_object_lock_configuration" "backups" {
+  bucket = aws_s3_bucket.backups.id
+  rule {
+    default_retention {
+      mode = "COMPLIANCE"
+      days = 30
+    }
+  }
+  depends_on = [aws_s3_bucket_versioning.backups]
+}
+
+resource "aws_s3_bucket" "evidence" {
+  bucket              = "unorouter-evidence"
+  object_lock_enabled = true
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "evidence" {
+  bucket = aws_s3_bucket.evidence.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_object_lock_configuration" "evidence" {
+  bucket = aws_s3_bucket.evidence.id
+  rule {
+    default_retention {
+      mode = "COMPLIANCE"
+      days = 30
+    }
+  }
+  depends_on = [aws_s3_bucket_versioning.evidence]
+}
+
+resource "aws_s3_bucket" "velero" {
+  bucket = "unorouter-velero"
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "velero" {
+  bucket = aws_s3_bucket.velero.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 # Pre-created here because Barman Cloud >=3.16 no longer auto-creates buckets.
 resource "aws_s3_bucket" "pg_backups" {
   bucket   = "unorouter-pg-backups"
