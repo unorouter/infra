@@ -96,27 +96,3 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "{{ $labels.pod }} read no audit line for 30m; kubelets patch status constantly, the file should never be silent"
-        - alert: AlloyDown
-          expr: kube_daemonset_status_number_unavailable{namespace="monitoring", daemonset="alloy"} > 0
-          for: 10m
-          labels: { severity: warning }
-          annotations:
-            summary: "alloy is not running on {{ $value }} node(s), their logs are not shipped"
-        - alert: AlloyDroppedEntries
-          expr: sum by (pod) (increase(loki_write_dropped_entries_total[15m])) > 0
-          for: 5m
-          labels: { severity: warning }
-          annotations:
-            summary: "{{ $labels.pod }} dropped log entries in the last 15m"
-        - alert: AlloyWriteFailing
-          expr: sum by (pod) (rate(loki_write_request_duration_seconds_count{status_code!~"2.."}[5m])) > 0
-          for: 10m
-          labels: { severity: warning }
-          annotations:
-            summary: "{{ $labels.pod }} cannot push to loki"
-        - alert: AlloyNotTailing
-          expr: loki_source_file_files_active_total{component_id="loki.source.file.pods"} == 0
-          for: 15m
-          labels: { severity: warning }
-          annotations:
-            summary: "{{ $labels.pod }} tails no pod log file: discovery or the /var/log mount is broken"

@@ -5,7 +5,7 @@
 # (gateway, caches, canary, test pod, minio) is off.
 deploymentMode: SingleBinary
 loki:
-  # Port 3100 is reachable from grafana, alloy and prometheus only (networkpolicies.yaml);
+  # Port 3100 is reachable from grafana, vector and prometheus only (networkpolicies.yaml);
   # a single tenant ("fake") is enough behind that boundary.
   auth_enabled: false
   commonConfig:

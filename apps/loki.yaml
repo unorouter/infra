@@ -1,5 +1,6 @@
-# Central logs: Loki (single binary) plus the Alloy DaemonSet that tails every container log
-# and the kube-apiserver audit files. Storage is the s3-gateway (client side crypt) into the
+# Central logs: Loki (single binary) plus the Vector DaemonSet that tails every container log,
+# the kube-apiserver audit files and the Hubble export, and archives a sanitized subset write
+# once into unorouter-logs. Storage is the s3-gateway (client side crypt) into the
 # unlocked bucket unorouter-loki; the compactor owns the 90 day retention. Wave 4: the
 # monitoring app (wave 3) brings the gateway, the kps CRDs and Grafana's sidecars first.
 apiVersion: argoproj.io/v1alpha1
@@ -20,13 +21,6 @@ spec:
         releaseName: loki
         valueFiles:
           - $values/infra/loki/values-loki.yaml
-    - repoURL: https://grafana.github.io/helm-charts
-      chart: alloy
-      targetRevision: 1.12.1
-      helm:
-        releaseName: alloy
-        valueFiles:
-          - $values/infra/loki/values-alloy.yaml
     - repoURL: https://helm.vector.dev
       chart: vector
       targetRevision: 0.58.0

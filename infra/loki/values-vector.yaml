@@ -148,7 +148,7 @@ customConfig:
         . = compact({ "source": "pods", "family": family, "timestamp": .timestamp, "stream": .stream,
                       "namespace": .namespace, "pod": .pod, "container": .container, "node": .node,
                       "event": safe }, recursive: true)
-    # Loki gets the raw line stamped with requestReceivedTimestamp, as with Alloy.
+    # Loki gets the raw line stamped with requestReceivedTimestamp.
     audit_labels:
       type: remap
       inputs: [audit]
@@ -221,32 +221,32 @@ customConfig:
         }, recursive: true)
   sinks:
     # One Loki sink per label set. Disk buffers that drop when full: a Loki outage must never
-    # block the archive sink below. Staged: enabled in the commit that removes Alloy.
-    # loki_pods:
-    #   type: loki
-    #   inputs: [pods_labels]
-    #   endpoint: http://loki.monitoring.svc.cluster.local:3100
-    #   encoding: { codec: raw_message }
-    #   labels:
-    #     namespace: '{{ "{{ namespace }}" }}'
-    #     pod: '{{ "{{ pod }}" }}'
-    #     container: '{{ "{{ container }}" }}'
-    #     node: '{{ "{{ node }}" }}'
-    #     app: '{{ "{{ app }}" }}'
-    #     stream: '{{ "{{ stream }}" }}'
-    #   out_of_order_action: accept
-    #   remove_timestamp: true
-    #   batch: { timeout_secs: 1, max_bytes: 1000000 }
-    #   buffer: { type: disk, max_size: 536870912, when_full: drop_newest }
-    # loki_audit:
-    #   type: loki
-    #   inputs: [audit_labels]
-    #   endpoint: http://loki.monitoring.svc.cluster.local:3100
-    #   encoding: { codec: raw_message }
-    #   labels: { job: '{{ "{{ job }}" }}', node: '{{ "{{ node }}" }}' }
-    #   out_of_order_action: accept
-    #   remove_timestamp: true
-    #   buffer: { type: disk, max_size: 268435456, when_full: drop_newest }
+    # block the archive sink below.
+    loki_pods:
+      type: loki
+      inputs: [pods_labels]
+      endpoint: http://loki.monitoring.svc.cluster.local:3100
+      encoding: { codec: raw_message }
+      labels:
+        namespace: '{{ "{{ namespace }}" }}'
+        pod: '{{ "{{ pod }}" }}'
+        container: '{{ "{{ container }}" }}'
+        node: '{{ "{{ node }}" }}'
+        app: '{{ "{{ app }}" }}'
+        stream: '{{ "{{ stream }}" }}'
+      out_of_order_action: accept
+      remove_timestamp: true
+      batch: { timeout_secs: 1, max_bytes: 1000000 }
+      buffer: { type: disk, max_size: 536870912, when_full: drop_newest }
+    loki_audit:
+      type: loki
+      inputs: [audit_labels]
+      endpoint: http://loki.monitoring.svc.cluster.local:3100
+      encoding: { codec: raw_message }
+      labels: { job: '{{ "{{ job }}" }}', node: '{{ "{{ node }}" }}' }
+      out_of_order_action: accept
+      remove_timestamp: true
+      buffer: { type: disk, max_size: 268435456, when_full: drop_newest }
     # Write once: unique keys, never overwritten or deleted, the bucket lifecycle expires them.
     # Acknowledged disk buffer: the file sources only checkpoint once a batch is durable locally
     # (kubernetes_logs cannot acknowledge, Vector warns so at start; its lines are buffered on disk
