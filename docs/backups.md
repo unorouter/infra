@@ -4,28 +4,8 @@ Everything is on Hetzner Object Storage (fsn1). Hetzner has no at-rest encryptio
 s3-gateway (`infra/monitoring/extras/s3-gateway.yaml`, `s3.unorouter.com` via CoreDNS rewrite)
 encrypts client side with rclone crypt: content only, names in clear, Hetzner never sees the key, the
 ciphertext copies to any provider as is. Key: OpenBao `secret/backup-encryption` (`crypt_password`,
-`crypt_salt`), break-glass copy `secrets/backup-encryption.sops.yaml`. Lose the pair, lose every
-encrypted object.
-
-## Key custody
-
-The pair lives in two places: OpenBao (live) and the sops file in git, encrypted to the break-glass
-age key. That age key exists only on the VeraCrypt volume and in Bitwarden, so the disaster chain is
-VeraCrypt or Bitwarden, then the age key, then the sops file, then the pair, then the backups. The
-sops file plus the age key is sufficient; the one check that matters is that the sops file decrypts
-on the VeraCrypt machine, verify it after every regeneration. Optional belt and braces: keep the pair
-itself in VeraCrypt and Bitwarden too, for the case where the checkout is unavailable or the sops file
-is corrupt. Keep no other backup key there, an old one only invites confusion.
-
-| What | Mechanism | Bucket, prefix | Encrypted by | Retention |
-| --- | --- | --- | --- | --- |
-| Postgres PITR | CNPG + Barman plugin, daily base + WAL | `unorouter-backups`, `{newapi,bot}-pg-v7/` | gateway | lifecycle 31d |
-| OpenBao raft | CronJob, every 6h | `unorouter-backups`, `openbao-snapshots/` | none: sealed by the barrier key, unseal keys in Bitwarden | lifecycle 31d |
-| Logs: audit streams, incidents, PAT archive | k8s-audit-watch, pat-audit-archive | `unorouter-logs`, `streams/`, `incidents/` | gateway | lifecycle 90d |
-| Teleport recordings | `audit_sessions_uri` | `unorouter-logs`, `teleport-recordings/` | gateway | lifecycle 90d |
-| Container and apiserver audit logs | Alloy DaemonSet, Loki (`infra/loki/`) | `unorouter-loki`, `fake/`, `index/` | gateway | Loki compactor 90d, lifecycle 120d safety net |
-| Kubernetes objects + opt in PVs | Velero + Kopia, daily 02:00 | `unorouter-velero`, `velero/` | tarballs none (no Secrets inside), PV data by Kopia (password `secret/velero`) | `ttl: 336h`, 14d noncurrent |
-| Tofu state | `tofu state` | `unorouter-pg-backups` | client side (`tofu/encryption.tf`) | as is |
+`crypt_salt`), break-glass copy `secrets/backup-encryption.sops.yaml` (opened by the age key on the
+VeraCrypt volume and in Bitwarden, nothing else to keep). Lose the pair, lose every encrypted object.
 
 ## Rules
 
