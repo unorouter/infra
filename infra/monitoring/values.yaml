@@ -37,7 +37,7 @@ grafana:
   # most are slices of the same metrics by namespace and workload, or cover components
   # this cluster does not run, and they buried the three UnoRouter dashboards in noise.
   # The three worth keeping (nodes, pod compute, PV usage) are vendored verbatim in
-  # extras/grafana-dash-k8s-*.yaml.
+  # extras/grafana/dash-k8s-*.yaml.
   defaultDashboardsEnabled: false
   # Grafana 13 builds its bleve search index in memory (one per resource kind,
   # evicted on expiry and rebuilt on the next search), so steady state is ~230Mi
