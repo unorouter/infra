@@ -86,8 +86,6 @@ spec:
                   SIZE=$(stat -c%s /tmp/openbao-$TS.snap)
                   [ "$SIZE" -gt 10240 ] || { echo "!! snapshot only $SIZE bytes, refusing upload"; exit 1; }
                   echo "snapshot $SIZE bytes -> S3"
-                  # --no-check-dest: the current latest.snap may still be an SSE-C era object, whose
-                  # HEAD without the key is a 400 and would abort the overwrite
-                  rclone copyto --no-check-dest /tmp/openbao-$TS.snap hz:unorouter-backups/openbao-snapshots/openbao-$TS.snap
-                  rclone copyto --no-check-dest /tmp/openbao-$TS.snap hz:unorouter-backups/openbao-snapshots/latest.snap
+                  rclone copyto /tmp/openbao-$TS.snap hz:unorouter-backups/openbao-snapshots/openbao-$TS.snap
+                  rclone copyto /tmp/openbao-$TS.snap hz:unorouter-backups/openbao-snapshots/latest.snap
                   echo "uploaded openbao-$TS.snap + latest.snap"
