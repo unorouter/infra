@@ -199,7 +199,9 @@ spec:
         - name: tmp
           emptyDir: {}
   volumeClaimTemplates:
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: cache
       spec:
         accessModes: [ReadWriteOnce]

@@ -32,6 +32,11 @@ spec:
     - group: external-secrets.io
       kind: ExternalSecret
       managedFieldsManagers: [external-secrets]
+    # The API server stamps status.phase Pending on every claim template; without this the
+    # s3-gateway StatefulSet reads OutOfSync forever.
+    - group: apps
+      kind: StatefulSet
+      jsonPointers: [/spec/volumeClaimTemplates/0/status]
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions:
