@@ -143,7 +143,7 @@ spec:
                   matchLabels: {app: s3-gateway}
       containers:
         - name: rclone
-          image: rclone/rclone:1.74.4
+          image: rclone/rclone:1.75.1
           command:
             - sh
             - -c
@@ -181,8 +181,9 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
           resources:
-            # 1Gi was OOM killed on 2026-09-09 while newapi's 23 GB base backup streamed in; the
-            # write cache is on disk but the in flight parts and the upload streams are not.
+            # 1Gi was OOM killed on 2026-09-09 while newapi's 23 GB base backup streamed in:
+            # rclone before 1.75 held every multipart part in memory until CompleteMultipartUpload.
+            # 1.75 streams parts into the write cache; the limit stays generous for the upload buffers.
             requests: {cpu: 100m, memory: 512Mi}
             limits: {memory: 4Gi}
           volumeMounts:
