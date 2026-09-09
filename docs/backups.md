@@ -65,4 +65,7 @@ rclone copyto hz:unorouter-backups/openbao-snapshots/latest.snap ./latest.snap &
 
 Every `cr:` GET repeated through `hz:` must be ciphertext. Cluster side proof: restore the postgres base
 backup into a scratch cluster through the gateway (`bootstrap.recovery` from `externalClusters` with the
-`-hz` ObjectStore); it needs a node with twice the database in free disk, `local-path` does not enforce it.
+`-hz` ObjectStore, no `plugins` block so it never archives). The gateway admits only the production
+cluster labels, so the scratch cluster needs a temporary ingress rule in `s3-gateway` for its
+`cnpg.io/cluster` label (2026-09-09: the first attempt timed out on exactly that). It needs a node
+with twice the database in free disk, `local-path` does not enforce it.
