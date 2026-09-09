@@ -15,7 +15,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-d24044746f51
+  name: k8s-audit-watch-79029a0bad52
   namespace: monitoring
 data:
   expected.json: |
@@ -537,20 +537,19 @@ data:
             'system:serviceaccount:databases:newapi-pg',
             'system:serviceaccount:databases:bot-pg',
         }
-        lines, pages = [], set()
+        items = []
+        operators = set(x for x in os.environ.get('OPERATOR_USERS', '0-don').split(',') if x)
         for event in events:
             if event['historical']:
                 continue
             containment = quarantine_canary_workload(event)
             if containment:
-                pages.add('K8sCanaryWorkload')
-                lines.append(event['id'][:16] + ' containment=' + containment)
+                items.append(('K8sCanaryWorkload', 'critical', event['id'][:16] + ' 🚨 containment=' + containment))
             ev = event['event']
             if ev.get('event') == 'security.discord_correlation' and ev.get('outcome') == 'unmatched_in_this_process':
                 archive_s3(event, encode(event), prefix='incidents')
-                pages.add('DiscordMessageNeedsReview')
-                lines.append(event['id'][:16] + ' Discord message ' + str(ev.get('message_id')) +
-                             ' has no matching request in that bot process; check other replicas and coverage')
+                items.append(('DiscordMessageNeedsReview', 'critical', event['id'][:16] + ' 💬 Discord message ' + str(ev.get('message_id')) +
+                              ' has no matching request in that bot process; check other replicas and coverage'))
             if event['source'].startswith('workload-watch-') and ev.get('watchType') in ('ADDED', 'MODIFIED'):
                 snapshot = ev.get('snapshot') or {}
                 owners = snapshot.get('owners') or []
@@ -570,9 +569,8 @@ data:
                     torn_down = job is None and bool(snapshot.get('deletionTimestamp'))
                     if not expected_sync and not torn_down:
                         archive_s3(event, encode(event), prefix='incidents')
-                        pages.add('UnexpectedSecretUsingJob')
-                        lines.append(event['id'][:16] + ' Job Pod UID=' + str(snapshot.get('uid')) +
-                                     ' uses Secret references outside the expected sync job; review archived snapshot')
+                        items.append(('UnexpectedSecretUsingJob', 'critical', event['id'][:16] + ' 🧪 Job Pod UID=' + str(snapshot.get('uid')) +
+                                      ' uses Secret references outside the expected sync job; review archived snapshot'))
             if not event['source'].startswith('k8s-') or ev.get('stage') not in ('ResponseComplete', 'ResponseStarted', 'Panic'):
                 continue
             ref = ev.get('objectRef') or {}
@@ -601,28 +599,52 @@ data:
             if audit_id in paged:
                 continue
             paged[audit_id] = now
-            lines.append(event['id'][:16] + ' ' + json.dumps(access))
+            # Who did it decides the severity, not what was done: the owner's own Teleport
+            # session (OPERATOR_USERS) is evidence to record, not an intrusion to page for.
+            operator = user in operators
+            actor = 'operator' if operator else 'system' if user.startswith('system:') else 'unknown'
+            who = {'operator': '🧑\u200d💻 ', 'system': '🤖 ', 'unknown': '🚨 '}[actor] + user
+            where = (ref.get('namespace') or 'cluster') + '/' + (ref.get('name') or resource)
+            src = ''
+            if not operator and ev.get('sourceIPs'):
+                src = ' from ' + ev['sourceIPs'][0]
             if sub in ('exec', 'attach', 'portforward'):
-                pages.add('K8sPodExec')
+                name, what = 'K8sPodExec', {'exec': '🖥️ exec into', 'attach': '🖥️ attach to', 'portforward': '🔌 port-forward to'}[sub]
+                severity = 'info' if operator else 'critical'
             elif resource == 'secrets' and (not ref.get('namespace') or ref.get('namespace') in ('services','openbao','databases')):
-                pages.add('K8sSecretRead')
+                name, what = 'K8sSecretRead', '🔑 ' + verb + ' secret'
+                severity = 'info' if operator else 'critical'
             elif resource in ('externalsecrets','secretstores','clustersecretstores','roles','rolebindings','clusterroles','clusterrolebindings'):
-                pages.add('K8sSecurityConfigurationChanged')
-        if not lines or not notifications_enabled:
+                name, what = 'K8sSecurityConfigurationChanged', '🛡️ ' + verb + ' ' + resource
+                severity = 'info' if operator else 'critical'
+            else:
+                name, what = 'K8sUnexpectedAccess', '📋 ' + verb + ' ' + resource + ('/' + sub if sub else '')
+                severity = 'warning' if actor == 'unknown' else 'info'
+            items.append((name, severity, event['id'][:16] + ' ' + who + ' ' + what + ' ' + where + src))
+        if not items or not notifications_enabled:
             return
-        # One evidence line per operation; the Alertmanager templates add the heading once per message.
-        text = '\n'.join(lines[:8])[:1600]
         am = os.environ.get('ALERTMANAGER_URL')
-        if am and pages:
-            now = dt.datetime.now(dt.timezone.utc)
-            alerts = [{'labels': {'alertname': name, 'severity': 'critical', 'source': 'k8s-audit-watch',
-                                 'node': os.environ.get('NODE_NAME', 'unknown')},
-                       'annotations': {'summary': text}, 'startsAt': now.isoformat(),
-                       'endsAt': (now + dt.timedelta(minutes=10)).isoformat()} for name in sorted(pages)]
-            request = urllib.request.Request(am.rstrip('/') + '/api/v2/alerts', data=encode(alerts),
-                                            headers={'Content-Type': 'application/json', 'User-Agent': 'unorouter-evidence/1'}, method='POST')
-            with urllib.request.urlopen(request, timeout=10):
-                pass
+        if not am:
+            return
+        # One alert per (name, severity): the summary carries only that alert's own lines, and an
+        # info digest gets a content hash label so an unchanged window is not reposted.
+        groups = {}
+        for name, severity, line in items:
+            groups.setdefault((name, severity), []).append(line)
+        at = dt.datetime.now(dt.timezone.utc)
+        alerts = []
+        for (name, severity), group in sorted(groups.items()):
+            text = '\n'.join(group[:8])[:1600]
+            labels = {'alertname': name, 'severity': severity, 'source': 'k8s-audit-watch',
+                      'node': os.environ.get('NODE_NAME', 'unknown')}
+            if severity == 'info':
+                labels['digest'] = hashlib.sha256(text.encode()).hexdigest()[:12]
+            alerts.append({'labels': labels, 'annotations': {'summary': text}, 'startsAt': at.isoformat(),
+                           'endsAt': (at + dt.timedelta(minutes=10)).isoformat()})
+        request = urllib.request.Request(am.rstrip('/') + '/api/v2/alerts', data=encode(alerts),
+                                        headers={'Content-Type': 'application/json', 'User-Agent': 'unorouter-evidence/1'}, method='POST')
+        with urllib.request.urlopen(request, timeout=10):
+            pass
 
 
     METRICS = {'errors_total': 0, 'gaps_total': 0, 'source_oldest_unread_timestamp_seconds': 0, 'source_lag_seconds': 0, 'queue_bytes': 0, 'queue_records': 0,
@@ -795,7 +817,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "d24044746f51ea4995e0f1f24b634f00a35c53cf019b4bac1d136118cad391e5"
+        evidence.unorouter.com/code-sha256: "79029a0bad523a50872730c22d487b6b7367ed97e6366d047daa3a1a9567af6a"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -819,6 +841,10 @@ spec:
               value: "true"
             - name: NODE_NAME
               valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            # the owner's Teleport identity: their exec, secret reads and RBAC edits are recorded and
+            # posted as an info digest, never paged; anyone else doing the same is critical
+            - name: OPERATOR_USERS
+              value: 0-don
             - name: ALERTMANAGER_URL
               value: http://kps-alertmanager.monitoring.svc:9093
           envFrom: [{ secretRef: { name: logs-archive } }]
@@ -845,7 +871,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-d24044746f51 }
+          configMap: { name: k8s-audit-watch-79029a0bad52 }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
