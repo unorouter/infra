@@ -32,12 +32,15 @@ auth:
   teleportConfig:
     teleport:
       storage:
-        # Recordings stay on Cloudflare R2 for now. Playback needs ListObjectVersions (Teleport
-        # reads the OLDEST version of a recording as an anti-tamper measure, gravitational/teleport
-        # issue 7743 asks for an opt-out) and the encrypting s3-gateway cannot serve versions, so
-        # uploads through it succeeded on 2026-09-09 but tsh play failed with 501. Hetzner directly
-        # would leave recordings unencrypted at rest. disablesse stays: Hetzner rejects SSE-KMS.
-        audit_sessions_uri: "s3://unorouter-backups/teleport-recordings?endpoint=7dad953fa57f079bfec11d3db10bc18a.r2.cloudflarestorage.com&region=auto&disablesse=true"
+        # Hetzner Object Storage through the in-cluster s3-gateway (s3.unorouter.com, resolved
+        # by CoreDNS, Let's Encrypt certificate), which adds SSE-C on the way to the Object
+        # Locked bucket. disablesse stays: Teleport would otherwise ask for SSE-KMS, which Hetzner
+        # answers with 400 (every recording after the 2026-09-05 rebuild was lost that way).
+        # Interactive `tsh play <session>` does NOT work here and never worked on R2 either: Teleport
+        # reads the OLDEST object version as an anti-tamper step and neither R2 nor the gateway
+        # serve ListObjectVersions (501). Recordings are evidence, not a replay feature: download
+        # the tar with the SSE-C key and run `tsh play --format=json <file>` (docs/backups.md).
+        audit_sessions_uri: "s3://unorouter-backups/teleport-recordings?endpoint=s3.unorouter.com&region=fsn1&disablesse=true"
         # events stay in the default dir backend (first entry, what the web UI queries) and are
         # mirrored to stdout so the audit watcher in monitoring can post failed logins, with
         # the GitHub username and source address, to Discord within five minutes.
