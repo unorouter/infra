@@ -284,6 +284,7 @@ spec:
     - fromEndpoints:
         - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg}
         - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: bot-pg}
+        - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: dr-bot-pg}
         - matchLabels: {io.kubernetes.pod.namespace: teleport, app.kubernetes.io/component: auth}
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: k8s-audit-watch}
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: pat-audit-archive}

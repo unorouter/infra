@@ -211,6 +211,21 @@ spec:
           annotations:
             summary: "Velero not scrapeable"
             description: "Velero sat stuck in ContainerCreating on a missing secret for 16min on 2026-07-22 with backups simply not happening."
+        # databases/dr-drill.yaml restores bot-pg into a scratch cluster on the 1st of each month
+        - alert: DRDrillStale
+          expr: >
+            (time() - max(kube_cronjob_status_last_successful_time{namespace="databases", cronjob="dr-drill"})) > 35 * 86400
+            or absent(kube_cronjob_status_last_successful_time{namespace="databases", cronjob="dr-drill"})
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "no successful restore drill in 35 days: run kubectl -n databases create job --from=cronjob/dr-drill dr-drill-manual"
+        - alert: DRDrillFailed
+          expr: kube_job_status_failed{namespace="databases", job_name=~"dr-drill-.*"} > 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "restore drill {{ $labels.job_name }} failed: the base backup did not restore or the row check found nothing"
 
     # E. CNPG cluster health
     - name: unorouter.postgres

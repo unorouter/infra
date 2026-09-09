@@ -1,0 +1,259 @@
+# Monthly restore rehearsal. Restores bot-pg from its base backup through the s3-gateway into a
+# one instance scratch cluster that never archives, counts the populated tables, prints
+# DR_DRILL_OK and deletes the cluster again. DRDrillStale (alerting/rules-unorouter.yaml) warns
+# when no run succeeded in 35 days. The restore-from lineage below follows the pair in
+# unorouter-bot/k8s/pg.yaml: bump it with the pair on a DR create.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dr-drill
+  namespace: databases
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dr-drill
+  namespace: databases
+rules:
+  # create cannot be name scoped in RBAC; get, watch and delete are
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters]
+    verbs: [create]
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters]
+    resourceNames: [dr-bot-pg]
+    verbs: [get, watch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create]
+  - apiGroups: [batch]
+    resources: [jobs]
+    resourceNames: [dr-drill-check]
+    verbs: [get, watch, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dr-drill
+  namespace: databases
+subjects:
+  - kind: ServiceAccount
+    name: dr-drill
+    namespace: databases
+roleRef:
+  kind: Role
+  name: dr-drill
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dr-drill
+  namespace: databases
+data:
+  LINEAGE: bot-pg-v7
+  drill.sh: |
+    #!/bin/sh
+    set -eu
+    NS=databases
+    cleanup() {
+      kubectl -n $NS delete job dr-drill-check --ignore-not-found --wait=false >/dev/null 2>&1 || true
+      kubectl -n $NS delete cluster dr-bot-pg --ignore-not-found >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+    cleanup
+    kubectl -n $NS apply -f - <<EOF
+    apiVersion: postgresql.cnpg.io/v1
+    kind: Cluster
+    metadata:
+      name: dr-bot-pg
+      namespace: $NS
+    spec:
+      env:
+        - { name: AWS_REQUEST_CHECKSUM_CALCULATION, value: when_required }
+        - { name: AWS_RESPONSE_CHECKSUM_VALIDATION, value: when_required }
+      imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm
+      instances: 1
+      enableSuperuserAccess: true
+      storage: { size: 8Gi, storageClass: local-path }
+      bootstrap:
+        recovery:
+          source: bot-pg-origin
+      externalClusters:
+        - name: bot-pg-origin
+          plugin:
+            name: barman-cloud.cloudnative-pg.io
+            enabled: true
+            isWALArchiver: false
+            parameters:
+              barmanObjectName: bot-pg-hz
+              serverName: $LINEAGE
+    EOF
+    echo "waiting for the restore ($LINEAGE)"
+    kubectl -n $NS wait cluster/dr-bot-pg --for=jsonpath='{.status.phase}'="Cluster in healthy state" --timeout=60m
+    kubectl -n $NS apply -f - <<EOF
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: dr-drill-check
+      namespace: $NS
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels: { app: dr-drill-check }
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext: { runAsUser: 26, runAsGroup: 26, runAsNonRoot: true }
+          containers:
+            - name: check
+              image: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm
+              command: [sh, -c]
+              args:
+                - >-
+                  set -e; export PGHOST=dr-bot-pg-rw PGUSER=postgres;
+                  db=\$(psql -d postgres -Atc "select datname from pg_database where datname not in ('postgres','template0','template1') order by 1 limit 1");
+                  n=\$(psql -d "\$db" -Atc "select count(*) from pg_stat_user_tables where n_live_tup > 0");
+                  rec=\$(psql -d "\$db" -Atc "select pg_is_in_recovery()");
+                  echo "db=\$db populated_tables=\$n in_recovery=\$rec";
+                  test "\$n" -gt 0
+              env:
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: dr-bot-pg-superuser, key: password } }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+    EOF
+    kubectl -n $NS wait job/dr-drill-check --for=condition=complete --timeout=10m
+    out=$(kubectl -n $NS logs job/dr-drill-check)
+    echo "$out"
+    echo "DR_DRILL_OK lineage=$LINEAGE ${out##*populated_tables=}" | cut -d' ' -f1-3
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-drill
+  namespace: databases
+spec:
+  schedule: "0 4 1 * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 5400
+      template:
+        metadata:
+          labels: { app: dr-drill }
+        spec:
+          restartPolicy: Never
+          serviceAccountName: dr-drill
+          securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534 }
+          containers:
+            - name: drill
+              image: alpine/k8s:1.36.2
+              command: [sh, /app/drill.sh]
+              envFrom: [{ configMapRef: { name: dr-drill } }]
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 20m, memory: 64Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }]
+          volumes:
+            - name: app
+              configMap: { name: dr-drill }
+---
+# the drill runner talks to the apiserver only
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: dr-drill
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: { app: dr-drill }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [kube-apiserver, host, remote-node]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+# the scratch cluster: operator and itself in, gateway and apiserver out, never the world
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: dr-bot-pg
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: { cnpg.io/cluster: dr-bot-pg }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cnpg-system, app.kubernetes.io/name: cloudnative-pg }
+        - matchLabels: { cnpg.io/cluster: dr-bot-pg }
+        - matchLabels: { app: dr-drill-check }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }, { port: "5432", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { cnpg.io/cluster: dr-bot-pg }
+      toPorts:
+        - ports:
+            - { port: "5432", protocol: TCP }
+            - { port: "8000", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
+      toPorts:
+        - ports: [{ port: "8443", protocol: TCP }]
+    - toEntities: [kube-apiserver, host]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: dr-drill-check
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: { app: dr-drill-check }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { cnpg.io/cluster: dr-bot-pg }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
