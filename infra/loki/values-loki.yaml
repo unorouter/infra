@@ -31,7 +31,7 @@ loki:
   schemaConfig:
     configs:
       # Fixed at first start, never moved: the date is part of every index name.
-      - from: "2026-09-10"
+      - from: "2026-09-09"
         store: tsdb
         object_store: s3
         schema: v13
