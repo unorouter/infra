@@ -53,13 +53,25 @@ spec:
           annotations:
             summary: Evidence collector errors on {{ $labels.pod }}
         - alert: EvidenceCollectionGaps
-          # Log rotation reuses inodes and yields one replaced-file gap per file; a real
-          # problem is hundreds at once. The per reason counters name which one.
-          expr: increase(evidence_gaps_total[30m]) > 10
+          # Every reason except rotation: split CRI records, replayed checkpoints, and
+          # whatever the collector learns to name next. The collector emits one
+          # evidence_gaps_<reason>_total per reason next to the aggregate.
+          expr: >-
+            sum by (pod) (increase({__name__=~"evidence_gaps_.+_total",
+              __name__!~"evidence_gaps_(total|file_replaced_or_truncated_total)"}[30m])) > 10
           for: 5m
           labels: {severity: critical}
           annotations:
-            summary: Evidence source reported malformed, replaced or truncated records
+            summary: Evidence source reported malformed or replayed records on {{ $labels.pod }}
+        - alert: EvidenceLogRotationStorm
+          # Rotation reuses inodes; the collector rewinds, replays and dedups, so each
+          # rotation costs one marker and no data. The gateway log on a busy node turns
+          # over every few minutes, which is normal. Hundreds in half an hour is not.
+          expr: increase(evidence_gaps_file_replaced_or_truncated_total[30m]) > 100
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: Evidence source files replaced {{ $value | printf "%.0f" }} times in 30m on {{ $labels.pod }}
         - alert: EvidenceSourceBacklog
           expr: evidence_source_lag_seconds > 300
           for: 1m
