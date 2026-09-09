@@ -2,7 +2,7 @@
 
 unorouter revenue stack. 3-node k3s HA on Hetzner (node8 hel1, node9 nbg1, node10 hel1, cx43,
 embedded etcd, private net 10.100.0.0/16), Cilium without kube-proxy, ArgoCD app-of-apps,
-CloudNativePG with PITR to R2, OpenBao, ESO, cloudflared, kube-prometheus-stack.
+CloudNativePG with PITR to Hetzner Object Storage, OpenBao, ESO, cloudflared, kube-prometheus-stack.
 
 Everything enters through the Cloudflare tunnel. The Hetzner firewall allows only Tailscale UDP
 and ICMP. Every daily action runs as a named, expiring Teleport session; nothing standing lives

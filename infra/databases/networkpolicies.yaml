@@ -5,7 +5,7 @@
 # from Prometheus, and the cluster's own instances on 5432 (replication) and 8000 (status).
 # Egress: DNS, the API server (the instance manager watches its own resources; the local
 # node's API server shows up as the host identity, hence both entities), the cluster's
-# own instances, and the internet on 443 for the R2 archive.
+# own instances, and the s3-gateway on 8443 for the backup archive.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -66,9 +66,6 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
       toPorts:
         - ports: [{ port: "8443", protocol: TCP }]
-    - toEntities: [world]
-      toPorts:
-        - ports: [{ port: "443", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -116,9 +113,6 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
       toPorts:
         - ports: [{ port: "8443", protocol: TCP }]
-    - toEntities: [world]
-      toPorts:
-        - ports: [{ port: "443", protocol: TCP }]
 ---
 # CNPG bootstrap Jobs (initdb, full-recovery) carry cnpg.io/jobRole instead of podRole and sat
 # under default deny until 2026-09-09: a DR recovery needs the API server, DNS and the

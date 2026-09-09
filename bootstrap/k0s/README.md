@@ -49,7 +49,7 @@ paused). They stay at their pinned SHA and are synced by hand at the flip.
 - OpenBao: restore the raft snapshot, unseal (3 of 5), ESO reconciles every secret. Freeze
   secret edits on the old cluster from snapshot to flip.
 - CNPG: `newapi-pg` and `bot-pg` as replica clusters (`bootstrap: recovery` from the current
-  `-v4` prefixes, `replica.enabled: true`), archiving to new `-v5` prefixes. They replay WAL from
+  lineage, `replica.enabled: true`), archiving to the next lineage (`docs/backups.md`). They replay WAL from
   S3 continuously; set `archive_timeout` to 60 s on the old primaries for the migration week.
   Verify with row counts against the old primaries.
 - Teleport: re-apply `infra/teleport/resources/` with tctl, delete the agent's
@@ -77,7 +77,7 @@ One bucket (`unorouter-pg-backups`), one nightly cadence, one restore order, fou
 | --- | --- | --- |
 | `k0s/<controller>/` | `k0s-backup.timer` on each controller (`install-backup.sh <node>`) | etcd snapshot, PKI, k0s.yaml, bootstrap manifests, helm extension state |
 | `openbao/` | the existing snapshot CronJob | raft snapshot |
-| `newapi-pg-v5/`, `bot-pg-v5/` | CNPG Barman plugin | base backups plus WAL, PITR |
+| `newapi-pg-v<N>/`, `bot-pg-v<N>/` | CNPG Barman plugin | base backups plus WAL, PITR |
 | `files/` | rclone sidecar next to the owning pod | the three PVCs nothing else covers: Teleport auth SQLite, `new-api-sync-logs`, `uno-import-profile` |
 
 Everything else on disk is disposable (Prometheus, Grafana, Alertmanager history, Redis) and

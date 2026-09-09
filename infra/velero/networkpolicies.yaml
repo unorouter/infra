@@ -1,6 +1,6 @@
 # Pod isolation for Velero. The server, the node-agent DaemonSet and the kopia maintenance
 # Jobs all run under the velero-server ServiceAccount and need the same three things: DNS,
-# the API server, and R2 on 443. Prometheus scrapes the server on 8085; kubelet probes arrive
+# the API server, and Hetzner Object Storage on 443. Prometheus scrapes the server on 8085; kubelet probes arrive
 # as host.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

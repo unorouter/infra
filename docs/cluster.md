@@ -19,7 +19,7 @@ tofu apply   # manual only
 
 Cloud-init writes k3s auto-deploy manifests (Cilium + ArgoCD + root app), so a fresh apply brings
 the stack up from git. Prerequisites: the break-glass age key (VeraCrypt volume plus Bitwarden,
-loss = secrets unrecoverable), Hetzner token, R2 keys.
+loss = secrets unrecoverable), Hetzner token, the Hetzner Object Storage key (`tofu/.env`).
 
 ### Node disk
 

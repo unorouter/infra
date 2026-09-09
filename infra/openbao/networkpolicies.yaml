@@ -3,7 +3,7 @@
 # tunnel for openbao-ci.unorouter.com, Teleport app access for the UI, the snapshot job) and
 # talks out only to DNS and the API server (Kubernetes auth token review). Root-token work
 # goes through kubectl exec and never crosses the network. The snapshot job needs the server,
-# DNS and R2 (world on 443). Probes are exec, so no host ingress rule is needed.
+# DNS and Hetzner Object Storage (world on 443). Probes are exec, so no host ingress rule is needed.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
