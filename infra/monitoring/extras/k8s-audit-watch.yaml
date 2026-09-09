@@ -29,7 +29,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-34ec95a1c2ce
+  name: k8s-audit-watch-fea27b4ea925
   namespace: monitoring
 data:
   expected.json: |
@@ -498,8 +498,16 @@ data:
         return 'egress_deny_requested'
 
 
+    # auditIDs already paged. Long-running requests (exec, attach, port-forward) audit twice
+    # under one id, ResponseStarted when the stream opens and ResponseComplete when it
+    # closes; both stages stay evidence, only the first one pages.
+    paged = {}
+
     def notify(events):
         notifications_enabled = os.environ.get('NOTIFICATIONS_ENABLED', 'false') == 'true'
+        now = time.time()
+        for audit_id in [k for k, at in paged.items() if now - at > 86400]:
+            del paged[audit_id]
         expected = json.loads(os.environ.get('EXPECTED_ACCESSES') or Path('/app/expected.json').read_text())
         EXPECTED_IDENTITIES = {
             'system:serviceaccount:external-secrets:external-secrets',
@@ -577,6 +585,10 @@ data:
                       ref.get('namespace', ''), ref.get('name', '')]
             if access in expected:
                 continue
+            audit_id = ev.get('auditID')
+            if audit_id in paged:
+                continue
+            paged[audit_id] = now
             lines.append(event['id'][:16] + ' ' + json.dumps(access))
             if sub in ('exec', 'attach', 'portforward'):
                 pages.add('K8sPodExec')
@@ -812,7 +824,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-34ec95a1c2ce }
+          configMap: { name: k8s-audit-watch-fea27b4ea925 }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
