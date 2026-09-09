@@ -60,7 +60,9 @@ over the gateway's audit rows in `scrape/cnpg-security-queries.yaml`.
 - etcd needs `--etcd-expose-metrics=true` on every server; targets are a static IP list in
   `scrape/etcd.yaml`, update on every node swap.
 - Backup freshness reads the `Backup` CRs via kube-state-metrics (the plugin's own metric is 0).
-- dex clients and blackbox config are read at boot: `rollout restart` the deployment.
+- dex clients, blackbox config and the ConfigMap code of ntfy-bridge, edge-mode and
+  canary-quarantine are read at boot: `rollout restart` the deployment after a change, ArgoCD
+  only updates the ConfigMap.
 - A duplicate group name in `alerting/rules-unorouter.yaml` fails the SSA diff and silently stops the whole
   monitoring app syncing; check `.status.conditions` before suspecting drift.
 - Prometheus, Alertmanager, Grafana, blackbox and kps-operator are still pinned to node9 by
