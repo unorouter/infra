@@ -140,6 +140,16 @@ spec:
             name: alertmanager-discord
             key: webhook
           sendResolved: true
+          # default template dumps every label, the full description paragraph, the runbook
+          # URL and an unreadable Source: query link -- a screen of text per alert. Keep it
+          # to what you act on: what broke, where, and the one-line summary.
+          title: '{{ if eq .Status "firing" }}[{{ .CommonLabels.severity | toUpper }}]{{ else }}[RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
+          message: |-
+            ```
+            {{ range .Alerts -}}
+            {{ .Annotations.summary }}
+            {{ end -}}
+            ```
     - name: discord-evidence
       discordConfigs:
         - apiURL:
@@ -149,16 +159,6 @@ spec:
           title: '[{{ .CommonLabels.severity | toUpper }}] {{ .CommonLabels.alertname }}'
           message: |-
             Security evidence: {{ len .Alerts }} unexpected operation(s). Evidence IDs:
-            ```
-            {{ range .Alerts -}}
-            {{ .Annotations.summary }}
-            {{ end -}}
-            ```
-          # default template dumps every label, the full description paragraph, the runbook
-          # URL and an unreadable Source: query link -- a screen of text per alert. Keep it
-          # to what you act on: what broke, where, and the one-line summary.
-          title: '{{ if eq .Status "firing" }}[{{ .CommonLabels.severity | toUpper }}]{{ else }}[RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
-          message: |-
             ```
             {{ range .Alerts -}}
             {{ .Annotations.summary }}
