@@ -62,9 +62,8 @@ loki:
     split_queries_by_interval: 1h
     volume_enabled: true
     allow_structured_metadata: true
-  # The ruler is wired now (rules from ConfigMaps labelled loki_rule=1, alerts to the same
-  # Alertmanager as Prometheus) so LogQL alerts can replace the log-tailing watchers later.
-  # No rule ConfigMap exists yet.
+  # Rules come from ConfigMaps labelled loki_rule=1 (logql-rules.yaml), alerts go to the same
+  # Alertmanager as Prometheus so LogQL alerts replace the log-tailing watchers.
   rulerConfig:
     enable_api: true
     alertmanager_url: http://kps-alertmanager.monitoring.svc:9093

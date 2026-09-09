@@ -1,0 +1,42 @@
+# LogQL alert rules for Loki's ruler (the sidecar copies ConfigMaps labelled loki_rule=1 into
+# /rules/<tenant>; the tenant is "fake" because auth is off). Alerts go to the same
+# Alertmanager as Prometheus and follow its routes: severity info is the Discord digest.
+# Each group here replaces a log-tailing watcher from monitoring/extras/watchers.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-rules
+  namespace: monitoring
+  labels: { loki_rule: "1" }
+  annotations: { k8s-sidecar-target-directory: /rules/fake }
+data:
+  security.yaml: |
+    groups:
+      - name: pgaudit
+        interval: 1m
+        rules:
+          # Replaces pgaudit-watch. CNPG writes pgaudit records to the postgres pods' stdout;
+          # Alloy ships them with the JSON intact. Exempt: the app role, the metrics exporter
+          # reading over the instance socket, the archiver reading its one table from the pod
+          # network, and the reader role from the pod network (the Teleport database agent is
+          # the only pod the databases network policy lets reach 5432 with that role; Teleport's
+          # own db.session events name the person). Parallel workers repeat their leader's row.
+          - alert: PgauditNonAppRole
+            expr: >-
+              sum by (pod, record_user_name, src, record_audit_class, record_audit_object_name) (
+                count_over_time(
+                  {namespace="databases", container="postgres"}
+                    | json
+                    | logger="pgaudit"
+                    | record_user_name!="newapi"
+                    | record_backend_type!="parallel worker"
+                    | (record_user_name!="cnpg_metrics_exporter" or record_audit_class!="READ" or record_connection_from!="[local]")
+                    | (record_user_name!="reader" or record_connection_from!~"10\\.42\\..*")
+                    | (record_user_name!="evidence_archiver" or record_audit_class!="READ" or record_audit_object_name!="public.pat_change_audit" or record_connection_from!~"10\\.42\\..*")
+                    | label_format src=`{{ regexReplaceAll ":[0-9]+$" .record_connection_from "" }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: loki }
+            annotations:
+              summary: "pgaudit: {{ $labels.record_user_name }} on {{ $labels.pod }} from {{ $labels.src }} {{ $labels.record_audit_class }} {{ $labels.record_audit_object_name }} x{{ $value }} (5m)"
