@@ -39,8 +39,9 @@ pair, lose every encrypted object.
   Switching the archive store drops every `Backup` CR: take a base backup right after.
 - Key rotation: new `crypt_password` and `crypt_salt`, `bao kv patch`, ESO restart, gateway rollout,
   CNPG serverName bump and base backup, new sops file. Old objects stay readable with the old pair
-  until the lifecycle expires them (31 days), then drop it. `sse_c_key_*` in the same secret are the
-  pre 2026-09-09 key, gone after 2026-10-10.
+  until the lifecycle expires them (31 days), then drop it. The pre 2026-09-09 SSE-C key is gone;
+  objects from that era (`*-pg-v5`, `*-pg-v6`, `unorouter-evidence`) are unreadable noise until the
+  lifecycle removes them on 2026-10-09, the plaintext copies are under `~/backups/`.
 - `kubectl -n velero get backup` hits CNPG's CRD, use `get backup.velero.io`.
 - After patching an S3 credential, restart every consumer that reads it as env, after the
   ExternalSecret synced.

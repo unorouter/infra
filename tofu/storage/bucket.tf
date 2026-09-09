@@ -117,8 +117,8 @@ resource "aws_s3_bucket_versioning" "pg_backups" {
 }
 
 /* Ceph-incompatible: aws provider hangs on lifecycle PUT (Hetzner RadosGW).
-   Set via CLI instead (see bootstrap/dr/README). Bucket+versioning stay tofu-managed.
-# Expiry LONGER than Barman retention (30d) so retention deletes first; this is the safety net.
+   Set via signed PUT instead (docs/backups.md). Live rules: expire-noncurrent 35d, abort-mpu 2d
+   (five plaintext base backup uploads from July sat half finished until 2026-09-09).
 resource "aws_s3_bucket_lifecycle_configuration" "pg_backups" {
   bucket   = aws_s3_bucket.pg_backups.id
 
