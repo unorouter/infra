@@ -1,6 +1,6 @@
 # Every 15 minutes: list every container package of the GitHub org and try an ANONYMOUS
 # pull token against ghcr.io for each. A package outside ALLOW_PUBLIC that answers an
-# anonymous tags/list is posted to Discord. The API visibility field is only the
+# anonymous tags/list pages. The API visibility field is only the
 # cross-check; the anonymous probe is what an attacker sees. Background: from July to
 # 2026-09-06 the unorouter and unorouter-bot packages were public while their images
 # carried the full .env, which is how the admin PAT, the guest key and the Creem key leaked.
@@ -21,8 +21,6 @@ spec:
     name: ghcr-visibility-watch
     creationPolicy: Owner
   data:
-    - secretKey: DISCORD_WEBHOOK
-      remoteRef: { key: alertmanager, property: discordWebhook }
     - secretKey: GITHUB_TOKEN
       remoteRef: { key: ghcr-pull, property: token }
 ---
@@ -33,18 +31,11 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, urllib.request, urllib.error, re
-
-    # Discord renders the body as markdown (usernames with underscores, paths, stars), so
-    # everything after the bold header goes into a code fence with markdown stripped.
-    def fence(header, lines):
-        body = "\n".join(lines).replace("**", "").replace("`", "")
-        body = re.sub(r"<(https?://[^>]+)>", r"\1", body)
-        return header + "\n```\n" + body[:1700] + "\n```"
+    import json, os, urllib.request, urllib.error
+    import notify
 
     ORG = os.environ.get("GITHUB_ORG", "unorouter")
     ALLOW = set(x for x in os.environ.get("ALLOW_PUBLIC", "").split(",") if x)
-    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
     GH = os.environ["GITHUB_TOKEN"]
     UA = {"user-agent": "ghcr-visibility-watch/1"}
 
@@ -56,33 +47,10 @@ data:
         except urllib.error.HTTPError as e:
             return e.code, ""
 
-    def post(text):
-        body = json.dumps({"username": "ghcr visibility", "content": text[:1900]}).encode()
-        req = urllib.request.Request(WEBHOOK, data=body, headers={**UA, "content-type": "application/json"}, method="POST")
-        urllib.request.urlopen(req, timeout=30).read()
-
-    # critical Alertmanager alert (rings the phone); re-posted every run while it persists
-    def page(alertname, summary):
-        import time
-        am = os.environ.get("ALERTMANAGER_URL", "")
-        if not am:
-            return
-        now = time.time()
-        fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
-        body = json.dumps([{"labels": {"alertname": alertname, "severity": "critical", "source": "ghcr-visibility-watch"},
-                            "annotations": {"summary": summary[:500]},
-                            "startsAt": fmt(now), "endsAt": fmt(now + 2400)}]).encode()
-        req = urllib.request.Request(am.rstrip("/") + "/api/v2/alerts", data=body, headers={**UA, "content-type": "application/json"}, method="POST")
-        try:
-            urllib.request.urlopen(req, timeout=30).read()
-        except urllib.error.HTTPError as e:
-            print(f"alertmanager post failed HTTP {e.code}", flush=True)
-
     status, body = get(f"https://api.github.com/orgs/{ORG}/packages?package_type=container&per_page=100",
                        {"authorization": "Bearer " + GH, "accept": "application/vnd.github+json"})
     if status != 200:
-        page("PublicPackageExposed", f"ghcr visibility watch is BLIND: cannot list packages (HTTP {status}), GITHUB_TOKEN dead?")
-        post(f"**ghcr visibility watch cannot list packages** (HTTP {status}); the GITHUB_TOKEN in secret/ghcr-push may be dead, the check is BLIND until fixed")
+        notify.alert("PublicPackageExposed", f"ghcr visibility watch is BLIND: cannot list packages (HTTP {status}); the GITHUB_TOKEN in secret/ghcr-pull may be dead")
         raise SystemExit(1)
     packages = json.loads(body)
     # The org listing silently omits packages the token's user only reaches through
@@ -117,9 +85,8 @@ data:
     if missing:
         findings.append("expected packages the API cannot find: " + ", ".join(missing) + " (deleted or renamed? update EXPECT_PACKAGES)")
     if findings:
-        page("PublicPackageExposed", "; ".join(f.replace("`", "") for f in findings)[:400])
-        post(fence("**ghcr: a container package that must be private is PUBLIC**", findings
-             + ["Fix: github.com/orgs/" + ORG + "/packages/container/<name>/settings, Danger Zone, change visibility. Then rotate whatever the image carried."]))
+        notify.alert("PublicPackageExposed", "\n".join(["a container package that must be private is PUBLIC"] + findings
+                     + ["Fix: github.com/orgs/" + ORG + "/packages/container/<name>/settings, Danger Zone, change visibility. Then rotate whatever the image carried."]))
     print(f"packages={len(packages)} allowed_public={sorted(ALLOW)} findings={len(findings)}", flush=True)
 ---
 apiVersion: batch/v1
@@ -144,10 +111,14 @@ spec:
               image: python:3.12-alpine
               command: ["python3", "-u", "/app/watch.py"]
               env:
-                - name: GITHUB_ORG
-                  value: unorouter
+                - name: WATCH_NAME
+                  value: ghcr-visibility-watch
+                - name: PYTHONPATH
+                  value: /app/lib
                 - name: ALERTMANAGER_URL
                   value: http://kps-alertmanager.monitoring.svc:9093
+                - name: GITHUB_ORG
+                  value: unorouter
                 # images proven secret-free by image-secret-scan (every layer, live values
                 # included); private packages count against the org's 500 MB / 1 GB per
                 # month GitHub Packages quota and pulls are BLOCKED once it is used up
@@ -161,7 +132,9 @@ spec:
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { memory: 128Mi }
-              volumeMounts: [{ name: app, mountPath: /app }]
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
           volumes:
             - name: app
               configMap: { name: ghcr-visibility-watch }
+            - name: lib
+              configMap: { name: watch-lib }

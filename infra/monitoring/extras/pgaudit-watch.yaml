@@ -1,27 +1,10 @@
-# Reads the pgaudit records CNPG writes to the postgres pods' stdout and posts every
+# Reads the pgaudit records CNPG writes to the postgres pods' stdout and reports every
 # access to the audited tables (see infra/databases/options-audit.sql) that did not come
 # from the application role. Without this the audit log only answers questions after
 # the fact; with it a superuser read from a kubectl exec, a Teleport reader session or
-# anything else shows up in Discord within five minutes. Statement text is never posted
+# anything else shows up in Discord within five minutes (through Alertmanager). Statement text is never posted
 # (pgaudit.log_statement is off in the cluster parameters), only who, from where, what
 # command and which table.
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
-  name: pgaudit-watch
-  namespace: monitoring
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: pgaudit-watch
-    creationPolicy: Owner
-  data:
-    - secretKey: DISCORD_WEBHOOK
-      remoteRef: { key: alertmanager, property: discordWebhook }
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -84,15 +67,9 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, ssl, urllib.request, urllib.parse, re
-
-    # Discord renders the body as markdown (usernames with underscores, paths, stars), so
-    # everything after the bold header goes into a code fence with markdown stripped.
-    def fence(header, lines):
-        body = "\n".join(lines).replace("**", "").replace("`", "")
-        body = re.sub(r"<(https?://[^>]+)>", r"\1", body)
-        return header + "\n```\n" + body[:1700] + "\n```"
+    import json, os, ssl, urllib.request, urllib.parse
     from collections import defaultdict
+    import notify
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
     TOKEN = open(f"{SA}/token").read()
@@ -100,7 +77,6 @@ data:
     CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
     SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
     APP_ROLES = set(os.environ.get("APP_ROLES", "newapi").split(","))
-    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
 
     def k8s(path):
         req = urllib.request.Request(API + path, headers={"Authorization": "Bearer " + TOKEN})
@@ -169,16 +145,14 @@ data:
             s["ops"][what] += 1
 
     if sessions:
-        lines = ["**pgaudit: audited table touched by a non-app role** (last %ds; statements are not logged by design, only who, where, what)" % SINCE]
+        lines = ["pgaudit: audited table touched by a non-app role (last %ds; statements are not logged by design, only who, where, what)" % SINCE]
         for (pod, user, src, sid, backend, started), s in sorted(sessions.items(), key=lambda kv: kv[1]["first"] or "")[:15]:
             span = s["first"] if s["first"] == s["last"] else f"{s['first']} to {s['last']}"
             ops = ", ".join(f"{w} x{s['ops'][w]}" if s["ops"][w] > 1 else w for w in s["order"][:8])
             note = "" if backend == "client backend" else f" ({backend})"
             lines.append(f"`{user}` on {pod} from {where(src)}{note}, session {sid} opened {started}, {span} UTC: {ops}")
         print("\n".join(lines), flush=True)
-        req = urllib.request.Request(WEBHOOK, data=json.dumps({"username": "pgaudit", "content": fence(lines[0], lines[1:])}).encode(),
-                                     headers={"content-type": "application/json", "user-agent": "pgaudit-watch/1"}, method="POST")
-        urllib.request.urlopen(req, timeout=30).read()
+        notify.digest("PgauditNonAppRole", lines[0], lines[1:])
     print(f"pods={len(pods['items'])} sessions={len(sessions)}", flush=True)
 ---
 apiVersion: batch/v1
@@ -203,11 +177,19 @@ spec:
             - name: watch
               image: python:3.12-alpine
               command: ["python3", "-u", "/app/watch.py"]
-              envFrom: [{ secretRef: { name: pgaudit-watch } }]
+              env:
+                - name: WATCH_NAME
+                  value: pgaudit-watch
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { memory: 128Mi }
-              volumeMounts: [{ name: app, mountPath: /app }]
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
           volumes:
             - name: app
               configMap: { name: pgaudit-watch }
+            - name: lib
+              configMap: { name: watch-lib }

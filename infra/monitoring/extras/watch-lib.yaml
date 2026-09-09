@@ -1,0 +1,45 @@
+# Shared by the watcher CronJobs: the one way to say something. Everything goes to
+# Alertmanager, which owns the fan-out (Discord for all of it, the phone for critical), so
+# no watcher holds the Discord webhook and nothing is posted twice. A digest carries a hash
+# of its text as a label: an unchanged window deduplicates instead of reposting, a changed
+# one is a new alert. Mounted at /app/lib, imported as `notify`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: watch-lib
+  namespace: monitoring
+data:
+  notify.py: |
+    import hashlib, json, os, re, time, urllib.request
+
+    SOURCE = os.environ.get("WATCH_NAME", "watch")
+    AM = os.environ.get("ALERTMANAGER_URL", "")
+
+    def plain(text):
+        # the receivers wrap the summary in a code fence, so markdown would show raw
+        text = text.replace("**", "").replace("`", "")
+        return re.sub(r"<(https?://[^>]+)>", r"\1", text)
+
+    def alert(alertname, summary, severity="critical", ttl=2400):
+        # critical: pages and posts, re-raised each run while it persists (same labels dedupe)
+        # info: Discord only, one alert per distinct text, expires with the window
+        summary = plain(summary)[:1600]
+        labels = {"alertname": alertname, "severity": severity, "source": SOURCE}
+        if severity != "critical":
+            labels["digest"] = hashlib.sha256(summary.encode()).hexdigest()[:12]
+        if not AM:
+            print(f"ALERT {severity} {alertname}: {summary}", flush=True)
+            return
+        now = time.time()
+        fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        body = json.dumps([{"labels": labels, "annotations": {"summary": summary},
+                            "startsAt": fmt(now), "endsAt": fmt(now + ttl)}]).encode()
+        req = urllib.request.Request(AM.rstrip("/") + "/api/v2/alerts", data=body,
+                                     headers={"content-type": "application/json", "user-agent": SOURCE + "/1"}, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=30).read()
+        except Exception as e:
+            print("alertmanager post failed:", e, flush=True)
+
+    def digest(alertname, header, lines, ttl=600):
+        alert(alertname, "\n".join([header] + list(lines)), "info", ttl)

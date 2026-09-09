@@ -1,25 +1,8 @@
-# Posts every failed Teleport login to Discord within five minutes: GitHub SSO logins
+# Reports every failed Teleport login within five minutes: GitHub SSO logins
 # refused by the org gate (with the GitHub username as a profile link when Teleport
 # knows it), local-auth attempts (root/admin guesses against a cluster with local auth
 # off), plus successful SSO logins so the two are side by side. Reads the audit events
 # the auth pod mirrors to stdout (audit_events_uri stdout:// in infra/teleport/values.yaml).
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
-  name: teleport-login-watch
-  namespace: monitoring
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: teleport-login-watch
-    creationPolicy: Owner
-  data:
-    - secretKey: DISCORD_WEBHOOK
-      remoteRef: { key: alertmanager, property: discordWebhook }
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -87,22 +70,14 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json
-    import time, os, re, ssl, urllib.request, urllib.parse
-
-    # Discord renders the body as markdown (usernames with underscores, paths, stars), so
-    # everything after the bold header goes into a code fence with markdown stripped.
-    def fence(header, lines):
-        body = "\n".join(lines).replace("**", "").replace("`", "")
-        body = re.sub(r"<(https?://[^>]+)>", r"\1", body)
-        return header + "\n```\n" + body[:1700] + "\n```"
+    import json, os, re, ssl, urllib.request, urllib.parse
+    import notify
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
     TOKEN = open(f"{SA}/token").read()
     API = "https://kubernetes.default.svc"
     CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
     SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
-    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
     WANT = {"user.login", "auth"}
     # Privilege changes inside Teleport: a role, a connector mapping or a user's role set
     # is how a stolen editor session escalates, and it is silent otherwise. Always paged.
@@ -111,23 +86,6 @@ data:
             "user.create", "user.update", "user.delete", "trusted_cluster.create", "trusted_cluster.delete"}
     # Write-capable DB sessions: pgaudit only sees the role, this line names the person.
     DB_ADMIN_USERS = set(os.environ.get("DB_ADMIN_USERS", "dbadmin,postgres").split(","))
-    AM = os.environ.get("ALERTMANAGER_URL", "")
-
-    def page(alertname, summary):
-        if not AM:
-            print("PAGE:", alertname, summary, flush=True)
-            return
-        now = time.time()
-        fmt = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
-        body = json.dumps([{"labels": {"alertname": alertname, "severity": "critical", "source": "teleport-login-watch"},
-                            "annotations": {"summary": summary[:500]},
-                            "startsAt": fmt(now), "endsAt": fmt(now + 2400)}]).encode()
-        req = urllib.request.Request(AM.rstrip("/") + "/api/v2/alerts", data=body, headers={"content-type": "application/json"}, method="POST")
-        try:
-            urllib.request.urlopen(req, timeout=30).read()
-        except Exception as e:
-            print("alertmanager post failed:", e, flush=True)
-
     def k8s(path):
         req = urllib.request.Request(API + path, headers={"Authorization": "Bearer " + TOKEN})
         with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
@@ -186,7 +144,7 @@ data:
             # (a `tctl create --force` from `tctl get` output does that); every SSO login
             # is dead until it is rebuilt from the repo file plus OpenBao teleport-github.
             if "incorrect_client_credentials" in (ev.get("error") or ""):
-                page("TeleportSSOBroken", f"GitHub rejects the Teleport connector credentials ({method} login from {addr}); rebuild the connector from infra/teleport/resources/github-connector.yaml plus OpenBao secret/teleport-github")
+                notify.alert("TeleportSSOBroken", f"GitHub rejects the Teleport connector credentials ({method} login from {addr}); rebuild the connector from infra/teleport/resources/github-connector.yaml plus OpenBao secret/teleport-github")
 
     # Dex fronts ArgoCD, OpenBao and Grafana with the same GitHub org gate, and unlike
     # Teleport it names the refused user, which is the whole point of this watcher.
@@ -212,11 +170,9 @@ data:
     lines = counted
 
     if lines:
-        body = json.dumps({"username": "teleport logins", "content": fence("**teleport / dex logins** (last %ds)" % SINCE, lines[:20])}).encode()
-        req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "teleport-login-watch/1"}, method="POST")
-        urllib.request.urlopen(req, timeout=30).read()
+        notify.digest("TeleportLogins", "teleport / dex logins (last %ds)" % SINCE, lines[:20])
     if priv:
-        page("TeleportPrivilegeChange", f"{len(priv)} change(s): " + "; ".join(priv[:5]))
+        notify.alert("TeleportPrivilegeChange", f"{len(priv)} change(s): " + "; ".join(priv[:5]))
     print(f"pods={len(pods['items'])} events={len(lines)} priv={len(priv)}", flush=True)
 ---
 apiVersion: batch/v1
@@ -241,14 +197,19 @@ spec:
             - name: watch
               image: python:3.12-alpine
               command: ["python3", "-u", "/app/watch.py"]
-              envFrom: [{ secretRef: { name: teleport-login-watch } }]
               env:
+                - name: WATCH_NAME
+                  value: teleport-login-watch
+                - name: PYTHONPATH
+                  value: /app/lib
                 - name: ALERTMANAGER_URL
                   value: http://kps-alertmanager.monitoring.svc:9093
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { memory: 128Mi }
-              volumeMounts: [{ name: app, mountPath: /app }]
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
           volumes:
             - name: app
               configMap: { name: teleport-login-watch }
+            - name: lib
+              configMap: { name: watch-lib }

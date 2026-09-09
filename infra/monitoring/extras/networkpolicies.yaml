@@ -297,8 +297,8 @@ spec:
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
 ---
-# Watchers with their own ServiceAccount (they read pod logs through the API server and
-# post to Discord); image-secret-scan also pages through alertmanager and pulls layers.
+# Watchers with their own ServiceAccount: they read pod logs through the API server and
+# raise alerts through alertmanager; image-secret-scan also pulls layers from the internet.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:

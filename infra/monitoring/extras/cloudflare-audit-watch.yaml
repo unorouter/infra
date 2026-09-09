@@ -1,4 +1,4 @@
-# Posts every Cloudflare account audit-log entry to Discord within five minutes: who
+# Reports every Cloudflare account audit-log entry within five minutes: who
 # (email or token), from where, what (DNS record, ruleset, token, tunnel, zone setting,
 # member) and on which zone. The account fronts every hostname and holds the tunnel, so
 # a change nobody here made is the earliest possible sign of an account takeover. The
@@ -18,8 +18,6 @@ spec:
     name: cloudflare-audit-watch
     creationPolicy: Owner
   data:
-    - secretKey: DISCORD_WEBHOOK
-      remoteRef: { key: alertmanager, property: discordWebhook }
     - secretKey: CF_API_TOKEN
       remoteRef: { key: cloudflare-edge, property: audit_token }
 ---
@@ -30,19 +28,12 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, urllib.request, urllib.parse, re
-
-    # Discord renders the body as markdown (usernames with underscores, paths, stars), so
-    # everything after the bold header goes into a code fence with markdown stripped.
-    def fence(header, lines):
-        body = "\n".join(lines).replace("**", "").replace("`", "")
-        body = re.sub(r"<(https?://[^>]+)>", r"\1", body)
-        return header + "\n```\n" + body[:1700] + "\n```"
+    import json, os, urllib.request, urllib.parse
     from datetime import datetime, timedelta, timezone
+    import notify
 
     ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "7dad953fa57f079bfec11d3db10bc18a")
     TOKEN = os.environ["CF_API_TOKEN"]
-    WEBHOOK = os.environ["DISCORD_WEBHOOK"]
     SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
     since = (datetime.now(timezone.utc) - timedelta(seconds=SINCE)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -81,9 +72,7 @@ data:
         lines.append(f"{when}Z `{who}` from `{ip}`: {action} {res} {what} {('via ' + via) if via else ''}".rstrip())
 
     if lines:
-        body = json.dumps({"username": "cloudflare audit", "content": fence("**cloudflare account changes** (last %ds)" % SINCE, lines[:25])}).encode()
-        req = urllib.request.Request(WEBHOOK, data=body, headers={"content-type": "application/json", "user-agent": "cloudflare-audit-watch/1"}, method="POST")
-        urllib.request.urlopen(req, timeout=30).read()
+        notify.digest("CloudflareAccountChanged", "cloudflare account changes (last %ds)" % SINCE, lines[:25])
     print(f"entries={len(entries)}", flush=True)
 ---
 apiVersion: batch/v1
@@ -108,10 +97,19 @@ spec:
               image: python:3.12-alpine
               command: ["python3", "-u", "/app/watch.py"]
               envFrom: [{ secretRef: { name: cloudflare-audit-watch } }]
+              env:
+                - name: WATCH_NAME
+                  value: cloudflare-audit-watch
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { memory: 128Mi }
-              volumeMounts: [{ name: app, mountPath: /app }]
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
           volumes:
             - name: app
               configMap: { name: cloudflare-audit-watch }
+            - name: lib
+              configMap: { name: watch-lib }
