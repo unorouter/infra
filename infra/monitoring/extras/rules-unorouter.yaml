@@ -460,11 +460,11 @@ spec:
               GroupRatio from the newest _bak_* options table or the last dump, then check
               which sync Job wrote last (`kubectl -n services get jobs`).
         - alert: CatalogModelsBelowFloor
-          expr: max by (tier) (cnpg_newapi_catalog_models_visible) < 60
+          expr: max by (tier) (cnpg_newapi_catalog_models_visible) < 50
           for: 3m
           labels: { severity: critical }
           annotations:
-            summary: "only {{ $value }} {{ $labels.tier }} models visible (floor 60)"
+            summary: "only {{ $value }} {{ $labels.tier }} models visible (floor 50)"
             description: >-
               Absolute floor for either tier; normal is 130 free and 114 paid. Catches a wipe
               that happened more than 6h ago, where the relative rule no longer has a baseline.

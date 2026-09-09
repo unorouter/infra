@@ -44,10 +44,10 @@ spec:
         groupInterval: 1m
         repeatInterval: 10m
         continue: true
-      # The evidence collector posts its own Discord message with the evidence ids, so
-      # relaying its alerts through the discord receiver printed every operation twice
-      # and a third time as [RESOLVED] when the 10 minute endsAt passed. Only the phone
-      # sees them, and only the two that already page below.
+      # Evidence alerts: Alertmanager is their only Discord path (the collector used to post
+      # a second copy itself). Secret reads and execs page the phone first, then every
+      # evidence alert falls through to discord-evidence, which never prints [RESOLVED]:
+      # they expire on their own 10 minutes after the last operation, which is not news.
       - receiver: ntfy-evidence
         matchers:
           - name: source
@@ -57,10 +57,13 @@ spec:
             value: "^(K8sSecretRead|K8sPodExec)$"
         groupWait: 10s
         repeatInterval: 1h
-      - receiver: "null"
+        continue: true
+      - receiver: discord-evidence
         matchers:
           - name: source
             value: k8s-audit-watch
+        groupWait: 10s
+        repeatInterval: 1h
       # critical fans out to BOTH discord (continue: true falls through) and ntfy, which
       # makes the phone ring. Discord alone failed 2026-08-12: the API degraded for 2h
       # during Korea business hours (= our night) before anyone saw the channel.
@@ -137,6 +140,19 @@ spec:
             name: alertmanager-discord
             key: webhook
           sendResolved: true
+    - name: discord-evidence
+      discordConfigs:
+        - apiURL:
+            name: alertmanager-discord
+            key: webhook
+          sendResolved: false
+          title: '[{{ .CommonLabels.severity | toUpper }}] {{ .CommonLabels.alertname }}'
+          message: |-
+            ```
+            {{ range .Alerts -}}
+            {{ .Annotations.summary }}
+            {{ end -}}
+            ```
           # default template dumps every label, the full description paragraph, the runbook
           # URL and an unreadable Source: query link -- a screen of text per alert. Keep it
           # to what you act on: what broke, where, and the one-line summary.

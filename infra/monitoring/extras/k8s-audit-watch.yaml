@@ -1,37 +1,21 @@
 # Tails the kube-apiserver audit log on every server (a file under
 # /var/lib/rancher/k3s/server/logs, written by the policy in tofu/cloud-init*.tftpl:
 # Metadata events for secrets, pods/exec, pods/attach, pods/portforward and
-# serviceaccounts/token and workload/configuration changes) and posts to Discord every Secret read that is
-# not the routine machinery, and every exec, attach or port-forward whoever did it.
-# A Secret read in services, openbao or databases and any exec also page through
-# Alertmanager. Each server logs only what it served, so one tail per server is the
-# whole picture. The pod runs as root because the log is root 0600; it mounts the
+# serviceaccounts/token and workload/configuration changes) and raises an Alertmanager
+# alert for every Secret read that is not the routine machinery, every exec, attach or
+# port-forward whoever did it, and every RBAC or ExternalSecret change. Alertmanager
+# owns the fan-out: Discord for all of them, the phone for Secret reads in services,
+# openbao or databases and for any exec. Each server logs only what it served, so one
+# tail per server is the whole picture. The pod runs as root because the log is root 0600; it mounts the
 # directory read-only, keeps its queue and checkpoints on the node disk, and holds no credential
 # for bucket configuration. Containment is separately gated and namespace-scoped.
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
-  name: k8s-audit-watch
-  namespace: monitoring
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: k8s-audit-watch
-    creationPolicy: Owner
-  data:
-    - secretKey: DISCORD_WEBHOOK
-      remoteRef: { key: alertmanager, property: discordWebhook }
----
 # Immutable: the name suffix and the DaemonSet annotation are sha256(watch.py + expected.json),
 # so a change to either rolls the pods and lets ArgoCD prune the old object.
 apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-196d138743c8
+  name: k8s-audit-watch-88e84747fb89
   namespace: monitoring
 data:
   expected.json: |
@@ -642,15 +626,6 @@ data:
                                             headers={'Content-Type': 'application/json', 'User-Agent': 'unorouter-evidence/1'}, method='POST')
             with urllib.request.urlopen(request, timeout=10):
                 pass
-        # Routine controller and kubelet traffic (watch on secrets, the job/cronjob/gc
-        # controllers churning pods) never sets pages, and posting it drowned the channel.
-        # Alertmanager above already has the same condition; the evidence is archived either way.
-        url = os.environ.get('DISCORD_WEBHOOK')
-        if url and pages:
-            request = urllib.request.Request(url, data=encode({'content': text, 'allowed_mentions': {'parse': []}}),
-                                             headers={'Content-Type': 'application/json', 'User-Agent': 'unorouter-evidence/1'}, method='POST')
-            with urllib.request.urlopen(request, timeout=10):
-                pass
 
 
     METRICS = {'errors_total': 0, 'gaps_total': 0, 'source_oldest_unread_timestamp_seconds': 0, 'source_lag_seconds': 0, 'queue_bytes': 0, 'queue_records': 0,
@@ -819,7 +794,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "196d138743c87e184bf5c1e014c634085a8aaeab5aac453bedaa5930361cca1d"
+        evidence.unorouter.com/code-sha256: "88e84747fb89f4eddf3ebacbbadac8f6d70ac24a0a3bf055eb0a15b6691e822a"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -845,7 +820,7 @@ spec:
               valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
             - name: ALERTMANAGER_URL
               value: http://kps-alertmanager.monitoring.svc:9093
-          envFrom: [{ secretRef: { name: k8s-audit-watch } }, { secretRef: { name: evidence-archive } }]
+          envFrom: [{ secretRef: { name: evidence-archive } }]
           securityContext:
             runAsUser: 0
             readOnlyRootFilesystem: true
@@ -869,7 +844,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-196d138743c8 }
+          configMap: { name: k8s-audit-watch-88e84747fb89 }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
