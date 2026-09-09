@@ -15,7 +15,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-88e84747fb89
+  name: k8s-audit-watch-ee0acf0a512d
   namespace: monitoring
 data:
   expected.json: |
@@ -614,7 +614,8 @@ data:
                 pages.add('K8sSecurityConfigurationChanged')
         if not lines or not notifications_enabled:
             return
-        text = 'Security evidence: ' + str(len(lines)) + ' unexpected operations. Evidence IDs:\n' + '\n'.join(lines[:8])[:1600]
+        # One evidence line per operation; the Alertmanager templates add the heading once per message.
+        text = '\n'.join(lines[:8])[:1600]
         am = os.environ.get('ALERTMANAGER_URL')
         if am and pages:
             now = dt.datetime.now(dt.timezone.utc)
@@ -794,7 +795,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "88e84747fb89f4eddf3ebacbbadac8f6d70ac24a0a3bf055eb0a15b6691e822a"
+        evidence.unorouter.com/code-sha256: "ee0acf0a512d2d3e2ff2b3f84686dafc59ea2c87154e9d6f91aa23b65258f9e0"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -844,7 +845,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-88e84747fb89 }
+          configMap: { name: k8s-audit-watch-ee0acf0a512d }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble

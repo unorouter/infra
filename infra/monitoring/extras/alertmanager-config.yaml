@@ -148,6 +148,7 @@ spec:
           sendResolved: false
           title: '[{{ .CommonLabels.severity | toUpper }}] {{ .CommonLabels.alertname }}'
           message: |-
+            Security evidence: {{ len .Alerts }} unexpected operation(s). Evidence IDs:
             ```
             {{ range .Alerts -}}
             {{ .Annotations.summary }}
