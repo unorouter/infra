@@ -1,6 +1,6 @@
 # Echoes the request headers back. Registered in Teleport as the app `openbao-jwt` so that
 # `tsh proxy app openbao-jwt` returns the `Teleport-Jwt-Assertion` the proxy signs for the
-# caller; scripts/bao-login.sh trades it for an OpenBao token at auth/jwt-teleport. The pod
+# caller; scripts/bao.sh login trades it for an OpenBao token at auth/jwt-teleport. The pod
 # has no egress and accepts only the Teleport agent.
 apiVersion: apps/v1
 kind: Deployment

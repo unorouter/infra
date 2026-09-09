@@ -6,7 +6,7 @@ Daily work is a named, expiring session. Nothing standing lives on a laptop.
 | --- | --- | --- |
 | kubectl | `KUBECONFIG=~/.kube/teleport-unorouter.yaml` (systemd user unit `tsh-kube` runs `tsh proxy kube --port 18443 unorouter`) | 12 h cert |
 | Postgres | `tsh db login newapi-pg --db-user dbadmin\|reader --db-name newapi`, then `tsh db connect newapi-pg` | 12 h cert |
-| OpenBao | `./scripts/bao-login.sh` (reader, kv-read) or `./scripts/bao-login.sh admin` (writes); trades the Teleport session for a token via `auth/jwt-teleport`, `BAO_ADDR=http://127.0.0.1:18200` (unit `tsh-openbao`) | 24 h / 1 h |
+| OpenBao | `./scripts/bao.sh login` (reader, kv-read) or `./scripts/bao.sh login admin` (writes); trades the Teleport session for a token via `auth/jwt-teleport`, `BAO_ADDR=http://127.0.0.1:18200` (unit `tsh-openbao`) | 24 h / 1 h |
 | Node shell | `ssh root@<tailscale ip>` (Tailscale SSH, no key) | identity check every 12 h |
 | Ops UIs | argocd / openbao / grafana.unorouter.com through Teleport App Access, GitHub SSO | 12 h |
 
@@ -34,7 +34,7 @@ OpenBao has no Teleport dependency of its own: `bao login -method=oidc role=admi
   sealed or destroyed vault stays recoverable.
 
 **sops has two keys**: the daily one lives in OpenBao `secret/sops-age` and opens the Cloudflare
-edge rules (`. scripts/sops-env.sh`, or `apply.sh` fetches it itself); the break-glass one is
+edge rules (`. scripts/bao.sh sops`, or `apply.sh` fetches it itself); the break-glass one is
 offline only and is the sole recipient of `secrets/openbao-init.sops.yaml` (unseal keys) and
 `secrets/tailnet-lock.sops.yaml`.
 

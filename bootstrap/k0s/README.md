@@ -19,7 +19,7 @@ Lean rules for the new cluster:
 
 ## 0. Prerequisites
 
-- Three cx43 spares parked by `scripts/hetzner-snipe.sh` (`SNIPE_COUNT=3`, any EU DC). The
+- Three cx43 spares parked by `bootstrap/k0s/hetzner-snipe.sh` (`SNIPE_COUNT=3`, any EU DC). The
   sniper only buys; it holds no tailnet key. Join each spare yourself with
   `./spare-join.sh unorouter-spare-<loc>-<n>` (opens 22 for your IP, installs Tailscale with a
   key read from OpenBao at run time, closes 22 again) and check `tailscale status`.

@@ -16,13 +16,11 @@
   [versions.md](versions.md)); ArgoCD rolls them like any push, `git revert` undoes one.
 - **Pin images to a git SHA, never `:latest`**: a floating tag changes no manifest, ArgoCD sees
   no diff, nothing deploys.
-- **No build secrets in GitHub.** Only `unorouter` needs any (Next.js inlines them): the job
-  mints an OIDC JWT and swaps it at `openbao-ci.unorouter.com` for a 10-minute token on one KV
-  path. `NEXT_PUBLIC_*` live in a committed `.env.public`. Vault side:
-  `./scripts/openbao-ci-auth.sh`. Keep that host exempt from the edge relay-key block.
-- `./scripts/build-local.sh <repo> [--deploy]` builds the same artifact locally (amd64, the only
-  path for new-api-sync). A deploy is done when ArgoCD shows the new image, never because a push
-  or a workflow succeeded.
+- **No build secrets anywhere.** Builds use committed public configuration only
+  (`NEXT_PUBLIC_*` in `.env.public`); every app gets its secrets at runtime from its
+  ExternalSecret. There is no local build path: Actions down means wait.
+- **A deploy is done when ArgoCD shows the new image**, never because a push or a workflow
+  succeeded.
 - Generated apps run under the restricted `apps` AppProject: `services` + `databases` only, no
   cluster-scoped resources.
 - **`k8s/` is a deploy gate**: write access to an org repo is write access to the cluster.

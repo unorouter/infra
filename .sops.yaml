@@ -1,6 +1,6 @@
 creation_rules:
   # Two keys. DAILY (age13wz...): in OpenBao secret/sops-age, read through Teleport plus the
-  # OIDC token (`. scripts/sops-env.sh`), guards operational files. BREAK-GLASS (age100x...): on the
+  # OIDC token (`. scripts/bao.sh sops`), guards operational files. BREAK-GLASS (age100x...): on the
   # VeraCrypt volume and in Bitwarden only, never in OpenBao, guards the unseal keys and the
   # tailnet lock secrets (whoever holds it can mint an OpenBao root token). Daily files list both
   # recipients so the break-glass key still opens everything.
