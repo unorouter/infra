@@ -485,7 +485,7 @@ data:
             AND other LIKE '%"credential_fingerprint":"%'
         ), w AS (
           SELECT fingerprint, ip, path,
-                 path ~ '^/api/(channel|option|group|redemption|token/search|log/|user/(search|manage|topup/complete|[0-9]+)|user/?$)' AS is_admin
+                 path ~ '^/api/(channel|option|group|redemption|token/search|log/(?!self)|user/(search|manage|topup/complete|[0-9]+)|user/?$)' AS is_admin
           FROM h
           WHERE created_at > extract(epoch from now())::bigint - 900
         )
