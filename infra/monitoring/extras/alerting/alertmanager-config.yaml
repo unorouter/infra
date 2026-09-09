@@ -44,6 +44,19 @@ spec:
         groupInterval: 1m
         repeatInterval: 10m
         continue: true
+      # Responder: every pod create in services (Loki rule K8sCanaryWorkload, severity none)
+      # goes to canary-quarantine, which checks the pod for the canary Secret itself and
+      # posts its own critical alert only when it finds one. Nothing else sees this trigger.
+      - receiver: canary-quarantine
+        matchers:
+          - name: alertname
+            value: K8sCanaryWorkload
+          - name: source
+            value: loki-trigger
+        groupBy: [objectRef_uid, objectRef_name]
+        groupWait: 0s
+        groupInterval: 1m
+        repeatInterval: 2m
       # Watchers speak only to Alertmanager (extras/watchers/watch-lib.yaml), so this is the single
       # Discord path for them. Digests are severity info: Discord only, never [RESOLVED],
       # one alert per distinct text so an unchanged window is not reposted. The evidence
@@ -99,7 +112,7 @@ spec:
             value: critical
           - name: alertname
             matchType: "=~"
-            value: "^(CatalogModelsBelowFloor|CatalogHiddenByOptions|CatalogOptionMapShrunk|PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork|ImageSecretLeak|PublicPackageExposed|K8sSecretRead|K8sPodExec|TeleportPrivilegeChange|TeleportSSOBroken|OpenBaoRootUsed|PVCTerminating)$"
+            value: "^(CatalogModelsBelowFloor|CatalogHiddenByOptions|CatalogOptionMapShrunk|PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork|ImageSecretLeak|PublicPackageExposed|K8sSecretRead|K8sPodExec|K8sCanaryWorkload|QuarantineApplied|VectorArchiveDiscarded|VectorArchiveErrors|TeleportPrivilegeChange|TeleportSSOBroken|OpenBaoRootUsed|PVCTerminating)$"
           - name: pod
             matchType: "!~"
             value: "unorouter.*"
@@ -126,6 +139,10 @@ spec:
         - urlSecret:
             name: alertmanager-discord
             key: healthchecks
+          sendResolved: false
+    - name: canary-quarantine
+      webhookConfigs:
+        - url: http://canary-quarantine.monitoring.svc:8080/alert
           sendResolved: false
     - name: edge-mode
       webhookConfigs:

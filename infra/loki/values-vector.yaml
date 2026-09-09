@@ -35,6 +35,7 @@ resources:
   limits: { memory: 1Gi }
 service: { enabled: false }
 serviceHeadless: { enabled: false }
+logLevel: "info,aws_smithy_runtime=debug,aws_smithy_runtime_api=debug,aws_smithy_http_client=debug,rustls=debug,hyper_util=debug"
 podMonitor:
   enabled: true
   additionalLabels: { release: kps }
