@@ -59,7 +59,6 @@ spec:
         AUTH_NEWAPI: "{{ .newapi_id }},{{ .newapi_secret }}"
         AUTH_BOT: "{{ .bot_id }},{{ .bot_secret }}"
         AUTH_TELEPORT: "{{ .teleport_id }},{{ .teleport_secret }}"
-        AUTH_SCRATCH: "{{ .scratch_id }},{{ .scratch_secret }}"
   data:
     - secretKey: hz_ak
       remoteRef: { key: pg-s3, property: ACCESS_KEY_ID }
@@ -81,10 +80,6 @@ spec:
       remoteRef: { key: s3gw-teleport, property: ACCESS_KEY_ID }
     - secretKey: teleport_secret
       remoteRef: { key: s3gw-teleport, property: ACCESS_SECRET_KEY }
-    - secretKey: scratch_id
-      remoteRef: { key: s3gw-scratch, property: ACCESS_KEY_ID }
-    - secretKey: scratch_secret
-      remoteRef: { key: s3gw-scratch, property: ACCESS_SECRET_KEY }
 ---
 # In-cluster TLS: the nodes span three locations and Cilium runs without WireGuard, so base
 # backups must not cross the node network in the clear. Resolved to the Service by CoreDNS
@@ -155,8 +150,7 @@ spec:
             - >-
               exec rclone serve s3 hz:
               --addr :8443 --cert /tls/tls.crt --key /tls/tls.key --min-tls-version tls1.2
-              --auth-key "$AUTH_NEWAPI" --auth-key "$AUTH_BOT"
-              --auth-key "$AUTH_TELEPORT" --auth-key "$AUTH_SCRATCH"
+              --auth-key "$AUTH_NEWAPI" --auth-key "$AUTH_BOT" --auth-key "$AUTH_TELEPORT"
               --vfs-cache-mode writes --cache-dir /cache --vfs-cache-max-size 30G
               --vfs-write-back 5s
               --s3-chunk-size 16M --s3-upload-concurrency 4
@@ -286,9 +280,6 @@ spec:
     - fromEndpoints:
         - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg}
         - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: bot-pg}
-        - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: scratch-pg}
-        - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: scratch-pg-restore}
-        - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: scratch-newapi-restore}
         - matchLabels: {io.kubernetes.pod.namespace: teleport, app.kubernetes.io/component: auth}
       toPorts:
         - ports: [{port: "8443", protocol: TCP}]
