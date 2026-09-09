@@ -44,7 +44,7 @@ spec:
         groupInterval: 1m
         repeatInterval: 10m
         continue: true
-      # Watchers speak only to Alertmanager (extras/watch-lib.yaml), so this is the single
+      # Watchers speak only to Alertmanager (extras/watchers/watch-lib.yaml), so this is the single
       # Discord path for them. Digests are severity info: Discord only, never [RESOLVED],
       # one alert per distinct text so an unchanged window is not reposted. The evidence
       # collector's alerts are critical but expire on their own 10 minutes after the last

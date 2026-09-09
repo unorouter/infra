@@ -90,7 +90,7 @@ sidecars run a 24 h loop and need no scheduling tricks around node-pinned volume
 ## 4. After
 
 - Delete node8, node9, node10 with tofu (state reconciled), remove their IPs from
-  `TRUSTED_NETWORKS`, the edge skip rule, `scrape-etcd.yaml`, and the DR README.
+  `TRUSTED_NETWORKS`, the edge skip rule, `extras/scrape/etcd.yaml`, and the DR README.
 - Rename spares to `unorouter-node11..13` in tofu (import) and `hostname` in `k0sctl.yaml`.
 - Sniper back to per-region mode (`SNIPE_COUNT=1`, `SNIPE_LOCS=<missing DC>`) to restore the
   three-DC spread with one rolling swap per catch: join the new node with `k0sctl apply`,

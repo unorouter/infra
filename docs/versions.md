@@ -18,4 +18,4 @@ Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest |
 | Velero | 12.1.0 + aws-plugin 1.12.1 | apps/velero.yaml |
 | dex | v2.45.1 | cluster OIDC IdP |
 | kube-prometheus-stack | 88.6.4 | apps/monitoring.yaml |
-| blackbox-exporter | v0.28.0 | infra/monitoring/extras/blackbox.yaml |
+| blackbox-exporter | v0.28.0 | infra/monitoring/extras/scrape/blackbox.yaml |

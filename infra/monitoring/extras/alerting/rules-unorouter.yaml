@@ -440,7 +440,7 @@ spec:
 
     # 2026-09-07: option maps rewritten from an empty base while the gateway rolled.
     # Channels and abilities stayed intact, so the site showed 30 models and 0 free
-    # for two hours with no alert. Series come from extras/cnpg-catalog-queries.yaml.
+    # for two hours with no alert. Series come from extras/scrape/cnpg-catalog-queries.yaml.
     # Both tiers are compared to their own 6h high; the sync adds and removes a few
     # lanes per run, a wipe removes most of them at once.
     - name: unorouter.catalog

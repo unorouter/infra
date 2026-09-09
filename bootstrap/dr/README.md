@@ -64,11 +64,11 @@ It does NOT cover everything, and the difference matters:
 [grafana.unorouter.com](https://grafana.unorouter.com) -> firing alerts in Alertmanager -> then
 the CLI checks below. 15d retention, so post-mortems no longer need the box caught red-handed.
 
-Rules: `infra/monitoring/extras/rules-unorouter.yaml`, each annotated with the incident it
+Rules: `infra/monitoring/extras/alerting/rules-unorouter.yaml`, each annotated with the incident it
 exists for. Load-bearing wiring:
 
 - **etcd** needs `--etcd-expose-metrics=true` on every k3s server unit (else :2381 is
-  localhost-only). Targets are a STATIC IP list in `extras/scrape-etcd.yaml` -- **update on
+  localhost-only). Targets are a STATIC IP list in `extras/scrape/etcd.yaml` -- **update on
   every node swap** or etcd alerts go silently blind.
 - **Backup freshness** reads the CNPG `Backup` CRs via kube-state-metrics.
   `cnpg_collector_last_available_backup_timestamp` is permanently 0 with the Barman PLUGIN --
@@ -141,7 +141,7 @@ therefore easy to forget here. Replicate by hand, from `tofu/cloud-init-join.yam
   `INSTALL_K3S_VERSION` (`tofu/.env` TF_VAR_k3s_version -- must match the running fleet).
 - After start: `journalctl -u k3s | grep "NoSwap is set"` confirms pods cannot swap.
 - Hetzner auto-assigns the lowest free 10.100.1.x (recycles destroyed nodes' IPs). Keep it,
-  but it is why `monitoring/extras/scrape-etcd.yaml` must be edited in the same swap.
+  but it is why `monitoring/extras/scrape/etcd.yaml` must be edited in the same swap.
 
 1. **Preflight**: both primaries confirmed, argocd green, WAL archiving True, old node's disk
    fits the new type, ssh to spare ok (`ssh-keygen -R <ip>` first -- Hetzner recycles IPs).

@@ -12,7 +12,7 @@
 # stops syncing silently. Existing groups are unorouter.{memory,etcd,services,
 # backups,postgres,ingress,cluster} -- these use the newapi.security.* prefix.
 #
-# These depend on cnpg-security-queries.yaml being wired into the newapi-pg
+# These depend on scrape/cnpg-security-queries.yaml being wired into the newapi-pg
 # Cluster's monitoring.customQueriesConfigMap AND enablePodMonitor: true.
 #
 # METRIC NAMING: CNPG prefixes every custom-query metric with `cnpg_`, so the

@@ -21,7 +21,7 @@ alertmanager:
           resources:
             requests:
               storage: 2Gi
-    # Routing lives in the AlertmanagerConfig CRD (extras/alertmanager-config.yaml) rather
+    # Routing lives in the AlertmanagerConfig CRD (extras/alerting/alertmanager-config.yaml) rather
     # than an inline `config:` block: the CRD's discordConfigs.apiURL takes a Secret ref, so
     # the webhook URL stays out of git. Inline config only supports a literal webhook_url
     # (webhook_url_file is not in the discordConfig schema at v0.33.1).
@@ -62,7 +62,7 @@ grafana:
       mountPath: /etc/secrets/grafana-oidc
       readOnly: true
     # Password for the masked `reader` role, read via $__file{} by the NewAPI
-    # postgres datasource in extras/grafana-postgres-datasource.yaml.
+    # postgres datasource in extras/grafana/postgres-datasource.yaml.
     - name: grafana-pg-reader
       secretName: grafana-pg-reader
       mountPath: /etc/secrets/grafana-pg-reader
