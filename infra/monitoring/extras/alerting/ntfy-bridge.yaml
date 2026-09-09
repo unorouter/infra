@@ -44,13 +44,14 @@ data:
 
     // Alertmanager re-sends a whole group every group_interval while members keep arriving,
     // so one busy digest group posts the same lines many times. Post each alert once per
-    // status; an hour later (the repeat_interval of every route) it may show again.
+    // status AND per path: a critical alert reaches /discord and /alert as two deliveries of
+    // the same fingerprint, and a key without the path silenced every phone page.
     const seen = new Map();
-    function fresh(p) {
+    function fresh(p, path) {
       const now = Date.now();
       for (const [k, t] of seen) if (now - t > 3600e3) seen.delete(k);
       return (p.alerts ?? []).filter((a) => {
-        const k = `${a.fingerprint ?? a.labels?.alertname}:${a.status}`;
+        const k = `${path}:${a.fingerprint ?? a.labels?.alertname}:${a.status}`;
         if (seen.has(k)) return false;
         seen.set(k, now);
         return true;
@@ -113,7 +114,7 @@ data:
           const p = JSON.parse(body);
           const discord = req.url.startsWith("/discord");
           if (discord && !discordUrl) { res.writeHead(500); res.end("no DISCORD_WEBHOOK"); return; }
-          const alerts = fresh(p);
+          const alerts = fresh(p, discord ? "discord" : "alert");
           if (alerts.length === 0) { res.writeHead(200); res.end(); return; }
           const r = await (discord ? toDiscord(p, alerts) : toNtfy(p, alerts));
           // the one line of logging: which sink, which alert, and what it answered

@@ -507,6 +507,8 @@ data:
                 count_over_time(
                   {namespace="monitoring", app="canary-quarantine"}
                     |= "security.canary_workload"
+                    | regexp "SECURITY_EVIDENCE (?P<payload>.*)"
+                    | line_format "{{.payload}}"
                     | json
                     | outcome!=""
                   [5m]
