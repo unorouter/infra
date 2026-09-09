@@ -96,6 +96,10 @@ alloy:
       loki.process "pods" {
         forward_to = [loki.write.default.receiver]
         stage.cri {}
+        // the file source stamps the log path as a label; every rotation would be a new stream
+        stage.label_drop {
+          values = ["filename"]
+        }
         // Volume guardrails (drop cilium-agent, cloudflared debug, sample the gateway access log)
         // go here once the first day's bytes_rate per container is known.
       }
@@ -110,6 +114,9 @@ alloy:
 
       loki.process "audit" {
         forward_to = [loki.write.default.receiver]
+        stage.label_drop {
+          values = ["filename"]
+        }
         stage.json {
           expressions = { ts = "requestReceivedTimestamp" }
         }
