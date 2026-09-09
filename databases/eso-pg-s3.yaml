@@ -79,12 +79,12 @@ spec:
     - extract:
         key: newapi-pg-client-ca
 ---
-# Gateway auth pairs for barman (CNPG cannot send SSE-C; the s3-gateway adds it). Same shape
-# as the old R2 secrets so the ObjectStore s3Credentials keys stay unchanged.
+# The s3-gateway auth pair for barman (the gateway encrypts; CNPG talks plain S3 to it). Same
+# key names as the old per cluster secrets so the ObjectStore s3Credentials stay unchanged.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: newapi-pg-hz
+  name: s3gw
   namespace: databases
 spec:
   refreshInterval: 1h
@@ -92,25 +92,8 @@ spec:
     name: vault-backend
     kind: ClusterSecretStore
   target:
-    name: newapi-pg-hz
+    name: s3gw
     creationPolicy: Owner
   dataFrom:
     - extract:
-        key: s3gw-newapi-pg
----
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
-  name: bot-pg-hz
-  namespace: databases
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: bot-pg-hz
-    creationPolicy: Owner
-  dataFrom:
-    - extract:
-        key: s3gw-bot-pg
+        key: s3gw

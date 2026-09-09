@@ -33,6 +33,8 @@ alertmanager:
 grafana:
   nodeSelector:
     kubernetes.io/hostname: unorouter-node9
+  # Velero PV backup is opt in; dashboards come from git, this keeps user preferences and annotations.
+  podAnnotations: {backup.velero.io/backup-volumes: storage}
   # The chart ships 23 dashboards and has no per-dashboard switch. On a 3-node cluster
   # most are slices of the same metrics by namespace and workload, or cover components
   # this cluster does not run, and they buried the three UnoRouter dashboards in noise.

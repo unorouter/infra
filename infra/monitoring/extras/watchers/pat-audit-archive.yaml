@@ -21,15 +21,10 @@ data:
     import { createHash, createHmac } from "node:crypto";
 
     const db = new SQL(process.env.EVIDENCE_SQL_DSN!, { max: 1, connectionTimeout: 10 });
-    // Bun's S3Client cannot send SSE-C, and Hetzner Object Storage has no at-rest encryption,
-    // so the PUT and the readback GET are signed by hand (SigV4) with the three SSE-C headers.
+    // Signed by hand (SigV4) against the s3-gateway, which encrypts on the way to Hetzner; the
+    // readback GET after a refused PUT proves the locked object holds identical bytes.
     const endpoint = process.env.ARCHIVE_ENDPOINT!.replace(/\/$/, "");
     const host = new URL(endpoint).host;
-    const sse: Record<string, string> = {
-      "x-amz-server-side-encryption-customer-algorithm": "AES256",
-      "x-amz-server-side-encryption-customer-key": process.env.ARCHIVE_SSE_C_KEY_B64!,
-      "x-amz-server-side-encryption-customer-key-md5": process.env.ARCHIVE_SSE_C_KEY_MD5!,
-    };
     const hmac = (key: Buffer | string, msg: string) => createHmac("sha256", key).update(msg).digest();
     async function s3(method: "PUT" | "GET", key: string, body: string): Promise<Response> {
       const path = `/${process.env.ARCHIVE_BUCKET}/${key}`;
@@ -37,7 +32,7 @@ data:
       const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
       const day = stamp.slice(0, 8);
       const digest = createHash("sha256").update(body).digest("hex");
-      const headers: Record<string, string> = { host, "x-amz-content-sha256": digest, "x-amz-date": stamp, ...sse };
+      const headers: Record<string, string> = { host, "x-amz-content-sha256": digest, "x-amz-date": stamp };
       const names = Object.keys(headers).sort();
       const canonical = [method, path, "", ...names.map((n) => `${n}:${headers[n]}`), "", names.join(";"), digest].join("\n");
       const scope = `${day}/auto/s3/aws4_request`;
@@ -108,7 +103,7 @@ spec:
               command: [bun, /app/archive.ts]
               envFrom:
                 - secretRef: {name: evidence-pg}
-                - secretRef: {name: evidence-archive}
+                - secretRef: {name: logs-archive}
               securityContext:
                 readOnlyRootFilesystem: true
                 allowPrivilegeEscalation: false

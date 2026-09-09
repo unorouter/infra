@@ -1,33 +1,27 @@
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: evidence-archive
+  name: logs-archive
   namespace: monitoring
 spec:
   refreshInterval: 1h
   secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}
   target:
-    name: evidence-archive
+    name: logs-archive
     creationPolicy: Owner
     template:
       data:
-        # Hetzner Object Storage, bucket created with Object Lock (COMPLIANCE 30d) and a
-        # lifecycle expiry; the writers send SSE-C with the key from backup-encryption.
-        ARCHIVE_ENDPOINT: https://fsn1.your-objectstorage.com
-        ARCHIVE_BUCKET: unorouter-evidence
+        # Through the s3-gateway, which encrypts client side (rclone crypt) on the way to the
+        # Object Locked logs bucket (COMPLIANCE 30d, lifecycle expiry). Plain SigV4 to the gateway.
+        ARCHIVE_ENDPOINT: https://s3.unorouter.com
+        ARCHIVE_BUCKET: unorouter-logs
         ARCHIVE_ACCESS_KEY: "{{ .ak }}"
         ARCHIVE_SECRET_KEY: "{{ .sk }}"
-        ARCHIVE_SSE_C_KEY_B64: "{{ .kb }}"
-        ARCHIVE_SSE_C_KEY_MD5: "{{ .km }}"
   data:
     - secretKey: ak
-      remoteRef: { key: pg-s3, property: ACCESS_KEY_ID }
+      remoteRef: { key: s3gw, property: ACCESS_KEY_ID }
     - secretKey: sk
-      remoteRef: { key: pg-s3, property: ACCESS_SECRET_KEY }
-    - secretKey: kb
-      remoteRef: { key: backup-encryption, property: sse_c_key_b64 }
-    - secretKey: km
-      remoteRef: { key: backup-encryption, property: sse_c_key_md5_b64 }
+      remoteRef: { key: s3gw, property: ACCESS_SECRET_KEY }
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor

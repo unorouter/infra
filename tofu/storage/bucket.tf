@@ -1,5 +1,5 @@
-# Hetzner Object Storage has no at-rest encryption, so every writer sends SSE-C (directly, or
-# through the in-cluster s3-gateway for barman and Teleport). Object Lock can only be enabled
+# Hetzner Object Storage has no at-rest encryption; the in-cluster s3-gateway encrypts client
+# side (rclone crypt) for every writer that needs it. Object Lock can only be enabled
 # at creation and COMPLIANCE retention cannot be ended early: writers only insert, the bucket
 # lifecycle expires (set by CLI, the aws provider hangs on lifecycle PUT against RadosGW).
 # Velero is the one unlocked bucket: Kopia must delete session markers and rewrite indexes, so
@@ -54,6 +54,34 @@ resource "aws_s3_bucket_object_lock_configuration" "evidence" {
     }
   }
   depends_on = [aws_s3_bucket_versioning.evidence]
+}
+
+# Logs: audit streams, incidents, PAT archive, Teleport recordings. Replaces unorouter-evidence
+# (a locked bucket cannot be renamed); that one drains by lifecycle and leaves this file empty.
+resource "aws_s3_bucket" "logs" {
+  bucket              = "unorouter-logs"
+  object_lock_enabled = true
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "logs" {
+  bucket = aws_s3_bucket.logs.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_object_lock_configuration" "logs" {
+  bucket = aws_s3_bucket.logs.id
+  rule {
+    default_retention {
+      mode = "COMPLIANCE"
+      days = 30
+    }
+  }
+  depends_on = [aws_s3_bucket_versioning.logs]
 }
 
 resource "aws_s3_bucket" "velero" {

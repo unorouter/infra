@@ -1,11 +1,13 @@
 # s3-gateway: an in-cluster S3 endpoint (rclone serve s3) in front of Hetzner Object Storage.
-# Hetzner has no at-rest encryption, only SSE-C. barman (CNPG) and Teleport cannot send the
-# SSE-C headers themselves, so they talk plain S3 to this gateway and the gateway adds the key
-# on every request to Hetzner. Velero, the OpenBao snapshot job and the evidence writers send
-# SSE-C directly and do not use this.
+# Hetzner has no at-rest encryption. The gateway serves an rclone crypt remote layered over the
+# Hetzner remote: object content is encrypted here (XSalsa20-Poly1305, key from OpenBao
+# secret/backup-encryption), Hetzner never sees the key, and the ciphertext can be copied to any
+# provider as is. Every writer that needs encryption talks plain S3 to this gateway: barman
+# (CNPG), Teleport recordings, the log archivers. Velero (Kopia encrypts itself), the OpenBao
+# snapshot (barrier sealed) and Tofu state (client side) go to Hetzner directly.
 #
-# The backend remote is served at its root, so bucket names and prefixes are byte identical to
-# what the writers used before (s3://unorouter-backups/<prefix>).
+# Names are not encrypted (filename_encryption off, suffix none), so bucket names and prefixes
+# are byte identical to what the writers send and the lifecycle prefix rules keep working.
 #
 # --vfs-cache-mode writes is load bearing: in streaming mode serve s3 completes a multipart
 # upload by writing a temporary object and renaming it, which on S3 is a server side copy plus a
@@ -15,9 +17,9 @@
 # The cache is per pod, so every part of one upload must land on the same replica:
 # sessionAffinity on the Service.
 #
-# Auth: one --auth-key pair per writer (OpenBao secret/s3gw-<writer>). serve s3 has no per
-# bucket authorization, every valid pair reaches every bucket the backend credential can, which
-# is the posture the shared r2-backups credential had before.
+# Auth: one --auth-key pair shared by the in-cluster writers (OpenBao secret/s3gw). serve s3 has
+# no per bucket authorization anyway; the network policies below are the boundary and the locked
+# buckets refuse deletes regardless of the pair.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -35,8 +37,8 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
 ---
-# Hetzner credential, the SSE-C key and the writer auth pairs. The rclone remote "hz" is
-# configured entirely through RCLONE_CONFIG_HZ_* environment variables, no config file.
+# Hetzner credential, the crypt pair and the writer auth pair. Both rclone remotes ("hz" and the
+# crypt "cr" over it) are configured through RCLONE_CONFIG_* environment variables, no config file.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -54,32 +56,22 @@ spec:
       data:
         RCLONE_CONFIG_HZ_ACCESS_KEY_ID: "{{ .hz_ak }}"
         RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY: "{{ .hz_sk }}"
-        RCLONE_CONFIG_HZ_SSE_CUSTOMER_KEY_BASE64: "{{ .sse_key }}"
-        RCLONE_CONFIG_HZ_SSE_CUSTOMER_KEY_MD5: "{{ .sse_md5 }}"
-        AUTH_NEWAPI: "{{ .newapi_id }},{{ .newapi_secret }}"
-        AUTH_BOT: "{{ .bot_id }},{{ .bot_secret }}"
-        AUTH_TELEPORT: "{{ .teleport_id }},{{ .teleport_secret }}"
+        CRYPT_PASSWORD: "{{ .crypt_password }}"
+        CRYPT_SALT: "{{ .crypt_salt }}"
+        AUTH_KEY: "{{ .gw_id }},{{ .gw_secret }}"
   data:
     - secretKey: hz_ak
       remoteRef: { key: pg-s3, property: ACCESS_KEY_ID }
     - secretKey: hz_sk
       remoteRef: { key: pg-s3, property: ACCESS_SECRET_KEY }
-    - secretKey: sse_key
-      remoteRef: { key: backup-encryption, property: sse_c_key_b64 }
-    - secretKey: sse_md5
-      remoteRef: { key: backup-encryption, property: sse_c_key_md5_b64 }
-    - secretKey: newapi_id
-      remoteRef: { key: s3gw-newapi-pg, property: ACCESS_KEY_ID }
-    - secretKey: newapi_secret
-      remoteRef: { key: s3gw-newapi-pg, property: ACCESS_SECRET_KEY }
-    - secretKey: bot_id
-      remoteRef: { key: s3gw-bot-pg, property: ACCESS_KEY_ID }
-    - secretKey: bot_secret
-      remoteRef: { key: s3gw-bot-pg, property: ACCESS_SECRET_KEY }
-    - secretKey: teleport_id
-      remoteRef: { key: s3gw-teleport, property: ACCESS_KEY_ID }
-    - secretKey: teleport_secret
-      remoteRef: { key: s3gw-teleport, property: ACCESS_SECRET_KEY }
+    - secretKey: crypt_password
+      remoteRef: { key: backup-encryption, property: crypt_password }
+    - secretKey: crypt_salt
+      remoteRef: { key: backup-encryption, property: crypt_salt }
+    - secretKey: gw_id
+      remoteRef: { key: s3gw, property: ACCESS_KEY_ID }
+    - secretKey: gw_secret
+      remoteRef: { key: s3gw, property: ACCESS_SECRET_KEY }
 ---
 # In-cluster TLS: the nodes span three locations and Cilium runs without WireGuard, so base
 # backups must not cross the node network in the clear. Resolved to the Service by CoreDNS
@@ -130,6 +122,8 @@ spec:
   template:
     metadata:
       labels: {app: s3-gateway}
+      # The write cache is staging space, not data: Velero must not upload it.
+      annotations: {backup.velero.io/backup-volumes-excludes: "cache,tmp"}
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, runAsNonRoot: true}
@@ -148,9 +142,12 @@ spec:
             - sh
             - -c
             - >-
-              exec rclone serve s3 hz:
+              export RCLONE_CONFIG_CR_PASSWORD="$(rclone obscure "$CRYPT_PASSWORD")"
+              RCLONE_CONFIG_CR_PASSWORD2="$(rclone obscure "$CRYPT_SALT")";
+              unset CRYPT_PASSWORD CRYPT_SALT;
+              exec rclone serve s3 cr:
               --addr :8443 --cert /tls/tls.crt --key /tls/tls.key --min-tls-version tls1.2
-              --auth-key "$AUTH_NEWAPI" --auth-key "$AUTH_BOT" --auth-key "$AUTH_TELEPORT"
+              --auth-key "$AUTH_KEY"
               --vfs-cache-mode writes --cache-dir /cache --vfs-cache-max-size 30G
               --vfs-write-back 5s
               --s3-chunk-size 16M --s3-upload-concurrency 2 --multi-thread-streams 1
@@ -161,8 +158,12 @@ spec:
             - {name: RCLONE_CONFIG_HZ_PROVIDER, value: Ceph}
             - {name: RCLONE_CONFIG_HZ_ENDPOINT, value: https://fsn1.your-objectstorage.com}
             - {name: RCLONE_CONFIG_HZ_REGION, value: fsn1}
-            - {name: RCLONE_CONFIG_HZ_SSE_CUSTOMER_ALGORITHM, value: AES256}
             - {name: RCLONE_CONFIG_HZ_NO_CHECK_BUCKET, value: "true"}
+            - {name: RCLONE_CONFIG_CR_TYPE, value: crypt}
+            - {name: RCLONE_CONFIG_CR_REMOTE, value: "hz:"}
+            - {name: RCLONE_CONFIG_CR_FILENAME_ENCRYPTION, value: "off"}
+            - {name: RCLONE_CONFIG_CR_DIRECTORY_NAME_ENCRYPTION, value: "false"}
+            - {name: RCLONE_CONFIG_CR_SUFFIX, value: none}
             - {name: HOME, value: /tmp}
           envFrom:
             - secretRef: {name: s3-gateway}
@@ -284,6 +285,8 @@ spec:
         - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg}
         - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: bot-pg}
         - matchLabels: {io.kubernetes.pod.namespace: teleport, app.kubernetes.io/component: auth}
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: k8s-audit-watch}
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: pat-audit-archive}
       toPorts:
         - ports: [{port: "8443", protocol: TCP}]
     - fromEntities: [host]
@@ -366,7 +369,7 @@ spec:
           for: 5m
           labels: {severity: critical}
           annotations:
-            summary: "s3-gateway has no available replica: postgres WAL archiving and Teleport recording uploads are failing"
+            summary: "s3-gateway has no available replica: postgres WAL archiving, Teleport recordings and the log archivers are failing"
         - alert: S3GatewayDegraded
           expr: kube_statefulset_status_replicas_available{namespace="s3-gateway",statefulset="s3-gateway"} < 2
           for: 30m
