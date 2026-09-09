@@ -31,7 +31,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-77add6105cb5
+  name: k8s-audit-watch-4bce661beeef
   namespace: monitoring
 data:
   expected.json: |
@@ -223,6 +223,7 @@ data:
                 created REAL NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
               CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, created REAL NOT NULL);
               CREATE INDEX IF NOT EXISTS pending_delivery ON pending(created,id);
+              CREATE INDEX IF NOT EXISTS seen_created ON seen(created);
             ''')
             self.limit = limit
             self.backlog = {}
@@ -748,6 +749,7 @@ data:
         threading.Thread(target=watch_workloads, args=(state / 'evidence.sqlite',), daemon=True).start()
         server = http.server.ThreadingHTTPServer(('0.0.0.0', 9090), Metrics)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        pruned = 0
         while True:
             try:
                 files = sorted(Path(os.environ.get('AUDIT_DIR', '/audit')).glob('audit*.log*'), key=lambda p: p.stat().st_mtime)
@@ -777,8 +779,12 @@ data:
             METRICS['source_oldest_unread_timestamp_seconds'] = min(q.backlog.values(), default=0)
             n, size, oldest = q.db.execute('SELECT count(*),COALESCE(SUM(length(body)),0),MIN(created) FROM pending').fetchone()
             METRICS.update(queue_records=n, queue_bytes=size, oldest_pending_timestamp_seconds=oldest or 0, oldest_pending_seconds=time.time() - oldest if oldest else 0)
-            with q.db:
-                q.db.execute('DELETE FROM seen WHERE created < ?', (time.time() - 35 * 86400,))
+            # 35 days of ids is a few hundred thousand rows; pruning them every second was
+            # a full scan per poll and, after the gzip fix, the rest of this loop's CPU.
+            if time.time() - pruned > 3600:
+                with q.db:
+                    q.db.execute('DELETE FROM seen WHERE created < ?', (time.time() - 35 * 86400,))
+                pruned = time.time()
             time.sleep(1)
 
 
@@ -798,7 +804,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "77add6105cb50c28779d0e449405a3aa699b79fdccae6c3eab55daf00c0c05d0"
+        evidence.unorouter.com/code-sha256: "4bce661beeeff162f7cdbcc25de6ee9bc4969a1b9ec62f23554b29fdd619f36c"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -848,7 +854,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-77add6105cb5 }
+          configMap: { name: k8s-audit-watch-4bce661beeef }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
