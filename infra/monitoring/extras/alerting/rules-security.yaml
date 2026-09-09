@@ -415,12 +415,15 @@ spec:
           for: 2m
           labels: { severity: warning }
           annotations:
-            summary: "Card testing: {{ $value }} account(s) with 3+ checkouts in 15m and no success"
+            summary: "Card testing: {{ $value }} new account(s) with 5+ checkouts in 15m and no success"
             description: >-
               Someone is trying cards through the checkout. List them:
               SELECT user_id, count(*) FROM top_ups WHERE create_time > extract(epoch from now())::bigint - 900
-              GROUP BY user_id HAVING count(*) >= 3. Suspend the account, refund anything that
-              settled in the Creem dashboard before it becomes a chargeback (2026-09-09 Creem alert).
+              GROUP BY user_id HAVING count(*) >= 5. Before suspending, read the account: a
+              customer retrying a failing checkout shows varying amounts, a paid history and real
+              usage (user 50370 was disabled in error on 2026-09-09 fifteen minutes after paying).
+              A tester repeats one amount, never settles, never uses the product. Refund anything
+              that settled in the Creem dashboard before it becomes a chargeback.
         - alert: CardTestingSustained
           expr: >-
             cnpg_newapi_card_testing_checkouts_1h >= 15

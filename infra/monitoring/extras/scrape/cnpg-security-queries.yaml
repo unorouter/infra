@@ -817,18 +817,26 @@ data:
     # Card testing is almost entirely PENDING rows (a checkout per card tried), which the
     # velocity metric above never sees: it counts settled top-ups. 2026-09-09: Creem flagged
     # 31 cards from one identity; our side showed 12 accounts with 5+ checkouts and no
-    # success, bursts of 9 checkouts in 86 seconds.
+    # success, bursts of 9 checkouts in 86 seconds. A paying customer fighting a broken
+    # checkout looks the same for a few minutes (13 retries with varying amounts, then a
+    # settled $3) and was disabled on this metric alone: an account with ANY earlier settled
+    # top-up is excluded, and the bar is five, not three.
     newapi_card_testing:
       query: |
         SELECT
           (SELECT count(*)::float8 FROM (
-             SELECT user_id
-             FROM top_ups
-             WHERE payment_provider IN ('creem', 'stripe')
-               AND create_time > extract(epoch from now())::bigint - 900
-             GROUP BY user_id
-             HAVING count(*) >= 3
-                AND sum(CASE WHEN status = 'success' THEN 1 ELSE 0 END) = 0) b) AS burst_users,
+             SELECT t.user_id
+             FROM top_ups t
+             WHERE t.payment_provider IN ('creem', 'stripe')
+               AND t.create_time > extract(epoch from now())::bigint - 900
+               AND NOT EXISTS (
+                 SELECT 1 FROM top_ups p
+                 WHERE p.user_id = t.user_id
+                   AND p.status = 'success'
+                   AND p.complete_time < extract(epoch from now())::bigint - 900)
+             GROUP BY t.user_id
+             HAVING count(*) >= 5
+                AND sum(CASE WHEN t.status = 'success' THEN 1 ELSE 0 END) = 0) b) AS burst_users,
           (SELECT count(*)::float8 FROM top_ups
             WHERE payment_provider IN ('creem', 'stripe')
               AND create_time > extract(epoch from now())::bigint - 3600) AS checkouts_1h,
@@ -842,7 +850,7 @@ data:
       metrics:
         - burst_users:
             usage: "GAUGE"
-            description: "Accounts with three or more card checkouts in 15 minutes and none successful."
+            description: "Accounts with no earlier settled top-up, five or more card checkouts in 15 minutes and none successful."
         - checkouts_1h:
             usage: "GAUGE"
             description: "Card checkouts created in the last hour."
