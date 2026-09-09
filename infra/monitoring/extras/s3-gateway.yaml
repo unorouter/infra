@@ -153,7 +153,7 @@ spec:
               --auth-key "$AUTH_NEWAPI" --auth-key "$AUTH_BOT" --auth-key "$AUTH_TELEPORT"
               --vfs-cache-mode writes --cache-dir /cache --vfs-cache-max-size 30G
               --vfs-write-back 5s
-              --s3-chunk-size 16M --s3-upload-concurrency 4
+              --s3-chunk-size 16M --s3-upload-concurrency 2 --multi-thread-streams 1
               --rc --rc-addr :5572 --rc-enable-metrics --rc-no-auth
               -v
           env:
@@ -181,8 +181,10 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
           resources:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {memory: 1Gi}
+            # 1Gi was OOM killed on 2026-09-09 while newapi's 23 GB base backup streamed in; the
+            # write cache is on disk but the in flight parts and the upload streams are not.
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 4Gi}
           volumeMounts:
             - {name: tls, mountPath: /tls, readOnly: true}
             - {name: cache, mountPath: /cache}
