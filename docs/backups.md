@@ -32,6 +32,12 @@ VeraCrypt volume and in Bitwarden, nothing else to keep). Lose the pair, lose ev
   until the lifecycle expires them (31 days), then drop it. The pre 2026-09-09 SSE-C key is gone;
   objects from that era (`*-pg-v5`, `*-pg-v6`, `unorouter-evidence`) are unreadable noise until the
   lifecycle removes them on 2026-10-09, the plaintext copies are under `~/backups/`.
+- The archive in `unorouter-logs` is written by Vector (`infra/loki/values-vector.yaml`): unique keys
+  under `vector/<source>/node=<node>/date=<day>/`, gzip ndjson, never overwritten. The `streams/` and
+  `incidents/` prefixes stopped on 2026-09-09 and expire with the lifecycle.
+- Restore drill: `databases/dr-drill.yaml` restores bot-pg into a scratch cluster on the 1st of
+  each month and counts populated tables; `DRDrillStale` warns after 35 days without a success.
+  Run it by hand with `kubectl -n databases create job --from=cronjob/dr-drill dr-drill-manual`.
 - `kubectl -n velero get backup` hits CNPG's CRD, use `get backup.velero.io`.
 - After patching an S3 credential, restart every consumer that reads it as env, after the
   ExternalSecret synced.
@@ -54,7 +60,7 @@ export RCLONE_CONFIG_HZ_TYPE=s3 RCLONE_CONFIG_HZ_PROVIDER=Ceph RCLONE_CONFIG_HZ_
   RCLONE_CONFIG_CR_PASSWORD2=$(rclone obscure "$(sops -d --extract '["stringData"]["crypt_salt"]' secrets/backup-encryption.sops.yaml)")
 rclone copy cr:unorouter-backups/newapi-pg-v7/base/<latest>/ ./nb/ && tar -tzf ./nb/data.tar.gz | head   # PG_VERSION, base/
 rclone cat hz:unorouter-backups/newapi-pg-v7/base/<latest>/backup.info | head -c 32 | xxd              # ciphertext
-rclone copy cr:unorouter-logs/streams/<source>/<id>.json ./ && python3 -m json.tool ./<id>.json | head
+rclone copy cr:unorouter-logs/vector/k8s-audit/node=<node>/date=<day>/<obj>.ndjson.gz ./ && zcat ./<obj>.ndjson.gz | head -1 | python3 -m json.tool
 rclone copy cr:unorouter-logs/teleport-recordings/<sid>.tar ./ && tsh play --format=json ./<sid>.tar | head -c 300
 rclone copy hz:unorouter-velero/velero/backups/<latest>/ ./vb/ && tar -tzf ./vb/<latest>.tar.gz | grep -c secrets/   # 0
 rclone copyto hz:unorouter-backups/openbao-snapshots/latest.snap ./latest.snap && gzip -t ./latest.snap

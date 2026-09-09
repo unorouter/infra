@@ -2,8 +2,9 @@
 
 kube-prometheus-stack in `monitoring` (local-path PVCs; a PVC pinned to a dead node stays Pending
 forever, delete PVC+PV). `infra/monitoring/extras/` is applied recursively and grouped by job:
-`alerting/` (Alertmanager routing, rules, ntfy-bridge, edge-mode), `watchers/` (the security
-watchers and the evidence archive), `scrape/` (scrape targets, blackbox, the CNPG metric queries),
+`alerting/` (Alertmanager routing, rules, ntfy-bridge, the edge-mode and canary-quarantine
+responders), `pollers/` (CronJobs that read external APIs and SQL), `scrape/` (scrape targets,
+blackbox, the CNPG metric queries),
 `grafana/` (dashboards, datasource); network policies, secrets and the s3-gateway stay at the top.
 Rules: `alerting/rules-unorouter.yaml` (platform, each from a real incident) and
 `alerting/rules-security.yaml` (account takeover, chargebacks, guest abuse), the latter fed by SQL
@@ -18,27 +19,40 @@ over the gateway's audit rows in `scrape/cnpg-security-queries.yaml`.
   warning; the owner's own Teleport identity `0-don` gets the same alert as a 🔵 info digest,
   never a page). Every rule groups by the actor and strips source ports so one session is one
   alert; the matching log lines are one Explore click away in Grafana.
-- **Watchers** (`watchers/`) are what a log cannot express: `k8s-audit-watch` (DaemonSet) keeps
-  the system-identity allowlist (`expected.json`), the S3 evidence archive and canary containment;
-  `cloudflare-audit-watch` and `ghcr-visibility-watch` poll APIs; `image-secret-scan` scans image
-  layers. They speak only to Alertmanager through `watchers/watch-lib.yaml` (`notify.digest` for
-  a severity `info` digest, `notify.alert` for a critical finding). No watcher holds the Discord
-  webhook. A new platform component that reads Secrets belongs in `EXPECTED_IDENTITIES` or
-  `expected.json`, not in silence.
+- **Pollers** (`pollers/`) read what is not a log: `cloudflare-audit-watch` and
+  `ghcr-visibility-watch` poll APIs, `image-secret-scan` scans image layers, `pat-audit-archive`
+  copies PAT change rows from Postgres into the locked bucket. They speak only to Alertmanager
+  through `pollers/watch-lib.yaml` (`notify.digest` for a severity `info` digest, `notify.alert`
+  for a critical finding). No poller holds the Discord webhook.
+- **Responders** are Alertmanager webhook receivers, one Deployment each: `alerting/edge-mode.yaml`
+  flips the Cloudflare zone into attack mode on `CloudflaredStreamFlood`; `alerting/canary-quarantine.yaml`
+  gets every pod create in `services` (Loki rule `K8sCanaryWorkload`, severity none), checks the
+  pod spec for the honeytoken Secret `credential-canary-v1`, logs a `SECURITY_EVIDENCE` line and
+  posts its own critical alert, and with `AUTO_QUARANTINE=true` labels the pod and creates an
+  egress deny policy. Detect in a rule, route in Alertmanager, act in a responder: a new
+  automation is a rule plus a small Deployment, never a log tailer.
+- **System identities** have no allowlist file any more. The Loki rule `K8sSecretRead` (system
+  half) pages when a service account reads a Secret outside its own namespace; kubelets are bounded
+  by the apiserver's NodeRestriction and platform controllers are one regex in the rule. A new
+  cross namespace reader is one regex edit in `infra/loki/logql-rules.yaml`.
 - **Discord and the phone both go through `alerting/ntfy-bridge.yaml`** (`/discord`, `/alert`): embeds
   are coloured by severity (🔴 critical, 🟠 warning, 🔵 info, ✅ resolved), which Alertmanager's own
   Discord notifier cannot do. The bridge logs one line per delivery with the Discord status code.
-- **Logs**: Alloy (DaemonSet, `infra/loki/values-alloy.yaml`) tails `/var/log/pods` and the
-  kube-apiserver audit files on every node and pushes to Loki (single binary on node9,
-  `infra/loki/values-loki.yaml`, app `apps/loki.yaml`), which stores chunks and index through the
-  s3-gateway in `unorouter-loki`, 90 days, compactor owned. Labels are only `namespace, pod,
-  container, node, app, stream` (audit: `job="k8s-audit", node`); everything else is a query-time
-  parser. Grafana datasource `loki`; start with `{namespace="services"}` or
+- **Logs**: Vector (DaemonSet, `infra/loki/values-vector.yaml`) tails `/var/log/pods`, the
+  kube-apiserver audit files and the Hubble export on every node. Raw lines go to Loki (single
+  binary on node9, `infra/loki/values-loki.yaml`, app `apps/loki.yaml`), which stores chunks and
+  index through the s3-gateway in `unorouter-loki`, 90 days, compactor owned. A sanitized subset
+  (audit without URIs, bodies or annotations; Hubble flows; the openbao, gateway, bot, postgres
+  and teleport security records; the responder's lines) goes write once into the locked
+  `unorouter-logs` under `vector/<source>/node=<node>/date=<day>/`, acknowledged disk buffer on
+  `/var/lib/vector`. Labels are only `namespace, pod, container, node, app, stream` (audit:
+  `job="k8s-audit", node`); everything else is a query-time parser. Grafana datasource `loki`
+  and the Logs dashboard; start with `{namespace="services"}` or
   `{job="k8s-audit"} | json | verb="create"`. Gateway logs carry IPs and emails, so the 90 days are
   also the PII retention for logs; Grafana is the only reader and sits behind Teleport. The ruler
   runs the LogQL rules in `infra/loki/logql-rules.yaml` (ConfigMaps labelled `loki_rule: "1"`,
-  alerts to the same Alertmanager, same routes); they replaced the pgaudit, openbao and teleport
-  watchers and the human-actor half of the k8s audit watcher.
+  alerts to the same Alertmanager, same routes). Vector health is `infra/loki/rules.yaml`: the
+  archive sink's discards and errors page, the rest is Discord.
 - **Routing is drop-by-default**: root receiver `null`, only critical/warning reach Discord;
   critical also pages the phone via ntfy. Test with `amtool alert add` in the alertmanager pod.
 - **`CloudflaredStreamFlood`** is the L7 attack signal: pages, and fires `edge-mode`, which flips

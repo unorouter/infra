@@ -152,3 +152,26 @@ spec:
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: pat-audit-archive}
       toPorts:
         - ports: [{port: "5432", protocol: TCP}]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: pat-audit-archive
+  namespace: monitoring
+  labels: {release: kps}
+spec:
+  groups:
+    - name: pat-audit-archive
+      rules:
+        - alert: PATArchiveLag
+          expr: cnpg_newapi_pat_archive_oldest_seconds > 300
+          for: 1m
+          labels: {severity: critical}
+          annotations:
+            summary: Committed PAT changes have not reached the archive for five minutes
+        - alert: PATArchiveUnavailable
+          expr: absent(cnpg_newapi_pat_archive_pending)
+          for: 10m
+          labels: {severity: critical}
+          annotations:
+            summary: PAT archive queue monitoring is missing

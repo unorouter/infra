@@ -1,7 +1,8 @@
 # LogQL alert rules for Loki's ruler (the sidecar copies ConfigMaps labelled loki_rule=1 into
 # /rules/<tenant>; the tenant is "fake" because auth is off). Alerts go to the same
 # Alertmanager as Prometheus and follow its routes: severity info is the Discord digest.
-# Each group here replaces a log-tailing watcher from monitoring/extras/watchers.
+# Each group here replaced a log-tailing Python watcher; the pollers left in
+# monitoring/extras/pollers read HTTP APIs and SQL, not logs.
 apiVersion: v1
 kind: ConfigMap
 metadata:

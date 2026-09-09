@@ -57,11 +57,11 @@ spec:
         groupWait: 0s
         groupInterval: 1m
         repeatInterval: 2m
-      # Watchers speak only to Alertmanager (extras/watchers/watch-lib.yaml), so this is the single
+      # Pollers speak only to Alertmanager (extras/pollers/watch-lib.yaml), so this is the single
       # Discord path for them. Digests are severity info: Discord only, never [RESOLVED],
-      # one alert per distinct text so an unchanged window is not reposted. The evidence
-      # collector's alerts are critical but expire on their own 10 minutes after the last
-      # operation, so they take the same receiver; secret reads and execs page first.
+      # one alert per distinct text so an unchanged window is not reposted. The Loki k8s-audit
+      # rules keep the source label of the retired DaemonSet, so secret reads and execs page
+      # first and the rest takes the same digest receiver.
       - receiver: discord-digest
         matchers:
           - name: severity

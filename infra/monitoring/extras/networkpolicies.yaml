@@ -249,8 +249,8 @@ spec:
       toPorts:
         - ports: [{ port: "6443", protocol: TCP }]
 ---
-# Everything under the default ServiceAccount: blackbox, ntfy-bridge, edge-mode, the
-# k8s-audit-watch DaemonSet and the watcher CronJobs without their own account.
+# Everything under the default ServiceAccount: blackbox, ntfy-bridge, edge-mode and the
+# poller CronJobs without their own account.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -290,11 +290,6 @@ spec:
     - toEntities: [host, remote-node, kube-apiserver]
       toPorts:
         - ports: [{ port: "6443", protocol: TCP }]
-    # k8s-audit-watch archives through the s3-gateway (it encrypts on the way to Hetzner)
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
-      toPorts:
-        - ports: [{ port: "8443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]

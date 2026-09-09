@@ -333,7 +333,8 @@ event bump BOTH serverNames by one. **These manifests live in the APP repos now,
 `unorouter/new-api` -> `k8s/pg.yaml`, `unorouter/unorouter-bot` -> `k8s/pg.yaml`.
 Since 2026-09-09 both entries carry the same lineage while the cluster runs (`v7`; restore-from
 is only read at bootstrap), so on a DR create set `plugins[].serverName` to v{N+1} and leave
-`externalClusters[].serverName` at v{N}. Commit + push BEFORE the apply. Do NOT set `cnpg.io/skipEmptyWalArchiveCheck` (corrupts the
+`externalClusters[].serverName` at v{N}, and `LINEAGE` in `databases/dr-drill.yaml` follows the
+restore-from entry. Commit + push BEFORE the apply. Do NOT set `cnpg.io/skipEmptyWalArchiveCheck` (corrupts the
 source). Verify: `kubectl -n databases get cluster newapi-pg bot-pg` -> healthy.
 
 Recover-to-latest is default; for PITR set `bootstrap.recovery.recoveryTarget.targetTime`
