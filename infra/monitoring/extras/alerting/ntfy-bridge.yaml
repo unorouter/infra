@@ -42,22 +42,35 @@ data:
     const COLOR = { critical: 0xe74c3c, warning: 0xf39c12, info: 0x3498db, resolved: 0x2ecc71 };
     const EMOJI = { critical: "🔴", warning: "🟠", info: "🔵", resolved: "✅" };
 
-    function summaries(p) {
-      return (p.alerts ?? [])
-        .map((a) => a.annotations?.summary || a.labels?.alertname)
-        .filter(Boolean);
+    // Alertmanager re-sends a whole group every group_interval while members keep arriving,
+    // so one busy digest group posts the same lines many times. Post each alert once per
+    // status; an hour later (the repeat_interval of every route) it may show again.
+    const seen = new Map();
+    function fresh(p) {
+      const now = Date.now();
+      for (const [k, t] of seen) if (now - t > 3600e3) seen.delete(k);
+      return (p.alerts ?? []).filter((a) => {
+        const k = `${a.fingerprint ?? a.labels?.alertname}:${a.status}`;
+        if (seen.has(k)) return false;
+        seen.set(k, now);
+        return true;
+      });
     }
 
-    function describe(p) {
+    function summaries(alerts) {
+      return alerts.map((a) => a.annotations?.summary || a.labels?.alertname).filter(Boolean);
+    }
+
+    function describe(p, alerts) {
       const firing = p.status === "firing";
       const sev = firing ? (p.commonLabels?.severity ?? "info") : "resolved";
       const name = p.commonLabels?.alertname ?? "alert";
       const title = firing ? `${EMOJI[sev] ?? "🔵"} [${sev.toUpperCase()}] ${name}` : `${EMOJI.resolved} [RESOLVED] ${name}`;
-      return { firing, sev, name, title, lines: summaries(p) };
+      return { firing, sev, name, title, lines: summaries(alerts) };
     }
 
-    async function toNtfy(p) {
-      const d = describe(p);
+    async function toNtfy(p, alerts) {
+      const d = describe(p, alerts);
       return fetch(ntfyUrl, {
         method: "POST",
         headers: {
@@ -70,8 +83,8 @@ data:
       });
     }
 
-    async function toDiscord(p) {
-      const d = describe(p);
+    async function toDiscord(p, alerts) {
+      const d = describe(p, alerts);
       const labels = p.commonLabels ?? {};
       const footer = [labels.source, labels.node, labels.namespace].filter(Boolean).join(" · ");
       const body = d.lines.join("\n").slice(0, 3800);
@@ -98,7 +111,9 @@ data:
           const p = JSON.parse(body);
           const discord = req.url.startsWith("/discord");
           if (discord && !discordUrl) { res.writeHead(500); res.end("no DISCORD_WEBHOOK"); return; }
-          const r = await (discord ? toDiscord(p) : toNtfy(p));
+          const alerts = fresh(p);
+          if (alerts.length === 0) { res.writeHead(200); res.end(); return; }
+          const r = await (discord ? toDiscord(p, alerts) : toNtfy(p, alerts));
           // the one line of logging: which sink, which alert, and what it answered
           console.log(`${discord ? "discord" : "ntfy"} ${p.status} ${p.commonLabels?.severity ?? "-"} ${p.commonLabels?.alertname ?? "-"} -> ${r.status}`);
           res.writeHead(r.ok ? 200 : 502);
