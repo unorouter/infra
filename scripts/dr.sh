@@ -97,7 +97,7 @@ bao_read() {
 
 # Fallback only: cloud-init auto-bootstraps Cilium+ArgoCD. Use if that path fails.
 bootstrap() {
-  local cil=1.19.6
+  local cil=1.20.1
   helm repo add cilium https://helm.cilium.io/ >/dev/null 2>&1 || true
   helm upgrade --install cilium cilium/cilium --version "$cil" -n kube-system -f infra/cilium/values.yaml
   kubectl -n kube-system rollout status ds/cilium --timeout=180s

@@ -12,10 +12,12 @@ variable "ssh_public_key" {
   type = string
 }
 
+# The live version: Renovate tracks it, the DR rebuild path installs it. Running nodes are
+# upgraded by a binary swap, one server at a time (docs/versions.md).
 variable "k3s_version" {
-  description = "Pin like v1.33.4+k3s1; empty = stable channel"
+  description = "k3s install pin; empty = stable channel"
   type        = string
-  default     = ""
+  default     = "v1.36.4+k3s1"
 }
 
 # Defaults MUST match the live node1 (fsn1/cx33, see .env): location/node_type are NOT in
