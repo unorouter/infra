@@ -117,11 +117,20 @@ unseal() {
 # FULL auto DR restore of a fresh OpenBao: temp-init -> restore snapshot -> restart -> unseal.
 restore() {
   local snap=/tmp/openbao-latest.snap
-  echo ">> pull latest snapshot from R2 (credential = the synced Secret openbao/openbao-snapshot-s3)"
-  g() { kubectl -n openbao get secret openbao-snapshot-s3 -o jsonpath="{.data.$1}" | base64 -d; }
-  RCLONE_CONFIG_R2_TYPE=s3 RCLONE_CONFIG_R2_PROVIDER=Cloudflare RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true \
-  RCLONE_CONFIG_R2_ACCESS_KEY_ID="$(g ACCESS_KEY_ID)" RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$(g ACCESS_SECRET_KEY)" \
-  RCLONE_CONFIG_R2_ENDPOINT="$(g ENDPOINT)" rclone copyto "r2:$(g BUCKET)/openbao-snapshots/latest.snap" "$snap"
+  # Hetzner Object Storage, SSE-C. OpenBao does not exist yet at this point, so the credential
+  # comes from tofu/.env (the same Hetzner project key) and the SSE-C key from the break-glass
+  # SOPS file, never from a live Secret.
+  echo ">> pull latest snapshot from Hetzner (tofu/.env credential, SSE-C key from secrets/backup-encryption.sops.yaml)"
+  local ak sk kb km
+  ak=$(grep -E '^export AWS_ACCESS_KEY_ID=' tofu/.env | cut -d= -f2-); sk=$(grep -E '^export AWS_SECRET_ACCESS_KEY=' tofu/.env | cut -d= -f2-)
+  kb=$(sops -d --extract '["stringData"]["sse_c_key_b64"]' secrets/backup-encryption.sops.yaml)
+  km=$(sops -d --extract '["stringData"]["sse_c_key_md5_b64"]' secrets/backup-encryption.sops.yaml)
+  [ -n "$ak" ] && [ -n "$kb" ] || { echo "!! need tofu/.env AWS_* and the break-glass age key for secrets/backup-encryption.sops.yaml" >&2; exit 1; }
+  RCLONE_CONFIG_HZ_TYPE=s3 RCLONE_CONFIG_HZ_PROVIDER=Ceph RCLONE_CONFIG_HZ_NO_CHECK_BUCKET=true RCLONE_CONFIG_HZ_REGION=fsn1 \
+  RCLONE_CONFIG_HZ_ENDPOINT=https://fsn1.your-objectstorage.com \
+  RCLONE_CONFIG_HZ_ACCESS_KEY_ID="$ak" RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY="$sk" \
+  RCLONE_CONFIG_HZ_SSE_CUSTOMER_ALGORITHM=AES256 RCLONE_CONFIG_HZ_SSE_CUSTOMER_KEY_BASE64="$kb" RCLONE_CONFIG_HZ_SSE_CUSTOMER_KEY_MD5="$km" \
+  rclone copyto "hz:unorouter-backups/openbao-snapshots/latest.snap" "$snap"
   gzip -t "$snap" || { echo "!! $snap is not a valid gzip snapshot" >&2; exit 1; }
   # a truncated/error-body snapshot restored with -force would destroy the vault; real
   # snapshots run ~90KB, an OpenBao JSON error is <1KB
