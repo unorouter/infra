@@ -1,4 +1,4 @@
-# Velero: catch-all cluster backup (PVCs + k8s resource state) -> Hetzner S3.
+# Velero: catch-all cluster backup (PVCs + k8s resource state) -> Hetzner Object Storage.
 # Fills the gap GitOps + CNPG/OpenBao snapshots don't cover (arbitrary PVC data, namespace
 # state, dynamically-created resources). node-agent (Kopia) does file-level PV backup.
 initContainers:
@@ -16,19 +16,28 @@ configuration:
   backupStorageLocation:
     - name: default
       provider: aws
-      # Cloudflare R2 (encrypted at rest). Hetzner Object Storage offered no usable
-      # encryption and the Kopia repositories there were initialised with Velero's
-      # public default password; the move gives fresh repositories keyed by the
-      # velero-repo-credentials secret (OpenBao secret/velero). Old data stays on
-      # Hetzner under velero/ until its 14-day TTL is out.
-      bucket: unorouter-backups
+      # Hetzner Object Storage has no at-rest encryption: the resource tarballs go up with
+      # SSE-C (customerKeyEncryptionFile, key from OpenBao secret/backup-encryption) and PV
+      # data is encrypted by Kopia with the velero-repo-credentials password. Own bucket
+      # because Kopia must delete and rewrite; versioning plus a 14 day noncurrent expiry
+      # is its protection instead of Object Lock. Fresh repositories from 2026-09-09.
+      bucket: unorouter-velero
       prefix: velero
       config:
-        region: auto
+        region: fsn1
         s3ForcePathStyle: "true"
-        s3Url: https://7dad953fa57f079bfec11d3db10bc18a.r2.cloudflarestorage.com
+        s3Url: https://fsn1.your-objectstorage.com
         checksumAlgorithm: ""
+        customerKeyEncryptionFile: /credentials/sse-c/customer-key
   volumeSnapshotLocation: []       # local-path has no CSI snapshots; use file-level (Kopia) instead
+
+extraVolumes:
+  - name: sse-c
+    secret: {secretName: velero-sse-c}
+extraVolumeMounts:
+  - name: sse-c
+    mountPath: /credentials/sse-c
+    readOnly: true
 
 # node-agent = Kopia file-level PV backup (local-path has no CSI snapshots)
 deployNodeAgent: true
