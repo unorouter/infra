@@ -21,7 +21,7 @@ kubectl get nodes
 | [Monitoring](docs/monitoring.md) | rules, watchers, what pages |
 | [Cloudflare edge](docs/edge.md) | rulesets, attack mode |
 | [Backups](docs/backups.md) | Postgres PITR, Velero, OpenBao snapshots |
-| [Pinned versions](docs/versions.md) | what to bump and where |
+| [Upgrading](docs/versions.md) | Renovate holds the index, the steps it cannot take |
 | [Cluster operations](docs/cluster.md) | tofu, DNS, node disk, non-negotiable gotchas |
 | [DR runbook](bootstrap/dr/README.md) | rebuild from nothing |
 | [incidents/](incidents/) | post-mortems |

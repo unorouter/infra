@@ -1,23 +1,31 @@
-# Pinned versions
+# Upgrading
 
-Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest | jq .tag_name`.
+The index of every pin (charts in `apps/`, images in `infra/` and `databases/`, tofu providers,
+the cloud-init HelmChart CRs, k3s, the DR templates) is the
+[Dependency dashboard](https://github.com/unorouter/infra/issues?q=is%3Aissue+is%3Aopen+Dependency+dashboard)
+issue Renovate keeps current. The policy is `renovate.json`:
 
-| Component | Pinned | Where |
-| --- | --- | --- |
-| k3s | v1.36.4+k3s1 | node binary swap, one server at a time |
-| hcloud tofu provider | 1.66.1 | tofu/providers.tf |
-| Cilium | 1.20.1 | live HelmChart CR `cilium` in kube-system + cloud-init |
-| cert-manager | v1.21.1 | infra/cert-manager |
-| CNPG operator / Barman plugin | 1.30.0 / 0.15.0 | infra/cnpg-operator |
-| CNPG Postgres | newapi 15, bot 18 | databases/{newapi,bot}-pg |
-| OpenBao | chart 0.29.4 (app 2.6.2) | apps/openbao.yaml; sts is OnDelete, delete the pod then unseal (3 of 5) |
-| ArgoCD | 3.5.2 (chart 10.7.1) | live HelmChart CR `argo-cd` in kube-system + cloud-init |
-| ESO | 2.10.0 | helm --version |
-| cloudflared | 2026.8.3 | apps/cloudflared.yaml |
-| Teleport (+ kube-agent) | 18.10.1 | apps/teleport.yaml |
-| Velero | 12.1.0 + aws-plugin 1.12.1 | apps/velero.yaml |
-| dex | v2.45.1 | cluster OIDC IdP |
-| kube-prometheus-stack | 88.6.4 | apps/monitoring.yaml |
-| blackbox-exporter | v0.28.0 | infra/monitoring/extras/scrape/blackbox.yaml |
-| Loki | chart 7.3.0 (app 3.6.12) | apps/loki.yaml, infra/loki/values-loki.yaml |
-| Vector | chart 0.58.0 (app 0.58.0) | apps/loki.yaml, infra/loki/values-vector.yaml |
+- Patch and minor of images and of charts that roll without an operator step merge to `main`
+  before 06:00 on Mondays, seven days after the release. ArgoCD rolls the commit like any push.
+- Everything else (majors, OpenBao, Teleport, Cilium, ArgoCD, k3s, k0s, the operators' minors,
+  tofu providers) waits in the dashboard until its box is ticked. A tick merges it to `main` on the
+  next Renovate run, within the hour.
+- Renovate never opens a PR. If it ever does (a branch it cannot rebase), merge or close it the
+  same day.
+- A bump that misbehaves: `git revert` it, then pin the dependency back in `renovate.json`
+  with a `matchPackageNames` plus `allowedVersions` rule so the same version is not offered again.
+
+## Steps Renovate cannot take
+
+- **k3s**: the pin in `tofu/variables.tf` is the DR rebuild version only. Running nodes are
+  upgraded by swapping the binary, one server at a time, then bump the pin.
+- **Cilium and ArgoCD**: the live HelmChart CRs exist only in the cluster. Patch the live CR AND
+  accept the bump of `tofu/cloud-init.yaml.tftpl`, `bootstrap/k0s/k0sctl.tmpl.yaml` and
+  `scripts/dr.sh` (grouped, one tick). See [cluster.md](cluster.md).
+- **OpenBao**: the StatefulSet is `OnDelete`. After the merge delete the pod, then unseal (3 of 5).
+- **Teleport**: the auth server chart and the kube agent chart are one group; the auth server
+  rolls first, agents reconnect.
+- **tofu providers**: the constraint and `.terraform.lock.hcl` change together; run
+  `tofu init -upgrade` and `tofu plan` from `tofu/` and `tofu/storage/` before trusting the next apply.
+- **Operators (cert-manager, CNPG, Barman plugin)**: read the release notes for CRD changes
+  before ticking a minor; a patch merges on its own.

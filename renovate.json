@@ -1,0 +1,284 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Weekly dependency bumps, never a PR. Patch and minor of images and charts merge straight to main in the Monday window (no CI here, ArgoCD rolls the commit). Everything else waits in the Dependency dashboard issue; ticking its box merges it to main on the next run.",
+  "extends": [
+    "config:best-practices",
+    ":disableRateLimiting",
+    ":semanticCommitsDisabled"
+  ],
+  "timezone": "Europe/Berlin",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "ignoreTests": true,
+  "automerge": true,
+  "automergeType": "branch",
+  "automergeSchedule": [
+    "at any time"
+  ],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Dependency dashboard",
+  "dependencyDashboardApproval": true,
+  "minimumReleaseAge": "7 days",
+  "pinDigests": false,
+  "commitMessageAction": "bump",
+  "commitMessageTopic": "{{depName}}",
+  "commitMessageExtra": "to {{newVersion}}",
+  "argocd": {
+    "managerFilePatterns": [
+      "/^apps/.+\\.yaml$/"
+    ]
+  },
+  "kubernetes": {
+    "managerFilePatterns": [
+      "/^(infra|databases)/.+\\.yaml$/"
+    ]
+  },
+  "helm-values": {
+    "managerFilePatterns": [
+      "/^infra/.+/values.*\\.yaml$/"
+    ]
+  },
+  "terraform": {
+    "managerFilePatterns": [
+      "/^tofu/.+\\.tf$/"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Noise: git branch sources, apiVersion bumps, the tofu binary constraint, the whoami digest",
+      "matchDatasources": [
+        "git-tags",
+        "kubernetes-api"
+      ],
+      "enabled": false
+    },
+    {
+      "matchPackageNames": [
+        "hashicorp/terraform",
+        "traefik/whoami"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Images: patch and minor merge on schedule",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "matchPackageNames": [
+        "!/openbao\\/openbao$/",
+        "!ghcr.io/cloudnative-pg/postgresql"
+      ],
+      "dependencyDashboardApproval": false
+    },
+    {
+      "description": "Charts that roll without an operator step: patch and minor merge on schedule",
+      "matchDatasources": [
+        "helm"
+      ],
+      "matchPackageNames": [
+        "loki",
+        "vector",
+        "kube-prometheus-stack",
+        "external-secrets",
+        "velero"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "dependencyDashboardApproval": false
+    },
+    {
+      "description": "Operators from release manifests: patch merges, minor and major wait",
+      "matchDatasources": [
+        "github-releases"
+      ],
+      "matchPackageNames": [
+        "cert-manager/cert-manager",
+        "cloudnative-pg/cloudnative-pg",
+        "cloudnative-pg/plugin-barman-cloud"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "dependencyDashboardApproval": false
+    },
+    {
+      "description": "OpenBao: the StatefulSet is OnDelete, delete the pod and unseal by hand",
+      "matchPackageNames": [
+        "openbao",
+        "/openbao\\/openbao$/"
+      ],
+      "groupName": "openbao"
+    },
+    {
+      "description": "Teleport: auth server before the kube agent, one version",
+      "matchPackageNames": [
+        "teleport-cluster",
+        "teleport-kube-agent"
+      ],
+      "groupName": "teleport"
+    },
+    {
+      "description": "Cilium lives in a live HelmChart CR plus three DR copies",
+      "matchPackageNames": [
+        "cilium"
+      ],
+      "groupName": "cilium"
+    },
+    {
+      "description": "ArgoCD chart in the live HelmChart CR plus the DR copies",
+      "matchPackageNames": [
+        "argo-cd"
+      ],
+      "groupName": "argo-cd chart"
+    },
+    {
+      "description": "tofu providers: bump the constraint and the lock together, then tofu init -upgrade and plan",
+      "matchManagers": [
+        "terraform"
+      ],
+      "rangeStrategy": "bump",
+      "groupName": "tofu providers"
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "k3s HelmChart CRs in cloud-init (Cilium, ArgoCD)",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^tofu/cloud-init\\.yaml\\.tftpl$/"
+      ],
+      "matchStrings": [
+        "repo: (?<registryUrl>\\S+)\\n\\s+chart: (?<depName>\\S+)\\n\\s+version: (?<currentValue>[\\d.]+)"
+      ],
+      "datasourceTemplate": "helm"
+    },
+    {
+      "description": "k0s DR template charts",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^bootstrap/k0s/k0sctl\\.tmpl\\.yaml$/"
+      ],
+      "matchStrings": [
+        "chartname: cilium/cilium\\n\\s+version: \"(?<currentValue>[\\d.]+)\""
+      ],
+      "depNameTemplate": "cilium",
+      "registryUrlTemplate": "https://helm.cilium.io",
+      "datasourceTemplate": "helm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^bootstrap/k0s/k0sctl\\.tmpl\\.yaml$/"
+      ],
+      "matchStrings": [
+        "chartname: argo/argo-cd\\n\\s+version: \"(?<currentValue>[\\d.]+)\""
+      ],
+      "depNameTemplate": "argo-cd",
+      "registryUrlTemplate": "https://argoproj.github.io/argo-helm",
+      "datasourceTemplate": "helm"
+    },
+    {
+      "description": "DR fallback Cilium in scripts/dr.sh",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^scripts/dr\\.sh$/"
+      ],
+      "matchStrings": [
+        "local cil=(?<currentValue>[\\d.]+)"
+      ],
+      "depNameTemplate": "cilium",
+      "registryUrlTemplate": "https://helm.cilium.io",
+      "datasourceTemplate": "helm"
+    },
+    {
+      "description": "k3s pin, stable channel only",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^tofu/variables\\.tf$/"
+      ],
+      "matchStrings": [
+        "variable \"k3s_version\"[\\s\\S]*?default\\s*=\\s*\"(?<currentValue>v[\\d.]+\\+k3s\\d+)\""
+      ],
+      "depNameTemplate": "k3s",
+      "datasourceTemplate": "custom.k3s",
+      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(?<compatibility>\\+k3s)(?<build>\\d+)$"
+    },
+    {
+      "description": "k0s version in the DR template",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^bootstrap/k0s/k0sctl\\.tmpl\\.yaml$/"
+      ],
+      "matchStrings": [
+        "version: (?<currentValue>v[\\d.]+\\+k0s\\.\\d+)"
+      ],
+      "depNameTemplate": "k0sproject/k0s",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(?<compatibility>\\+k0s)\\.(?<build>\\d+)$"
+    },
+    {
+      "description": "Operator manifests pinned by release URL (version once in the URL)",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^infra/(cert-manager|cnpg-operator)/kustomization\\.yaml$/"
+      ],
+      "matchStrings": [
+        "https://github\\.com/(?<depName>cert-manager/cert-manager|cloudnative-pg/plugin-barman-cloud)/releases/download/(?<currentValue>v[\\d.]+)/"
+      ],
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "description": "CNPG operator manifest, the version appears twice in the URL",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^infra/cnpg-operator/kustomization\\.yaml$/"
+      ],
+      "matchStrings": [
+        "https://github\\.com/(?<depName>cloudnative-pg/cloudnative-pg)/releases/download/(?<currentValue>v[\\d.]+)/cnpg-[\\d.]+\\.yaml"
+      ],
+      "autoReplaceStringTemplate": "https://github.com/{{{depName}}}/releases/download/{{{newValue}}}/cnpg-{{{newVersion}}}.yaml",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "description": "ArgoCD install manifest for the DR bootstrap",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^bootstrap/argocd/kustomization\\.yaml$/"
+      ],
+      "matchStrings": [
+        "raw\\.githubusercontent\\.com/argoproj/argo-cd/(?<currentValue>v[\\d.]+)/"
+      ],
+      "depNameTemplate": "argoproj/argo-cd",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "description": "CNPG Cluster imageName",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^databases/.+\\.yaml$/"
+      ],
+      "matchStrings": [
+        "imageName: (?<depName>[^:\\s]+):(?<currentValue>[^\\s]+)"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "customDatasources": {
+    "k3s": {
+      "defaultRegistryUrlTemplate": "https://update.k3s.io/v1-release/channels",
+      "transformTemplates": [
+        "{\"releases\":[{\"version\": $.(data[id = 'stable'].latest),\"sourceUrl\":\"https://github.com/k3s-io/k3s\",\"changelogUrl\":$join([\"https://github.com/k3s-io/k3s/releases/tag/\",$.(data[id = 'stable'].latest)])}]}"
+      ]
+    }
+  }
+}

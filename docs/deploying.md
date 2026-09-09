@@ -12,6 +12,8 @@
    <sha>` pin commit by `unorouter-ci`; ArgoCD rolls it in 10 to 20 min). Copy the workflow from
    new-api and keep `paths-ignore` on `k8s/**` and `**.md` so pins and docs do not rebuild.
 
+- **Commits by `renovate[bot]` are the weekly dependency bumps** (`renovate.json`, policy in
+  [versions.md](versions.md)); ArgoCD rolls them like any push, `git revert` undoes one.
 - **Pin images to a git SHA, never `:latest`**: a floating tag changes no manifest, ArgoCD sees
   no diff, nothing deploys.
 - **No build secrets in GitHub.** Only `unorouter` needs any (Next.js inlines them): the job
