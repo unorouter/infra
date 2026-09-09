@@ -14,16 +14,16 @@ Losing a node loses those PVs; everything below is how they come back.
 ## Rules that hold in every scenario
 
 - One node per tofu apply, plan read, exactly one destroy. A both-nodes `-replace` cost 34
-  minutes of database writes (`incidents/2026-07-23-quorum-loss.md`).
+  minutes of database writes on 2026-07-23.
 - Check `kubectl -n databases get cluster` for the primaries before any node surgery; drills and
-  failovers move them, and a raw `status.targetPrimary` patch is never the right tool
-  (`incidents/2026-09-02-primary-moves.md`).
+  failovers move them. A raw `status.targetPrimary` patch is never the right tool: eight manual
+  primary moves in two hours on 2026-09-02, `kubectl cnpg reload` was what that session wanted.
 - Memory: limits only on the revenue services, none on Postgres, Prometheus, etcd and the
   platform (they cache on purpose). Nodes carry 4G host swap that pods cannot use
   (`fail-swap-on=false` with kubelet `NoSwap`), confirm after a k3s restart with
   `journalctl -u k3s | grep "NoSwap is set"`.
-- Liveness probes are `tcpSocket` only; killing a pod never fixes a slow dependency
-  (`incidents/2026-07-23-frontend-crashloop.md`).
+- Liveness probes are `tcpSocket` only; killing a pod never fixes a slow dependency (a probe
+  on a hanging health endpoint kept the frontend down for eight hours on 2026-07-23).
 - Node names are cattle: k3s bakes the name at registration, a replacement takes the next number.
 
 ## Rebuild from total loss
