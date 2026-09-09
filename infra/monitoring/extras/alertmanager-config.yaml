@@ -44,6 +44,23 @@ spec:
         groupInterval: 1m
         repeatInterval: 10m
         continue: true
+      # The evidence collector posts its own Discord message with the evidence ids, so
+      # relaying its alerts through the discord receiver printed every operation twice
+      # and a third time as [RESOLVED] when the 10 minute endsAt passed. Only the phone
+      # sees them, and only the two that already page below.
+      - receiver: ntfy-evidence
+        matchers:
+          - name: source
+            value: k8s-audit-watch
+          - name: alertname
+            matchType: "=~"
+            value: "^(K8sSecretRead|K8sPodExec)$"
+        groupWait: 10s
+        repeatInterval: 1h
+      - receiver: "null"
+        matchers:
+          - name: source
+            value: k8s-audit-watch
       # critical fans out to BOTH discord (continue: true falls through) and ntfy, which
       # makes the phone ring. Discord alone failed 2026-08-12: the API degraded for 2h
       # during Korea business hours (= our night) before anyone saw the channel.
@@ -108,6 +125,12 @@ spec:
       webhookConfigs:
         - url: http://ntfy-bridge.monitoring.svc:8080/alert
           sendResolved: true
+    # evidence alerts expire on their own 10 minutes after the last operation; that
+    # expiry is not news.
+    - name: ntfy-evidence
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/alert
+          sendResolved: false
     - name: discord
       discordConfigs:
         - apiURL:

@@ -31,7 +31,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-4bce661beeef
+  name: k8s-audit-watch-62c22a31cc74
   namespace: monitoring
 data:
   expected.json: |
@@ -87,6 +87,10 @@ data:
         if len(parts) != 4 or parts[2] != 'F':
             return {'collectionGap': 'partial_or_invalid_cri_record'}
         stamp, stream, _, payload = parts
+        # The gateway writes hundreds of lines a second and only security.* events are
+        # kept; a substring test is far cheaper than parsing each line's JSON.
+        if source.startswith(('gateway-', 'bot-')) and 'security.' not in payload:
+            return None
         result = {'timestamp': stamp, 'stream': stream}
         marker = 'SECURITY_EVIDENCE '
         if marker in payload:
@@ -227,6 +231,7 @@ data:
             ''')
             self.limit = limit
             self.backlog = {}
+            self.drained = {}
             with self.db:
                 self.db.execute("INSERT OR IGNORE INTO state VALUES ('started', ?)", (str(time.time()),))
 
@@ -278,6 +283,10 @@ data:
             # this DaemonSet used. Once read to its end it is only opened again if the
             # inode was reused for different bytes.
             if path.suffix == '.gz' and self.state(key + ':eof') == [stat.st_size, stat.st_mtime_ns]:
+                return 0
+            # Most files are idle on any given second. Reopening, seeking and committing a
+            # checkpoint for each of them every poll was the bulk of what this loop did.
+            if self.drained.get(key) == [stat.st_size, stat.st_mtime_ns]:
                 return 0
             pos = self.state(key, 0)
             entries = []
@@ -366,10 +375,12 @@ data:
             if partial:
                 pos = partial_pos
             self.enqueue(entries, key, pos)
-            if path.suffix == '.gz' and not next_line and not partial:
-                with self.db:
-                    self.db.execute('INSERT OR REPLACE INTO state VALUES (?,?)',
-                                    (key + ':eof', json.dumps([stat.st_size, stat.st_mtime_ns])))
+            if not next_line and not partial:
+                self.drained[key] = [stat.st_size, stat.st_mtime_ns]
+                if path.suffix == '.gz':
+                    with self.db:
+                        self.db.execute('INSERT OR REPLACE INTO state VALUES (?,?)',
+                                        (key + ':eof', json.dumps([stat.st_size, stat.st_mtime_ns])))
             for reason in (e['event'].get('collectionGap') for e in entries):
                 if reason:
                     METRICS['gaps_total'] += 1
@@ -804,7 +815,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "4bce661beeeff162f7cdbcc25de6ee9bc4969a1b9ec62f23554b29fdd619f36c"
+        evidence.unorouter.com/code-sha256: "62c22a31cc74a1fabaf14adb2e69bcd903f7b36fff55ded72be80da5cf5ff201"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -854,7 +865,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-4bce661beeef }
+          configMap: { name: k8s-audit-watch-62c22a31cc74 }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
