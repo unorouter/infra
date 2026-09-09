@@ -441,24 +441,10 @@ spec:
     # 2026-09-07: option maps rewritten from an empty base while the gateway rolled.
     # Channels and abilities stayed intact, so the site showed 30 models and 0 free
     # for two hours with no alert. Series come from extras/scrape/cnpg-catalog-queries.yaml.
-    # Both tiers are compared to their own 6h high; the sync adds and removes a few
-    # lanes per run, a wipe removes most of them at once.
+    # An absolute floor per tier, not a relative drop: the sync adds and removes lanes
+    # every run (free swung 130 to 104 on 2026-09-09 with nothing wrong), a wipe goes to 0.
     - name: unorouter.catalog
       rules:
-        - alert: CatalogModelsGone
-          expr: >-
-            max by (tier) (cnpg_newapi_catalog_models_visible)
-              < 0.7 * max by (tier) (max_over_time(cnpg_newapi_catalog_models_visible[6h] offset 10m))
-          for: 3m
-          labels: { severity: critical }
-          annotations:
-            summary: "{{ $labels.tier }} models visible to users dropped to {{ $value }}"
-            description: >-
-              Fewer than 70% of the {{ $labels.tier }} models seen in the last 6h are still
-              exposed. If cnpg_newapi_catalog_models_enabled is unchanged the abilities are
-              fine and the option maps lost groups: restore AutoGroups, UserUsableGroups and
-              GroupRatio from the newest _bak_* options table or the last dump, then check
-              which sync Job wrote last (`kubectl -n services get jobs`).
         - alert: CatalogModelsBelowFloor
           expr: max by (tier) (cnpg_newapi_catalog_models_visible) < 50
           for: 3m
@@ -466,8 +452,12 @@ spec:
           annotations:
             summary: "only {{ $value }} {{ $labels.tier }} models visible (floor 50)"
             description: >-
-              Absolute floor for either tier; normal is 130 free and 114 paid. Catches a wipe
-              that happened more than 6h ago, where the relative rule no longer has a baseline.
+              Absolute floor for either tier; normal is 110 to 130 free and 114 paid, and the
+              free count moves with provider lanes, so only a wipe counts. If
+              cnpg_newapi_catalog_models_enabled is unchanged the abilities are fine and the
+              option maps lost groups: restore AutoGroups, UserUsableGroups and GroupRatio from
+              the newest _bak_* options table or the last dump, then check which sync Job wrote
+              last (`kubectl -n services get jobs`).
         - alert: CatalogHiddenByOptions
           expr: >-
             max by (tier) (cnpg_newapi_catalog_models_visible)
