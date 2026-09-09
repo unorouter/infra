@@ -55,6 +55,5 @@ Images are the only reclaimable chunk; the rest of the 150G root is live local-p
   source IP and a removal step.
 - Org hardening that must stay: base repo permission `none`, member repo creation OFF (the
   ApplicationSet deploys any org repo with `k8s/`), contributions via fork PRs, two org owners.
-- Leftover node state from retired agents, safe to `rm -rf` on each node: `/var/lib/alloy` (Alloy
-  positions) and `/var/lib/unorouter-evidence` (the k8s-audit-watch sqlite queue). Vector keeps its
-  checkpoints and buffers under `/var/lib/vector`.
+- Vector keeps its log checkpoints and disk buffers under `/var/lib/vector` on each node; a
+  node rebuild starts it from the end of every file.
