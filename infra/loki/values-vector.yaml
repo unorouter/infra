@@ -27,6 +27,9 @@ securityContext:
 envFrom:
   - secretRef: { name: logs-archive }
 env:
+  # 0.57 turned ${VAR} interpolation off by default; the config reads the archive credential
+  # and the node name from the environment, nothing an attacker controls
+  - { name: VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION, value: "true" }
   # the rclone gateway rejects aws-chunked CRC request checksums, the same setting CNPG and Loki use
   - { name: AWS_REQUEST_CHECKSUM_CALCULATION, value: when_required }
   - { name: AWS_RESPONSE_CHECKSUM_VALIDATION, value: when_required }
@@ -35,7 +38,6 @@ resources:
   limits: { memory: 1Gi }
 service: { enabled: false }
 serviceHeadless: { enabled: false }
-logLevel: "info,aws_smithy_runtime=debug,aws_smithy_runtime_api=debug,aws_smithy_http_client=debug,rustls=debug,hyper_util=debug"
 podMonitor:
   enabled: true
   additionalLabels: { release: kps }
