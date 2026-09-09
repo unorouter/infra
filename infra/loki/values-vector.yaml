@@ -246,7 +246,8 @@ customConfig:
       labels: { job: '{{ "{{ job }}" }}', node: '{{ "{{ node }}" }}' }
       out_of_order_action: accept
       remove_timestamp: true
-      buffer: { type: disk, max_size: 268435456, when_full: drop_newest }
+      # disk buffers must be at least 256 MiB plus a header, 512 MiB keeps the arithmetic obvious
+      buffer: { type: disk, max_size: 536870912, when_full: drop_newest }
     # Write once: unique keys, never overwritten or deleted, the bucket lifecycle expires them.
     # Acknowledged disk buffer: the file sources only checkpoint once a batch is durable locally
     # (kubernetes_logs cannot acknowledge, Vector warns so at start; its lines are buffered on disk
