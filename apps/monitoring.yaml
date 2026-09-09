@@ -20,6 +20,7 @@ spec:
     - repoURL: https://github.com/unorouter/infra.git
       targetRevision: main
       path: infra/monitoring/extras
+      directory: { recurse: true }
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring
