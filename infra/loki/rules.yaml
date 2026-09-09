@@ -38,7 +38,8 @@ spec:
           annotations:
             summary: "loki cannot reach unorouter-loki through the s3-gateway (non-2xx S3 requests for 10m)"
         - alert: LokiCompactorStale
-          expr: time() - loki_compactor_apply_retention_last_successful_run_timestamp_seconds > 10800
+          # the gauge is 0 until the first retention pass after a start
+          expr: (time() - loki_compactor_apply_retention_last_successful_run_timestamp_seconds > 10800) and loki_compactor_apply_retention_last_successful_run_timestamp_seconds > 0
           for: 15m
           labels: { severity: warning }
           annotations:
