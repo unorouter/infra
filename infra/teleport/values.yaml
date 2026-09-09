@@ -32,11 +32,12 @@ auth:
   teleportConfig:
     teleport:
       storage:
-        # disablesse: Teleport asks S3 for SSE-KMS on every upload; Hetzner Object Storage
-        # answers 400 "KMS managed key requires ... key-id" and every session recording
-        # since the 2026-09-05 rebuild was lost (604 "Failed to create audit stream").
-        # Cloudflare R2: encrypted at rest, no SSE header games (Hetzner only offers SSE-C).
-        audit_sessions_uri: "s3://unorouter-backups/teleport-recordings?endpoint=7dad953fa57f079bfec11d3db10bc18a.r2.cloudflarestorage.com&region=auto&disablesse=true"
+        # Hetzner Object Storage through the in-cluster s3-gateway (s3.unorouter.com, resolved
+        # by CoreDNS, Let's Encrypt certificate), which adds SSE-C. disablesse stays: Teleport
+        # would otherwise ask for SSE-KMS, which Hetzner answers with 400 and which lost every
+        # recording after the 2026-09-05 rebuild. The bucket is Object Locked; Teleport never
+        # deletes recordings, the bucket lifecycle expires them.
+        audit_sessions_uri: "s3://unorouter-backups/teleport-recordings?endpoint=s3.unorouter.com&region=fsn1&disablesse=true"
         # events stay in the default dir backend (first entry, what the web UI queries) and are
         # mirrored to stdout so the audit watcher in monitoring can post failed logins, with
         # the GitHub username and source address, to Discord within five minutes.
