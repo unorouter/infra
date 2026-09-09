@@ -331,8 +331,9 @@ If IPs changed: update `infra/teleport/values.yaml` externalIPs + the grey-cloud
 CNPG HALTS a restored primary that archives WAL to the path it restored FROM. On every DR
 event bump BOTH serverNames by one. **These manifests live in the APP repos now, not here**:
 `unorouter/new-api` -> `k8s/pg.yaml`, `unorouter/unorouter-bot` -> `k8s/pg.yaml`.
-`externalClusters[].serverName` v{N} -> v{N+1}, `plugins[].serverName` v{N+1} -> v{N+2}.
-Commit + push BEFORE the apply. Do NOT set `cnpg.io/skipEmptyWalArchiveCheck` (corrupts the
+Since 2026-09-09 both entries carry the same lineage while the cluster runs (`v7`; restore-from
+is only read at bootstrap), so on a DR create set `plugins[].serverName` to v{N+1} and leave
+`externalClusters[].serverName` at v{N}. Commit + push BEFORE the apply. Do NOT set `cnpg.io/skipEmptyWalArchiveCheck` (corrupts the
 source). Verify: `kubectl -n databases get cluster newapi-pg bot-pg` -> healthy.
 
 Recover-to-latest is default; for PITR set `bootstrap.recovery.recoveryTarget.targetTime`
@@ -416,11 +417,14 @@ manual auth steps.
 
 ## Object storage (2026-09-09)
 
-Everything is on Hetzner Object Storage, SSE-C encrypted with one key. Before the first
-restore byte you need `tofu/.env` (the Hetzner project key) and the break-glass age key for
-`secrets/backup-encryption.sops.yaml`; `dr.sh restore` reads both. The s3-gateway
-(`infra/monitoring/extras/s3-gateway.yaml`) comes up with the monitoring app and CNPG recovery
-waits for it: barman reads through `s3.unorouter.com`, which the CoreDNS rewrite must serve
-first. The CNPG bootstrap Jobs need the `cnpg-jobs` policy in `infra/databases/networkpolicies.yaml`
-(applied by hand, like the rest of that file). Full layout and the quarterly drill:
+Everything is on Hetzner Object Storage. Postgres backups, Teleport recordings and the log
+archives are encrypted client side by the s3-gateway (rclone crypt, key pair in OpenBao
+`secret/backup-encryption` and in `secrets/backup-encryption.sops.yaml`). The OpenBao raft
+snapshot is a plain object (sealed by the barrier key), so `dr.sh restore` needs only `tofu/.env`.
+The s3-gateway (`infra/monitoring/extras/s3-gateway.yaml`) comes up with the monitoring app and
+CNPG recovery waits for it: barman reads through `s3.unorouter.com`, which the CoreDNS rewrite
+must serve first. The CNPG bootstrap Jobs need the `cnpg-jobs` policy in
+`infra/databases/networkpolicies.yaml` (applied by hand, like the rest of that file). Velero
+talks to Hetzner directly (Kopia encrypts PV data itself) and backs up no Secrets; the two
+canaries are recreated from `secrets/canaries.sops.yaml`. Full layout and the quarterly drill:
 `docs/backups.md`.
