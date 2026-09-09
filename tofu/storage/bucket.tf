@@ -78,7 +78,7 @@ resource "aws_s3_bucket_object_lock_configuration" "logs" {
   rule {
     default_retention {
       mode = "COMPLIANCE"
-      days = 30
+      days = 90
     }
   }
   depends_on = [aws_s3_bucket_versioning.logs]
