@@ -142,35 +142,18 @@ spec:
       webhookConfigs:
         - url: http://ntfy-bridge.monitoring.svc:8080/alert
           sendResolved: false
+    # Both Discord receivers go through the bridge (alerting/ntfy-bridge.yaml, /discord): the
+    # native discordConfigs notifier paints every firing alert red, the bridge colours by
+    # severity. `discord` prints [RESOLVED]; `discord-digest` never does, its alerts (watcher
+    # digests, evidence) expire on their own and that expiry is not news.
     - name: discord
-      discordConfigs:
-        - apiURL:
-            name: alertmanager-discord
-            key: webhook
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/discord
           sendResolved: true
-          # default template dumps every label, the full description paragraph, the runbook
-          # URL and an unreadable Source: query link -- a screen of text per alert. Keep it
-          # to what you act on: what broke, where, and the one-line summary.
-          title: '{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}🔴{{ else if eq .CommonLabels.severity "warning" }}🟠{{ else }}🔵{{ end }} [{{ .CommonLabels.severity | toUpper }}]{{ else }}✅ [RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
-          message: |-
-            ```
-            {{ range .Alerts -}}
-            {{ .Annotations.summary }}
-            {{ end -}}
-            ```
     - name: discord-digest
-      discordConfigs:
-        - apiURL:
-            name: alertmanager-discord
-            key: webhook
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/discord
           sendResolved: false
-          title: '{{ if eq .CommonLabels.severity "critical" }}🔴{{ else if eq .CommonLabels.severity "warning" }}🟠{{ else }}🔵{{ end }} [{{ .CommonLabels.severity | toUpper }}] {{ .CommonLabels.alertname }}'
-          message: |-
-            ```
-            {{ range .Alerts -}}
-            {{ .Annotations.summary }}
-            {{ end -}}
-            ```
   inhibitRules:
     # one root cause must not become an alert storm: a down node explains its pods, and
     # etcd degradation explains the NodeNotReady it causes (incident 2026-07-24).

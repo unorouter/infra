@@ -19,7 +19,12 @@ over the gateway's audit rows in `scrape/cnpg-security-queries.yaml`.
   pgaudit rows from a non-app role, Cloudflare account audit, OpenBao non-routine activity, SSO
   logins. Named Teleport operators (`NAMED_USERS`) go into one daily digest instead, since
   Teleport records their sessions. A new platform component that reads Secrets belongs in
-  `ROUTINE_USERS`, not in silence.
+  `ROUTINE_USERS`, not in silence. The owner's own Teleport identity (`OPERATOR_USERS`, `0-don`) is
+  recorded like everything else but posted as a 🔵 info digest, never paged; the same action by any
+  other identity is 🔴 critical and rings the phone.
+- **Discord and the phone both go through `alerting/ntfy-bridge.yaml`** (`/discord`, `/alert`): embeds
+  are coloured by severity (🔴 critical, 🟠 warning, 🔵 info, ✅ resolved), which Alertmanager's own
+  Discord notifier cannot do. The bridge logs one line per delivery with the Discord status code.
 - **Logs**: Alloy (DaemonSet, `infra/loki/values-alloy.yaml`) tails `/var/log/pods` and the
   kube-apiserver audit files on every node and pushes to Loki (single binary on node9,
   `infra/loki/values-loki.yaml`, app `apps/loki.yaml`), which stores chunks and index through the

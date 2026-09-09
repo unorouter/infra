@@ -1,7 +1,9 @@
-# Alertmanager -> ntfy.sh bridge for phone paging. Alertmanager has no native ntfy
-# receiver and its webhook payload is raw JSON, unreadable as a phone notification, so a
-# ~40-line node server reformats it. The ntfy topic URL is the only credential (anyone who
-# knows it can read/publish) -- it lives in OpenBao, never in git.
+# Alertmanager -> ntfy.sh (phone) and Discord bridge. Alertmanager has no native ntfy
+# receiver, and its own Discord notifier hardcodes the embed colour (red firing, green
+# resolved) with no severity option, so both go through this small node server: /alert
+# reformats for ntfy, /discord builds an embed coloured by severity (red critical, orange
+# warning, blue info, green resolved) with the summaries in a code block. The ntfy topic URL
+# and the Discord webhook are the credentials -- OpenBao, never git.
 #
 # Why paging exists at all: the 2026-08-12 API outage started 06:00 UTC (15:00 KST, the
 # biggest customer's afternoon peak) and Discord alerts sat unread until ~08:00. The
@@ -22,6 +24,8 @@ spec:
   data:
     - secretKey: NTFY_URL
       remoteRef: { key: ntfy, property: topicUrl }
+    - secretKey: DISCORD_WEBHOOK
+      remoteRef: { key: alertmanager, property: discordWebhook }
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -33,6 +37,57 @@ data:
     import http from "node:http";
 
     const ntfyUrl = process.env.NTFY_URL;
+    const discordUrl = process.env.DISCORD_WEBHOOK;
+
+    const COLOR = { critical: 0xe74c3c, warning: 0xf39c12, info: 0x3498db, resolved: 0x2ecc71 };
+    const EMOJI = { critical: "🔴", warning: "🟠", info: "🔵", resolved: "✅" };
+
+    function summaries(p) {
+      return (p.alerts ?? [])
+        .map((a) => a.annotations?.summary || a.labels?.alertname)
+        .filter(Boolean);
+    }
+
+    function describe(p) {
+      const firing = p.status === "firing";
+      const sev = firing ? (p.commonLabels?.severity ?? "info") : "resolved";
+      const name = p.commonLabels?.alertname ?? "alert";
+      const title = firing ? `${EMOJI[sev] ?? "🔵"} [${sev.toUpperCase()}] ${name}` : `${EMOJI.resolved} [RESOLVED] ${name}`;
+      return { firing, sev, name, title, lines: summaries(p) };
+    }
+
+    async function toNtfy(p) {
+      const d = describe(p);
+      return fetch(ntfyUrl, {
+        method: "POST",
+        headers: {
+          Title: d.title,
+          // urgent = ntfy max priority: repeated alarm sound, overrides DND in the app
+          Priority: d.firing ? "urgent" : "default",
+          Tags: d.firing ? "rotating_light" : "white_check_mark",
+        },
+        body: d.lines.join("\n") || d.name,
+      });
+    }
+
+    async function toDiscord(p) {
+      const d = describe(p);
+      const labels = p.commonLabels ?? {};
+      const footer = [labels.source, labels.node, labels.namespace].filter(Boolean).join(" · ");
+      const body = d.lines.join("\n").slice(0, 3800);
+      const embed = {
+        title: d.title.slice(0, 256),
+        description: body ? "```\n" + body + "\n```" : undefined,
+        color: COLOR[d.sev] ?? COLOR.info,
+        footer: footer ? { text: footer + (d.lines.length > 1 ? ` · ${d.lines.length} alerts` : "") } : undefined,
+        timestamp: new Date().toISOString(),
+      };
+      return fetch(discordUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ embeds: [embed], allowed_mentions: { parse: [] } }),
+      });
+    }
 
     http.createServer((req, res) => {
       if (req.method !== "POST") { res.writeHead(200); res.end("ok"); return; }
@@ -41,25 +96,15 @@ data:
       req.on("end", async () => {
         try {
           const p = JSON.parse(body);
-          const firing = p.status === "firing";
-          const name = p.commonLabels?.alertname ?? "alert";
-          const sev = (p.commonLabels?.severity ?? "alert").toUpperCase();
-          const lines = (p.alerts ?? [])
-            .map((a) => a.annotations?.summary || a.labels?.alertname)
-            .filter(Boolean);
-          const r = await fetch(ntfyUrl, {
-            method: "POST",
-            headers: {
-              Title: firing ? `[${sev}] ${name}` : `[RESOLVED] ${name}`,
-              // urgent = ntfy max priority: repeated alarm sound, overrides DND in the app
-              Priority: firing ? "urgent" : "default",
-              Tags: firing ? "rotating_light" : "white_check_mark",
-            },
-            body: lines.join("\n") || name,
-          });
+          const discord = req.url.startsWith("/discord");
+          if (discord && !discordUrl) { res.writeHead(500); res.end("no DISCORD_WEBHOOK"); return; }
+          const r = await (discord ? toDiscord(p) : toNtfy(p));
+          // the one line of logging: which sink, which alert, and what it answered
+          console.log(`${discord ? "discord" : "ntfy"} ${p.status} ${p.commonLabels?.severity ?? "-"} ${p.commonLabels?.alertname ?? "-"} -> ${r.status}`);
           res.writeHead(r.ok ? 200 : 502);
           res.end();
-        } catch {
+        } catch (e) {
+          console.log("bad request: " + (e?.message ?? e));
           res.writeHead(400);
           res.end();
         }
