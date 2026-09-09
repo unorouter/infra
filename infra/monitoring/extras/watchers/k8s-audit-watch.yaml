@@ -15,7 +15,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-470cdf9975c0
+  name: k8s-audit-watch-d24044746f51
   namespace: monitoring
 data:
   expected.json: |
@@ -215,6 +215,7 @@ data:
             ''')
             self.limit = limit
             self.backlog = {}
+            self.touched = set()
             self.drained = {}
             with self.db:
                 self.db.execute("INSERT OR IGNORE INTO state VALUES ('started', ?)", (str(time.time()),))
@@ -262,6 +263,7 @@ data:
         def ingest_file(self, path, source, max_lines=10000, container=False, flow=False):
             stat = path.stat()
             key = 'file:' + str(stat.st_dev) + ':' + str(stat.st_ino)
+            self.touched.add(key)
             # A rotated .gz never changes again, and seeking into one inflates it from the
             # start: re-reading every retained archive each second was most of the CPU
             # this DaemonSet used. Once read to its end it is only opened again if the
@@ -757,6 +759,10 @@ data:
                             if not CONTAINER_LOG.match(path.name):
                                 continue
                             q.ingest_file(path, family + '-' + directory.name.rsplit('_', 1)[-1], container=True)
+                # A rotated log the kubelet removed mid-read would pin the oldest unread stamp forever.
+                for key in [k for k in q.backlog if k not in q.touched]:
+                    q.backlog.pop(key)
+                q.touched.clear()
                 METRICS['last_poll_timestamp_seconds'] = time.time()
             except Exception as error:
                 METRICS['errors_total'] += 1
@@ -789,7 +795,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "470cdf9975c02f43d3ce6f3affcd3e143266ea3a5194b8327831fd8be6402cfd"
+        evidence.unorouter.com/code-sha256: "d24044746f51ea4995e0f1f24b634f00a35c53cf019b4bac1d136118cad391e5"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -839,7 +845,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-470cdf9975c0 }
+          configMap: { name: k8s-audit-watch-d24044746f51 }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
