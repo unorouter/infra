@@ -1,6 +1,6 @@
 # Pod isolation for OpenBao. Default-deny for every pod here; the server accepts 8200 only
 # from the identities that legitimately read it (ESO controller, the blackbox probe, the
-# tunnel for openbao-ci.unorouter.com, Teleport app access for the UI, the snapshot job) and
+# Teleport app access for the UI, the snapshot job) and
 # talks out only to DNS and the API server (Kubernetes auth token review). Root-token work
 # goes through kubectl exec and never crosses the network. The snapshot job needs the server,
 # DNS and Hetzner Object Storage (world on 443). Probes are exec, so no host ingress rule is needed.
@@ -31,9 +31,6 @@ spec:
         - matchLabels:
             io.kubernetes.pod.namespace: monitoring
             app: blackbox-exporter
-        - matchLabels:
-            io.kubernetes.pod.namespace: cloudflared
-            app: cloudflared
         - matchLabels:
             io.kubernetes.pod.namespace: teleport-agent
             app: teleport-app-access

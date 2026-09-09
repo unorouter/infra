@@ -66,13 +66,6 @@ spec:
       toPorts:
         - ports: [{ port: "3080", protocol: TCP }]
     - toEndpoints:
-        - matchLabels:
-            io.kubernetes.pod.namespace: openbao
-            app.kubernetes.io/name: openbao
-            component: server
-      toPorts:
-        - ports: [{ port: "8200", protocol: TCP }]
-    - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: dex, app: dex }
       toPorts:
         - ports: [{ port: "5556", protocol: TCP }]
