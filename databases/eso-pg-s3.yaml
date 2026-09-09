@@ -21,40 +21,6 @@ spec:
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: newapi-pg-s3
-  namespace: databases
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: newapi-pg-s3
-    creationPolicy: Owner
-  dataFrom:
-    - extract:
-        key: pg-s3
----
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
-  name: bot-pg-s3
-  namespace: databases
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: bot-pg-s3
-    creationPolicy: Owner
-  dataFrom:
-    - extract:
-        key: pg-s3
----
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
   name: newapi-pg-reader
   namespace: databases
 spec:
