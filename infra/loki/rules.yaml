@@ -1,4 +1,4 @@
-# Loki and Alloy health. Discord through the warning and critical routes; nothing here pages
+# Loki and Vector health. Discord through the warning and critical routes; nothing here pages
 # the phone. A dead log store is not an outage of api.unorouter.com.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -24,7 +24,7 @@ spec:
           for: 10m
           labels: { severity: warning }
           annotations:
-            summary: "loki is discarding log lines ({{ $labels.reason }}): raise the limit in values-loki.yaml or add a guardrail in alloy"
+            summary: "loki is discarding log lines ({{ $labels.reason }}): raise the limit in values-loki.yaml or add a guardrail in vector"
         - alert: LokiPushErrors
           expr: sum(rate(loki_request_duration_seconds_count{route="loki_api_v1_push", status_code=~"5.."}[5m])) > 0
           for: 10m
@@ -44,6 +44,58 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "loki retention has not run for 3h, the bucket keeps growing past 90 days"
+        # Vector: the Loki shipper and the write once archive. The archive is the security
+        # record, so its failures page.
+        - alert: VectorDown
+          expr: kube_daemonset_status_number_unavailable{namespace="monitoring", daemonset="vector"} > 0 or absent(up{job="vector"})
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "vector is not running on every node, logs are not shipped or archived"
+        - alert: VectorArchiveDiscarded
+          expr: sum by (pod) (increase(vector_component_discarded_events_total{component_id="archive"}[15m])) > 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.pod }} discarded archive events: the write once copy has a hole (gateway 4xx?)"
+        - alert: VectorArchiveErrors
+          expr: sum by (pod, error_type) (rate(vector_component_errors_total{component_id="archive"}[5m])) > 0
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.pod }} archive sink errors ({{ $labels.error_type }}) for 10m"
+        - alert: VectorArchiveStalled
+          expr: >-
+            sum by (pod) (increase(vector_component_sent_events_total{component_id="archive"}[15m])) == 0
+              and sum by (pod) (increase(vector_component_received_events_total{component_id="archive"}[15m])) > 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.pod }} receives archive events but sends none: the gateway or the buffer is stuck"
+        - alert: VectorArchiveBufferFull
+          expr: max by (pod) (vector_buffer_byte_size{component_id="archive"}) > 1610612736
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.pod }} archive buffer above 75 percent, sources block at 2 GiB"
+        - alert: VectorLokiDiscarded
+          expr: sum by (pod, component_id) (increase(vector_component_discarded_events_total{component_id=~"loki_.*"}[15m])) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} dropped log entries for {{ $labels.component_id }} in the last 15m"
+        - alert: VectorSourceErrors
+          expr: sum by (pod, component_id) (rate(vector_component_errors_total{component_kind="source"}[5m])) > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} source {{ $labels.component_id }} errors for 10m (permissions or rotation)"
+        - alert: VectorAuditSilent
+          expr: sum by (pod) (rate(vector_component_received_events_total{component_id="audit"}[30m])) == 0
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} read no audit line for 30m; kubelets patch status constantly, the file should never be silent"
         - alert: AlloyDown
           expr: kube_daemonset_status_number_unavailable{namespace="monitoring", daemonset="alloy"} > 0
           for: 10m

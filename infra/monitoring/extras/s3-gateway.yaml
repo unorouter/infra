@@ -288,6 +288,7 @@ spec:
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: k8s-audit-watch}
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: pat-audit-archive}
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: loki}
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: vector}
         - matchLabels: {io.kubernetes.pod.namespace: services, app: new-api-sync}
         - matchLabels: {io.kubernetes.pod.namespace: services, app: new-api-sync-full}
       toPorts:

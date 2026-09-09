@@ -27,6 +27,13 @@ spec:
         releaseName: alloy
         valueFiles:
           - $values/infra/loki/values-alloy.yaml
+    - repoURL: https://helm.vector.dev
+      chart: vector
+      targetRevision: 0.58.0
+      helm:
+        releaseName: vector
+        valueFiles:
+          - $values/infra/loki/values-vector.yaml
     - repoURL: https://github.com/unorouter/infra.git
       targetRevision: main
       ref: values
