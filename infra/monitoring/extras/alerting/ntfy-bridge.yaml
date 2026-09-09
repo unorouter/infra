@@ -66,7 +66,9 @@ data:
       const sev = firing ? (p.commonLabels?.severity ?? "info") : "resolved";
       const name = p.commonLabels?.alertname ?? "alert";
       const title = firing ? `${EMOJI[sev] ?? "🔵"} [${sev.toUpperCase()}] ${name}` : `${EMOJI.resolved} [RESOLVED] ${name}`;
-      return { firing, sev, name, title, lines: summaries(alerts) };
+      // HTTP header values are Latin-1: the emoji goes to Discord only, ntfy gets the tag
+      const plain = firing ? `[${sev.toUpperCase()}] ${name}` : `[RESOLVED] ${name}`;
+      return { firing, sev, name, title, plain, lines: summaries(alerts) };
     }
 
     async function toNtfy(p, alerts) {
@@ -74,7 +76,7 @@ data:
       return fetch(ntfyUrl, {
         method: "POST",
         headers: {
-          Title: d.title,
+          Title: d.plain,
           // urgent = ntfy max priority: repeated alarm sound, overrides DND in the app
           Priority: d.firing ? "urgent" : "default",
           Tags: d.firing ? "rotating_light" : "white_check_mark",
