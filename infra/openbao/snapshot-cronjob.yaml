@@ -1,8 +1,8 @@
-# OpenBao raft snapshot -> Hetzner Object Storage, SSE-C encrypted with the key from OpenBao
-# secret/backup-encryption (node loss wipes the local-path PV; the snapshot is the DR source).
-# The bucket is Object Locked: latest.snap is overwritten as a new version, nothing is deleted,
-# the bucket lifecycle expires old snapshots. dr.sh restores this before OpenBao exists, so it
-# reads the same key from secrets/backup-encryption.sops.yaml instead.
+# OpenBao raft snapshot -> Hetzner Object Storage (node loss wipes the local-path PV; the
+# snapshot is the DR source). No extra encryption: the raft snapshot is sealed by the barrier
+# key, without the unseal keys (Bitwarden) it is ciphertext. That keeps dr.sh restore free of
+# any key that lives in OpenBao. The bucket is Object Locked: latest.snap is overwritten as a
+# new version, nothing is deleted, the bucket lifecycle expires old snapshots.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -25,11 +25,6 @@ spec:
   dataFrom:
     - extract:
         key: pg-s3
-  data:
-    - secretKey: SSE_C_KEY_B64
-      remoteRef: { key: backup-encryption, property: sse_c_key_b64 }
-    - secretKey: SSE_C_KEY_MD5
-      remoteRef: { key: backup-encryption, property: sse_c_key_md5_b64 }
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -62,12 +57,6 @@ spec:
                   value: s3
                 - name: RCLONE_CONFIG_HZ_PROVIDER
                   value: Ceph
-                - name: RCLONE_CONFIG_HZ_SSE_CUSTOMER_ALGORITHM
-                  value: AES256
-                - name: RCLONE_CONFIG_HZ_SSE_CUSTOMER_KEY_BASE64
-                  valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: SSE_C_KEY_B64 } }
-                - name: RCLONE_CONFIG_HZ_SSE_CUSTOMER_KEY_MD5
-                  valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: SSE_C_KEY_MD5 } }
                 - name: RCLONE_CONFIG_HZ_ENDPOINT
                   valueFrom: { secretKeyRef: { name: openbao-snapshot-s3, key: ENDPOINT } }
                 - name: RCLONE_CONFIG_HZ_ACCESS_KEY_ID
