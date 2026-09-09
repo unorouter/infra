@@ -1,0 +1,53 @@
+# Central logs: Loki (single binary) plus the Alloy DaemonSet that tails every container log
+# and the kube-apiserver audit files. Storage is the s3-gateway (client side crypt) into the
+# unlocked bucket unorouter-loki; the compactor owns the 90 day retention. Wave 4: the
+# monitoring app (wave 3) brings the gateway, the kps CRDs and Grafana's sidecars first.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  project: default
+  sources:
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: loki
+      targetRevision: 7.3.0
+      helm:
+        # two charts in one Application render as the same release name without this
+        releaseName: loki
+        valueFiles:
+          - $values/infra/loki/values-loki.yaml
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: alloy
+      targetRevision: 1.12.1
+      helm:
+        releaseName: alloy
+        valueFiles:
+          - $values/infra/loki/values-alloy.yaml
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      path: infra/loki
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  # Same two exclusions as apps/monitoring.yaml: ESO rewrites its ExternalSecrets and the API
+  # server stamps volumeClaimTemplates status; without them the app self-heals in a loop.
+  ignoreDifferences:
+    - group: external-secrets.io
+      kind: ExternalSecret
+      managedFieldsManagers: [external-secrets]
+    - group: apps
+      kind: StatefulSet
+      jsonPointers: [/spec/volumeClaimTemplates/0/status]
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

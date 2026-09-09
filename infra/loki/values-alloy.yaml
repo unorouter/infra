@@ -1,0 +1,146 @@
+# Alloy on every node: tails /var/log/pods (k3s writes CRI logs straight there) and the
+# kube-apiserver audit files, ships to Loki. Files rather than the kubelet log API so positions
+# survive a restart on a hostPath and rotated files are still read. Root because audit.log is
+# root 0600, the same posture as the k8s-audit-watch DaemonSet; everything is mounted read-only.
+controller:
+  type: daemonset
+  tolerations:
+    - { key: node-role.kubernetes.io/control-plane, operator: Exists }
+    - { key: node-role.kubernetes.io/master, operator: Exists }
+  volumes:
+    extra:
+      - name: k3s-server-logs
+        hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
+      - name: positions
+        hostPath: { path: /var/lib/alloy, type: DirectoryOrCreate }
+alloy:
+  storagePath: /var/lib/alloy
+  enableReporting: false
+  mounts:
+    varlog: true
+    extra:
+      - { name: k3s-server-logs, mountPath: /var/lib/rancher/k3s/server/logs, readOnly: true }
+      - { name: positions, mountPath: /var/lib/alloy }
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities: { drop: [ALL] }
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  configMap:
+    content: |
+      // Labels are exactly namespace, pod, container, node, app (+ stream from the CRI stage).
+      // Never a pod IP, uid, template hash or log level: those are query-time parsers, not labels.
+      discovery.kubernetes "pods" {
+        role = "pod"
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + sys.env("K8S_NODE_NAME")
+        }
+      }
+
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_pod_phase"]
+          regex         = "Pending|Succeeded|Failed|Unknown"
+          action        = "drop"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          target_label  = "__path__"
+          replacement   = "/var/log/pods/*$1/*.log"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          regex         = "(.+)"
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          regex         = "(.+)"
+          target_label  = "app"
+        }
+      }
+
+      local.file_match "pods" {
+        path_targets = discovery.relabel.pods.output
+      }
+
+      loki.source.file "pods" {
+        targets       = local.file_match.pods.targets
+        forward_to    = [loki.process.pods.receiver]
+        tail_from_end = true
+      }
+
+      loki.process "pods" {
+        forward_to = [loki.write.default.receiver]
+        stage.cri {}
+        // Volume guardrails (drop cilium-agent, cloudflared debug, sample the gateway access log)
+        // go here once the first day's bytes_rate per container is known.
+      }
+
+      local.file_match "audit" {
+        path_targets = [{
+          __path__ = "/var/lib/rancher/k3s/server/logs/audit*.log",
+          job      = "k8s-audit",
+          node     = sys.env("K8S_NODE_NAME"),
+        }]
+      }
+
+      loki.process "audit" {
+        forward_to = [loki.write.default.receiver]
+        stage.json {
+          expressions = { ts = "requestReceivedTimestamp" }
+        }
+        stage.timestamp {
+          source = "ts"
+          format = "RFC3339Nano"
+        }
+      }
+
+      loki.source.file "audit" {
+        targets       = local.file_match.audit.targets
+        forward_to    = [loki.process.audit.receiver]
+        tail_from_end = true
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
+# The chart's default ClusterRole also reads Secrets and ConfigMaps; discovery needs none of it.
+rbac:
+  rules:
+    - apiGroups: [""]
+      resources: [pods, namespaces]
+      verbs: [get, list, watch]
+  clusterRules:
+    - apiGroups: [""]
+      resources: [nodes]
+      verbs: [get, list, watch]
+serviceMonitor:
+  enabled: true
+  additionalLabels: { release: kps }
+  interval: 30s

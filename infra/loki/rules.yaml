@@ -1,0 +1,69 @@
+# Loki and Alloy health. Discord through the warning and critical routes; nothing here pages
+# the phone. A dead log store is not an outage of api.unorouter.com.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  groups:
+    - name: loki
+      rules:
+        - alert: LokiDown
+          expr: >-
+            kube_statefulset_status_replicas_available{namespace="monitoring", statefulset="loki"} < 1
+              or absent(kube_statefulset_status_replicas_available{namespace="monitoring", statefulset="loki"})
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "loki has no ready replica, logs are not being stored"
+        - alert: LokiIngestionErrors
+          expr: sum by (reason) (rate(loki_discarded_samples_total[5m])) > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "loki is discarding log lines ({{ $labels.reason }}): raise the limit in values-loki.yaml or add a guardrail in alloy"
+        - alert: LokiPushErrors
+          expr: sum(rate(loki_request_duration_seconds_count{route="loki_api_v1_push", status_code=~"5.."}[5m])) > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "loki answers 5xx to log pushes"
+        - alert: LokiObjectStoreErrors
+          expr: sum(rate(loki_s3_request_duration_seconds_count{status_code!~"2.."}[5m])) > 0
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "loki cannot reach unorouter-loki through the s3-gateway (non-2xx S3 requests for 10m)"
+        - alert: LokiCompactorStale
+          expr: time() - loki_compactor_apply_retention_last_successful_run_timestamp_seconds > 10800
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "loki retention has not run for 3h, the bucket keeps growing past 90 days"
+        - alert: AlloyDown
+          expr: kube_daemonset_status_number_unavailable{namespace="monitoring", daemonset="alloy"} > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "alloy is not running on {{ $value }} node(s), their logs are not shipped"
+        - alert: AlloyDroppedEntries
+          expr: sum by (pod) (increase(loki_write_dropped_entries_total[15m])) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} dropped log entries in the last 15m"
+        - alert: AlloyWriteFailing
+          expr: sum by (pod) (rate(loki_write_request_duration_seconds_count{status_code!~"2.."}[5m])) > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} cannot push to loki"
+        - alert: AlloyNotTailing
+          expr: loki_source_file_files_active_total{component_id="loki.source.file.pods"} == 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} tails no pod log file: discovery or the /var/log mount is broken"

@@ -1,0 +1,121 @@
+# monitoring is default-deny (infra/monitoring/extras/networkpolicies.yaml). Both ends of every
+# flow are opened here so the whole set is pruned with this app: loki and alloy themselves, plus
+# the additive rules on the prometheus, grafana and alertmanager endpoints (same pattern as
+# prometheus-s3-gateway-scrape and alertmanager-evidence-ingress). Ports are container ports.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: loki
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: loki }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: grafana }
+        - matchLabels: { app.kubernetes.io/name: alloy }
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "3100", protocol: TCP }]
+    # kubelet readiness probe
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "3100", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    # chunks and index through the encrypting gateway (Service 443, container 8443)
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
+      toPorts:
+        - ports: [{ port: "8443", protocol: TCP }]
+    # ruler notifications
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports: [{ port: "9093", protocol: TCP }]
+    # the rules sidecar watches ConfigMaps
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: alloy
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: alloy }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "12345", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "12345", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: loki }
+      toPorts:
+        - ports: [{ port: "3100", protocol: TCP }]
+    # pod discovery
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: prometheus-loki-scrape
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: prometheus }
+  egress:
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: loki }
+        - matchLabels: { app.kubernetes.io/name: alloy }
+      toPorts:
+        - ports:
+            - { port: "3100", protocol: TCP }
+            - { port: "12345", protocol: TCP }
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: grafana-loki
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: grafana }
+  egress:
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: loki }
+      toPorts:
+        - ports: [{ port: "3100", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: alertmanager-loki-ingress
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: alertmanager }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: loki }
+      toPorts:
+        - ports: [{ port: "9093", protocol: TCP }]

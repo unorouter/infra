@@ -11,16 +11,22 @@ pair, lose every encrypted object.
 | --- | --- | --- | --- | --- |
 | Postgres PITR | CNPG + Barman plugin, daily base + WAL | `unorouter-backups`, `{newapi,bot}-pg-v7/` | gateway | lifecycle 31d |
 | OpenBao raft | CronJob, every 6h | `unorouter-backups`, `openbao-snapshots/` | none: sealed by the barrier key, unseal keys in Bitwarden | lifecycle 31d |
-| Logs: audit streams, incidents, PAT archive | k8s-audit-watch, pat-audit-archive | `unorouter-logs`, `streams/`, `incidents/` | gateway | lifecycle 30d |
-| Teleport recordings | `audit_sessions_uri` | `unorouter-logs`, `teleport-recordings/` | gateway | lifecycle 30d |
+| Logs: audit streams, incidents, PAT archive | k8s-audit-watch, pat-audit-archive | `unorouter-logs`, `streams/`, `incidents/` | gateway | lifecycle 90d |
+| Teleport recordings | `audit_sessions_uri` | `unorouter-logs`, `teleport-recordings/` | gateway | lifecycle 90d |
+| Container and apiserver audit logs | Alloy DaemonSet, Loki (`infra/loki/`) | `unorouter-loki`, `fake/`, `index/` | gateway | Loki compactor 90d, lifecycle 120d safety net |
 | Kubernetes objects + opt in PVs | Velero + Kopia, daily 02:00 | `unorouter-velero`, `velero/` | tarballs none (no Secrets inside), PV data by Kopia (password `secret/velero`) | `ttl: 336h`, 14d noncurrent |
 | Tofu state | `tofu state` | `unorouter-pg-backups` | client side (`tofu/encryption.tf`) | as is |
 
 ## Rules
 
-- `unorouter-backups` and `unorouter-logs` are Object Locked (COMPLIANCE, 30d). Nothing deletes, the
-  lifecycle expires. No barman `retentionPolicy`. After a bucket change Hetzner frontends may briefly
+- `unorouter-backups` is Object Locked (COMPLIANCE, 30d) and `unorouter-logs` (COMPLIANCE, 90d since
+  2026-09-09; objects written before keep their 30d). Nothing deletes, the lifecycle expires. No barman
+  `retentionPolicy`. After a bucket change Hetzner frontends may briefly
   write objects without retention or answer `NoSuchBucket`: sweep with `retention=` and stamp.
+- `unorouter-loki` is unlocked AND unversioned: Loki's compactor deletes expired chunks and rewrites the
+  index, and with `auth_enabled: false` there is nothing to version. Never enable a lock or versioning on
+  it. Its 90 days live in `retention_period` (`infra/loki/values-loki.yaml`), the 120d lifecycle only
+  catches a dead compactor.
 - `unorouter-velero` is unlocked (Kopia must delete and rewrite, velero-io/velero#8686). Versioning is
   its only protection. Velero backs up no Secrets (ESO, cert-manager and CNPG recreate them; the two
   canaries have `secrets/canaries.sops.yaml`) and only PVs annotated `backup.velero.io/backup-volumes`

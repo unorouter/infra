@@ -1,0 +1,126 @@
+# Loki 3.6 as one process on node9, chunks and index in unorouter-loki through the s3-gateway.
+# The bucket is unlocked and unversioned on purpose: the compactor deletes expired chunks and
+# rewrites index files, and the 90 day retention below is the only retention (a CLI lifecycle
+# expiry at 120 days is the safety net). Everything the chart ships for a scaled deployment
+# (gateway, caches, canary, test pod, minio) is off.
+deploymentMode: SingleBinary
+loki:
+  # Port 3100 is reachable from grafana, alloy and prometheus only (networkpolicies.yaml);
+  # a single tenant ("fake") is enough behind that boundary.
+  auth_enabled: false
+  commonConfig:
+    path_prefix: /var/loki
+    replication_factor: 1
+    ring:
+      kvstore:
+        store: inmemory
+  storage:
+    type: s3
+    bucketNames:
+      chunks: unorouter-loki
+      ruler: unorouter-loki
+      admin: unorouter-loki
+    s3:
+      # CoreDNS rewrite to s3-gateway.s3-gateway.svc, Let's Encrypt certificate
+      endpoint: https://s3.unorouter.com
+      region: fsn1
+      s3ForcePathStyle: true
+      # expanded at start (-config.expand-env) from the loki-s3 Secret
+      accessKeyId: ${AWS_ACCESS_KEY_ID}
+      secretAccessKey: ${AWS_SECRET_ACCESS_KEY}
+  schemaConfig:
+    configs:
+      # Fixed at first start, never moved: the date is part of every index name.
+      - from: "2026-09-10"
+        store: tsdb
+        object_store: s3
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  compactor:
+    working_directory: /var/loki/compactor
+    compaction_interval: 10m
+    retention_enabled: true
+    retention_delete_delay: 2h
+    retention_delete_worker_count: 10
+    delete_request_store: s3
+  limits_config:
+    retention_period: 2160h
+    reject_old_samples: true
+    reject_old_samples_max_age: 168h
+    ingestion_rate_mb: 8
+    ingestion_burst_size_mb: 16
+    per_stream_rate_limit: 3MB
+    per_stream_rate_limit_burst: 15MB
+    max_streams_per_user: 10000
+    max_line_size: 256KB
+    max_query_series: 500
+    max_query_parallelism: 4
+    max_entries_limit_per_query: 5000
+    query_timeout: 300s
+    split_queries_by_interval: 1h
+    volume_enabled: true
+    allow_structured_metadata: true
+  # The ruler is wired now (rules from ConfigMaps labelled loki_rule=1, alerts to the same
+  # Alertmanager as Prometheus) so LogQL alerts can replace the log-tailing watchers later.
+  # No rule ConfigMap exists yet.
+  rulerConfig:
+    enable_api: true
+    alertmanager_url: http://kps-alertmanager.monitoring.svc:9093
+    rule_path: /var/loki/ruler-tmp
+    storage:
+      type: local
+      local:
+        directory: /rules
+    wal:
+      dir: /var/loki/ruler-wal
+  analytics:
+    reporting_enabled: false
+  ui:
+    enabled: false
+singleBinary:
+  replicas: 1
+  extraArgs: ["-config.expand-env=true"]
+  extraEnvFrom:
+    - secretRef: { name: loki-s3 }
+  # local-path PVCs bind to one node forever; the rest of the monitoring stack is here too
+  nodeSelector: { kubernetes.io/hostname: unorouter-node9 }
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { memory: 2Gi }
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: local-path
+ruler:
+  enabled: true
+  sidecar: true
+sidecar:
+  rules:
+    label: loki_rule
+    labelValue: "1"
+    folder: /rules
+    # the default "both" also watches every Secret in the cluster, which the evidence
+    # collector pages as K8sSecretRead
+    resource: configmap
+    folderAnnotation: k8s-sidecar-target-directory
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 64Mi }
+backend: { replicas: 0 }
+read: { replicas: 0 }
+write: { replicas: 0 }
+gateway: { enabled: false }
+test: { enabled: false }
+lokiCanary: { enabled: false }
+chunksCache: { enabled: false }
+resultsCache: { enabled: false }
+minio: { enabled: false }
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels: { release: kps }
+    interval: 30s
+  rules: { enabled: false }
+  dashboards: { enabled: false }

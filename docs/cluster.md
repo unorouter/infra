@@ -23,7 +23,7 @@ loss = secrets unrecoverable), Hetzner token, the Hetzner Object Storage key (`t
 
 ### Node disk
 
-Images are the only reclaimable chunk; the rest of the 75G root is live local-path data. Kubelet
+Images are the only reclaimable chunk; the rest of the 150G root is live local-path data. Kubelet
 `image-gc-high-threshold=70` / `low=55` is set in `tofu/cloud-init*.tftpl` AND
 `/etc/rancher/k3s/config.yaml` on each node (keep in sync). Manual prune:
 

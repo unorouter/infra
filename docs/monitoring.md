@@ -20,6 +20,17 @@ over the gateway's audit rows in `scrape/cnpg-security-queries.yaml`.
   logins. Named Teleport operators (`NAMED_USERS`) go into one daily digest instead, since
   Teleport records their sessions. A new platform component that reads Secrets belongs in
   `ROUTINE_USERS`, not in silence.
+- **Logs**: Alloy (DaemonSet, `infra/loki/values-alloy.yaml`) tails `/var/log/pods` and the
+  kube-apiserver audit files on every node and pushes to Loki (single binary on node9,
+  `infra/loki/values-loki.yaml`, app `apps/loki.yaml`), which stores chunks and index through the
+  s3-gateway in `unorouter-loki`, 90 days, compactor owned. Labels are only `namespace, pod,
+  container, node, app, stream` (audit: `job="k8s-audit", node`); everything else is a query-time
+  parser. Grafana datasource `loki`; start with `{namespace="services"}` or
+  `{job="k8s-audit"} | json | verb="create"`. Gateway logs carry IPs and emails, so the 90 days are
+  also the PII retention for logs; Grafana is the only reader and sits behind Teleport. The ruler is
+  wired (ConfigMaps labelled `loki_rule: "1"`, alerts to the same Alertmanager) but empty: LogQL
+  rules replacing the pgaudit, openbao and teleport watchers come later, one at a time, with the
+  Python still running beside them.
 - **Routing is drop-by-default**: root receiver `null`, only critical/warning reach Discord;
   critical also pages the phone via ntfy. Test with `amtool alert add` in the alertmanager pod.
 - **`CloudflaredStreamFlood`** is the L7 attack signal: pages, and fires `edge-mode`, which flips

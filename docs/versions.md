@@ -19,3 +19,5 @@ Bump check: `curl -s https://api.github.com/repos/<org>/<repo>/releases/latest |
 | dex | v2.45.1 | cluster OIDC IdP |
 | kube-prometheus-stack | 88.6.4 | apps/monitoring.yaml |
 | blackbox-exporter | v0.28.0 | infra/monitoring/extras/scrape/blackbox.yaml |
+| Loki | chart 7.3.0 (app 3.6.12) | apps/loki.yaml, infra/loki/values-loki.yaml |
+| Alloy | chart 1.12.1 (app v1.19.2) | apps/loki.yaml, infra/loki/values-alloy.yaml |
