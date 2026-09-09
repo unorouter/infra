@@ -17,17 +17,39 @@ metadata:
   namespace: monitoring
 data:
   archive.ts: |
-    import { SQL, S3Client } from "bun";
-    import { createHash } from "node:crypto";
+    import { SQL } from "bun";
+    import { createHash, createHmac } from "node:crypto";
 
     const db = new SQL(process.env.EVIDENCE_SQL_DSN!, { max: 1, connectionTimeout: 10 });
-    const archive = new S3Client({
-      accessKeyId: process.env.ARCHIVE_ACCESS_KEY,
-      secretAccessKey: process.env.ARCHIVE_SECRET_KEY,
-      endpoint: process.env.ARCHIVE_ENDPOINT,
-      bucket: process.env.ARCHIVE_BUCKET,
-      region: "auto",
-    });
+    // Bun's S3Client cannot send SSE-C, and Hetzner Object Storage has no at-rest encryption,
+    // so the PUT and the readback GET are signed by hand (SigV4) with the three SSE-C headers.
+    const endpoint = process.env.ARCHIVE_ENDPOINT!.replace(/\/$/, "");
+    const host = new URL(endpoint).host;
+    const sse: Record<string, string> = {
+      "x-amz-server-side-encryption-customer-algorithm": "AES256",
+      "x-amz-server-side-encryption-customer-key": process.env.ARCHIVE_SSE_C_KEY_B64!,
+      "x-amz-server-side-encryption-customer-key-md5": process.env.ARCHIVE_SSE_C_KEY_MD5!,
+    };
+    const hmac = (key: Buffer | string, msg: string) => createHmac("sha256", key).update(msg).digest();
+    async function s3(method: "PUT" | "GET", key: string, body: string): Promise<Response> {
+      const path = `/${process.env.ARCHIVE_BUCKET}/${key}`;
+      const now = new Date();
+      const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+      const day = stamp.slice(0, 8);
+      const digest = createHash("sha256").update(body).digest("hex");
+      const headers: Record<string, string> = { host, "x-amz-content-sha256": digest, "x-amz-date": stamp, ...sse };
+      const names = Object.keys(headers).sort();
+      const canonical = [method, path, "", ...names.map((n) => `${n}:${headers[n]}`), "", names.join(";"), digest].join("\n");
+      const scope = `${day}/auto/s3/aws4_request`;
+      const toSign = ["AWS4-HMAC-SHA256", stamp, scope, createHash("sha256").update(canonical).digest("hex")].join("\n");
+      let k: Buffer = hmac(`AWS4${process.env.ARCHIVE_SECRET_KEY}`, day);
+      for (const part of ["auto", "s3", "aws4_request"]) k = hmac(k, part);
+      const signature = createHmac("sha256", k).update(toSign).digest("hex");
+      headers.Authorization = `AWS4-HMAC-SHA256 Credential=${process.env.ARCHIVE_ACCESS_KEY}/${scope}, SignedHeaders=${names.join(";")}, Signature=${signature}`;
+      if (method === "PUT") headers["content-type"] = "application/json";
+      const { host: _h, ...send } = headers;
+      return fetch(endpoint + path, { method, headers: send, body: method === "PUT" ? body : undefined });
+    }
     try {
       const rows = await db`
         SELECT a.id::text, a.changed_at, a.user_id::text, a.change_kind,
@@ -39,13 +61,13 @@ data:
       for (const row of rows) {
         const body = JSON.stringify({ schema: 1, source: process.env.PAT_ARCHIVE_SOURCE || "postgres-pat-change", event: row });
         const hash = createHash("sha256").update(body).digest("hex");
-        const file = archive.file(`incidents/postgres-pat-change/${hash}.json`);
-        try {
-          await file.write(body, { type: "application/json" });
-        } catch {
+        const key = `incidents/postgres-pat-change/${hash}.json`;
+        const put = await s3("PUT", key, body);
+        if (!put.ok) {
           // A lost PUT acknowledgement or locked duplicate is safe only after
           // readback confirms identical bytes. Errors never acknowledge a row.
-          if (await file.text() !== body) throw new Error("Archive readback mismatch");
+          const got = await s3("GET", key, "");
+          if (!got.ok || (await got.text()) !== body) throw new Error(`Archive PUT ${put.status}, readback ${got.status}`);
         }
         await db`INSERT INTO public.pat_change_archive_ack(event_id)
                  VALUES (${row.id}) ON CONFLICT DO NOTHING`;

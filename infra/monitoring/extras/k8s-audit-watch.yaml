@@ -31,7 +31,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: k8s-audit-watch-9056a0d07782
+  name: k8s-audit-watch-196d138743c8
   namespace: monitoring
 data:
   expected.json: |
@@ -403,6 +403,13 @@ data:
         digest = hashlib.sha256(body).hexdigest()
         host = urllib.parse.urlsplit(endpoint).netloc
         headers = {'host': host, 'x-amz-content-sha256': digest, 'x-amz-date': stamp}
+        # Hetzner Object Storage has no at-rest encryption: every object is written with SSE-C,
+        # the key from OpenBao secret/backup-encryption. The same headers are signed on the
+        # readback GET below; a GET without them is a 400.
+        sse = {'x-amz-server-side-encryption-customer-algorithm': 'AES256',
+               'x-amz-server-side-encryption-customer-key': os.environ['ARCHIVE_SSE_C_KEY_B64'],
+               'x-amz-server-side-encryption-customer-key-md5': os.environ['ARCHIVE_SSE_C_KEY_MD5']}
+        headers.update(sse)
         signed = ';'.join(sorted(headers))
         canonical = '\n'.join(['PUT', path, '', ''.join(k + ':' + headers[k] + '\n' for k in sorted(headers)), signed, digest])
         key = ('AWS4' + os.environ['ARCHIVE_SECRET_KEY']).encode()
@@ -424,7 +431,7 @@ data:
                 raise
             digest = hashlib.sha256(b'').hexdigest()
             headers['x-amz-content-sha256'] = digest
-            canonical = '\n'.join(['GET', path, '', ''.join(k + ':' + headers[k] + '\n' for k in sorted(('host', 'x-amz-content-sha256', 'x-amz-date'))), signed, digest])
+            canonical = '\n'.join(['GET', path, '', ''.join(k + ':' + headers[k] + '\n' for k in sorted(('host', 'x-amz-content-sha256', 'x-amz-date') + tuple(sse))), signed, digest])
             string = 'AWS4-HMAC-SHA256\n' + stamp + '\n' + scope + '\n' + hashlib.sha256(canonical.encode()).hexdigest()
             headers['Authorization'] = ('AWS4-HMAC-SHA256 Credential=' + os.environ['ARCHIVE_ACCESS_KEY'] + '/' + scope
                                         + ', SignedHeaders=' + signed + ', Signature=' + hmac.new(key, string.encode(), hashlib.sha256).hexdigest())
@@ -812,7 +819,7 @@ spec:
     metadata:
       labels: { app: k8s-audit-watch }
       annotations:
-        evidence.unorouter.com/code-sha256: "9056a0d07782f4cdb2835903b63d554adaeed59c07e6911307aca4c4983092ef"
+        evidence.unorouter.com/code-sha256: "196d138743c87e184bf5c1e014c634085a8aaeab5aac453bedaa5930361cca1d"
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -862,7 +869,7 @@ spec:
             - { name: state, mountPath: /state }
       volumes:
         - name: app
-          configMap: { name: k8s-audit-watch-9056a0d07782 }
+          configMap: { name: k8s-audit-watch-196d138743c8 }
         - name: audit
           hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory }
         - name: hubble
