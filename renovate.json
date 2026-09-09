@@ -2,7 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "Weekly dependency bumps, never a PR. Patch and minor of images and charts merge straight to main in the Monday window (no CI here, ArgoCD rolls the commit). Everything else waits in the Dependency dashboard issue; ticking its box merges it to main on the next run.",
   "extends": [
-    "config:best-practices",
+    "config:recommended",
     ":disableRateLimiting",
     ":semanticCommitsDisabled"
   ],
@@ -21,9 +21,15 @@
   "dependencyDashboardApproval": true,
   "minimumReleaseAge": "7 days",
   "pinDigests": false,
+  "lockFileMaintenance": {
+    "enabled": false
+  },
   "commitMessageAction": "bump",
   "commitMessageTopic": "{{depName}}",
   "commitMessageExtra": "to {{newVersion}}",
+  "docker": {
+    "pinDigests": false
+  },
   "argocd": {
     "managerFilePatterns": [
       "/^apps/.+\\.yaml$/"
