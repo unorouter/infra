@@ -92,3 +92,12 @@ migration (2026-09-10).
   DHCP; nothing static in the config.
 - KubePrism (`localhost:7445`) is what Cilium and every in-cluster client use; the cluster
   endpoint in `talconfig.yaml` only matters to talosctl and to the first bootstrap.
+- etcd and the kubelet pick an address per node: without `cluster.etcd.advertisedSubnets` and
+  `machine.kubelet.nodeIP.validSubnets` pinned to `10.100.1.0/24`, a node came up on its public
+  address (node13, 2026-09-11) and was unreachable behind the firewall.
+- The apiserver refuses a PodSecurity `exemptions.namespaces` list that repeats `kube-system`:
+  it is exempt by default, listing it again is a duplicate and the static pod crash loops
+  before it ever serves. The kubelet does not retry a rejected static pod on its own, so a
+  fixed config needs `talosctl service kubelet restart` on each node.
+- A second cluster restored from the same vault gets the same Discord webhook: silence its
+  Alertmanager before syncing monitoring, or a half built cluster pages the production channel.
