@@ -134,12 +134,13 @@ unseal() {
 restore() {
   local snap=/tmp/openbao-latest.snap
   # Hetzner Object Storage, plain object: the raft snapshot is sealed by the barrier key. OpenBao
-  # does not exist yet at this point, so the credential comes from tofu/.env (the Hetzner
-  # project key), nothing else is needed.
-  echo ">> pull latest snapshot from Hetzner (tofu/.env credential)"
+  # does not exist yet at this point, so the bucket credential comes from secrets/pg-s3.sops.yaml
+  # (break-glass age key, the same pair the writers use). tofu/.env holds the STATE bucket key,
+  # which Hetzner rejects on unorouter-backups (InvalidAccessKeyId, 2026-09-10).
+  echo ">> pull latest snapshot from Hetzner (secrets/pg-s3.sops.yaml credential)"
   local ak sk
-  ak=$(grep -E '^export AWS_ACCESS_KEY_ID=' tofu/.env | cut -d= -f2-); sk=$(grep -E '^export AWS_SECRET_ACCESS_KEY=' tofu/.env | cut -d= -f2-)
-  [ -n "$ak" ] || { echo "!! need tofu/.env AWS_*" >&2; exit 1; }
+  read -r ak sk < <(sops -d secrets/pg-s3.sops.yaml | python3 -c 'import sys,yaml; d=next(yaml.safe_load_all(sys.stdin))["stringData"]; print(d["ACCESS_KEY_ID"], d["ACCESS_SECRET_KEY"])')
+  [ -n "$ak" ] || { echo "!! could not read the pg-s3 pair from sops" >&2; exit 1; }
   RCLONE_CONFIG_HZ_TYPE=s3 RCLONE_CONFIG_HZ_PROVIDER=Ceph RCLONE_CONFIG_HZ_NO_CHECK_BUCKET=true RCLONE_CONFIG_HZ_REGION=fsn1 \
   RCLONE_CONFIG_HZ_ENDPOINT=https://fsn1.your-objectstorage.com \
   RCLONE_CONFIG_HZ_ACCESS_KEY_ID="$ak" RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY="$sk" \
