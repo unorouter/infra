@@ -435,32 +435,35 @@ data:
                     | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
                     | actor!~"system:node:.*"
                     | actor!~"system:serviceaccount:(kube-system|external-secrets):.*"
+                    | actor!="system:kube-controller-manager" or objectRef_namespace!="kube-system"
                   [5m]
                 )
               ) > 0
             labels: { severity: warning, source: k8s-audit-watch }
             annotations:
               summary: "{{ $labels.actor }} minted a token for {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
-          # A Job pod in services that is not one of the two sync CronJobs.
-          - alert: K8sUnexpectedJobPod
+          # A Job in services created by anything but the CronJob controller. Pods are
+          # useless for this: the job-controller creates them by generateName, so the
+          # metadata-level audit event carries no name to tell cron pods from others.
+          - alert: K8sUnexpectedJob
             expr: >-
-              sum by (objectRef_name) (
+              sum by (objectRef_name, actor) (
                 count_over_time(
                   {job="k8s-audit"}
                     | json
                     | stage="ResponseComplete"
                     | verb="create"
-                    | objectRef_resource="pods"
+                    | objectRef_resource="jobs"
                     | objectRef_subresource=""
                     | objectRef_namespace="services"
-                    | user_username="system:serviceaccount:kube-system:job-controller"
-                    | objectRef_name!~"new-api-sync(-full)?-.*"
+                    | user_username!="system:serviceaccount:kube-system:cronjob-controller"
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
                   [5m]
                 )
               ) > 0
             labels: { severity: critical, source: k8s-audit-watch }
             annotations:
-              summary: "Job pod {{ $labels.objectRef_name }} created in services outside the sync CronJobs"
+              summary: "Job {{ $labels.objectRef_name }} created in services by {{ $labels.actor }}"
           # Trigger for alerting/canary-quarantine.yaml. Metadata audit: the body is not in the
           # log, so the responder lists services pods and checks the canary reference itself.
           # severity none and source loki-trigger match only the responder route.
