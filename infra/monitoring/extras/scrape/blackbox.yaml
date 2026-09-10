@@ -16,7 +16,7 @@ spec:
       labels: { app: blackbox-exporter }
     spec:
       nodeSelector:
-        kubernetes.io/hostname: unorouter-node9
+        unorouter.com/monitoring: "true"
       containers:
         - name: blackbox-exporter
           image: quay.io/prometheus/blackbox-exporter:v0.28.0

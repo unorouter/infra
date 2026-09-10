@@ -21,14 +21,16 @@ provisioning:
   maxSize: 4GiB
 ---
 # Without a cap EPHEMERAL grows over the whole disk at install and the two volumes above never
-# get a partition (seen on the proof: "not enough space"). Install time only. On a 160 GB cx43
-# disk: system 2.3 GB, EPHEMERAL 80, swap 4, the user volume takes the remaining ~70.
+# get a partition (seen on the proof: "not enough space"). Install time only. EPHEMERAL holds
+# images, container rootfs and logs: the k3s nodes carried 25 to 29 GB of images. On a 160 GB
+# cx43 disk: system 2.3 GB, EPHEMERAL 60, swap 4, the user volume takes the remaining ~93 for
+# the local-path volumes (a newapi-pg instance is 24 GB, Prometheus 10, the gateway cache up to 40).
 apiVersion: v1alpha1
 kind: VolumeConfig
 name: EPHEMERAL
 provisioning:
   diskSelector:
     match: system_disk
-  minSize: 60GiB
-  maxSize: 80GiB
+  minSize: 40GiB
+  maxSize: 60GiB
   grow: false

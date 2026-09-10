@@ -2,22 +2,23 @@
 # Hetzner capacity sniper. Watches stock for one server type across the EU locations and buys
 # up to SNIPE_COUNT parked spares the moment they appear (cx43 is chronically sold out). It
 # never touches live nodes, never joins anything and holds no other credential than the
-# Hetzner token: a spare is a plain Ubuntu box behind the node firewall until an operator
-# joins it by hand (bootstrap/k0s/spare-join.sh). Spares are named
-# <prefix>-<location>-<n> and carry the label role=spare. Runs as a systemd unit on the
-# operator VPS; secrets come from /etc/hetzner-snipe/env (HCLOUD_TOKEN, DISCORD_WEBHOOK).
+# Hetzner token: a spare boots the Talos snapshot (label os=talos, newest) with no machine
+# config, so it sits in maintenance mode behind the node firewall until an operator joins it
+# (bootstrap/talos/spare-join.sh). Spares are named <prefix>-<location>-<n> and carry the
+# label role=spare. Runs as a systemd unit on the operator VPS; secrets come from
+# /etc/hetzner-snipe/env (HCLOUD_TOKEN, DISCORD_WEBHOOK).
 #
 #   SNIPE_TYPE    server type to hunt                      (default cx43)
 #   SNIPE_LOCS    locations in order of preference         (default "fsn1 nbg1 hel1")
 #   SNIPE_COUNT   how many spares to hold in total         (default 1)
 #   SNIPE_PREFIX  server name prefix                       (default unorouter-spare)
+#   SNIPE_IMAGE   image id                                 (default: newest snapshot labelled os=talos)
 set -uo pipefail
 set -a
 source "${SNIPE_ENV:-/etc/hetzner-snipe/env}"
 set +a
 API="https://api.hetzner.cloud/v1"
 
-SSH_KEY=115608845          # unorouter-operator
 NETWORK=12478474           # unorouter-cluster (10.100.0.0/16)
 FIREWALL=11352641          # unorouter-node
 TYPE="${SNIPE_TYPE:-cx43}"
@@ -26,6 +27,9 @@ TARGET="${SNIPE_COUNT:-1}"
 PREFIX="${SNIPE_PREFIX:-unorouter-spare}"
 
 hc(){ curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" "$@"; }
+
+IMAGE="${SNIPE_IMAGE:-$(hc "$API/images?type=snapshot&label_selector=os=talos&sort=created:desc" | python3 -c "import sys,json; print(json.load(sys.stdin)['images'][0]['id'])")}"
+[ -n "$IMAGE" ] || { echo "no os=talos snapshot and no SNIPE_IMAGE" >&2; exit 1; }
 
 notify(){
   [ -n "${DISCORD_WEBHOOK:-}" ] || return 0
@@ -52,12 +56,11 @@ grab(){
   resp=$(hc -X POST "$API/servers" -H "Content-Type: application/json" -d "{
     \"name\": \"$name\",
     \"server_type\": \"$TYPE\",
-    \"image\": \"ubuntu-24.04\",
+    \"image\": \"$IMAGE\",
     \"location\": \"$loc\",
-    \"ssh_keys\": [$SSH_KEY],
     \"firewalls\": [{\"firewall\": $FIREWALL}],
     \"networks\": [$NETWORK],
-    \"labels\": {\"role\": \"spare\"},
+    \"labels\": {\"role\": \"spare\", \"os\": \"talos\"},
     \"start_after_create\": true
   }")
   if echo "$resp" | grep -q '"server"'; then

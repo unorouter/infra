@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One script, all DR/ops. The cert kubeconfig (kubeconfig.breakglass) is NOT kept on disk:
-# run `dr.sh kubeconfig` first to fetch it from a node over SSH, shred it when done; every
-# request with it pages (system:admin), day-to-day kubectl goes through Teleport.
-# Usage: ./scripts/dr.sh <ips|apply|destroy|bootstrap|restore|unseal|kubeconfig|root>
+# run `dr.sh kubeconfig` first to ask a node for it over the Talos API, shred it when done;
+# every request with it pages (system:admin), day-to-day kubectl goes through Teleport.
+# Usage: ./scripts/dr.sh <ips|apply|destroy|bootstrap|restore|unseal|talosconfig|kubeconfig|root>
 # Full runbook context: bootstrap/dr/README.md
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -65,18 +65,30 @@ apply() { (cd tofu && set -a && . ./.env && set +a && tofu init -input=false >/d
 destroy() { (cd tofu && set -a && . ./.env && set +a && tofu init -input=false >/dev/null && tofu destroy); }
 storage_apply() { (cd tofu/storage && set -a && . ../.env && set +a && tofu init -input=false >/dev/null && tofu apply); }
 
-# Nodes have no public SSH (Hetzner firewall: Tailscale UDP 41641 and ICMP only) and no
-# authorized_keys: root comes only through Tailscale SSH (2-don identity, 12h check, lock).
-# The kubeconfig points at the node's tailnet address; the Hetzner console is the last resort.
+# Nodes run Talos: no SSH, no shell. The node API (50000) and the kube API (6443) answer on
+# the tailnet only (Hetzner firewall: Tailscale UDP 41641 and ICMP; ACL grants both ports to
+# the operator). The client certificate comes from the cluster secrets in
+# secrets/talos.sops.yaml (break-glass age key); the Hetzner console is the last resort.
 TS_IP() { tailscale status --json | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 for p in list(d['Peer'].values())+[d['Self']]:
     if p['HostName']=='$1': print(p['TailscaleIPs'][0]); break
 "; }
+TALOSCONFIG_FILE=bootstrap/talos/clusterconfig/talosconfig
+# Renders clusterconfig/ (machine configs and the talosconfig) from git plus the sops secrets.
+# The Tailscale key only matters for a node create, so it may be absent here.
+talosconfig() {
+  sops -d secrets/talos.sops.yaml > bootstrap/talos/talsecret.yaml
+  (cd bootstrap/talos && TS_AUTHKEY="${TS_AUTHKEY:-unset}" talhelper genconfig --no-gitignore >/dev/null)
+  echo "$TALOSCONFIG_FILE rendered (talsecret.yaml and clusterconfig/ are gitignored; shred both when done)"
+}
 kubeconfig() {
-  local ip; ip=$(TS_IP "${1:-unorouter-node8}"); [ -n "$ip" ] || { echo "!! node not on the tailnet" >&2; exit 1; }
-  ssh -o StrictHostKeyChecking=accept-new root@"$ip" 'cat /etc/rancher/k3s/k3s.yaml' | sed "s/127.0.0.1/$ip/" > kubeconfig.breakglass
+  local node="${1:-unorouter-node11}" ip; ip=$(TS_IP "$node"); [ -n "$ip" ] || { echo "!! $node not on the tailnet" >&2; exit 1; }
+  [ -f "$TALOSCONFIG_FILE" ] || talosconfig
+  talosctl --talosconfig "$TALOSCONFIG_FILE" -e "$ip" -n "$ip" kubeconfig kubeconfig.breakglass --force
+  # the rendered kubeconfig names the private control plane endpoint; point it at this node's tailnet address
+  sed -i "s#https://10\.100\.1\.[0-9]*:6443#https://$ip:6443#" kubeconfig.breakglass
   chmod 600 kubeconfig.breakglass; echo "kubeconfig.breakglass -> $ip (shred -u it when done)"
 }
 
@@ -95,12 +107,16 @@ bao_read() {
     BAO_TOKEN="$T" bao token revoke -self >/dev/null 2>&1; exit $rc'
 }
 
-# Fallback only: cloud-init auto-bootstraps Cilium+ArgoCD. Use if that path fails.
+# The three things a fresh Talos cluster needs before ArgoCD can take over from git: Cilium
+# (the nodes are NotReady without a CNI), the local-path StorageClass, ArgoCD and its root
+# app. After this every one of them is also an Application in apps/ and ArgoCD adopts the
+# install in place. Runs against the talosctl kubeconfig (kubeconfig.talos or breakglass).
 bootstrap() {
   local cil=1.20.1
   helm repo add cilium https://helm.cilium.io/ >/dev/null 2>&1 || true
   helm upgrade --install cilium cilium/cilium --version "$cil" -n kube-system -f infra/cilium/values.yaml
   kubectl -n kube-system rollout status ds/cilium --timeout=180s
+  kubectl apply -k infra/local-path
   kubectl create namespace argocd 2>/dev/null || true
   kubectl apply -k bootstrap/argocd/ --server-side --force-conflicts
   kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
@@ -138,10 +154,13 @@ restore() {
   local tkey trt; tkey=$(echo "$tmp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["unseal_keys_b64"][0])')
   trt=$(echo "$tmp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["root_token"])')
   kubectl -n openbao exec openbao-0 -- bao operator unseal "$tkey" >/dev/null
-  # Not kubectl cp / exec -i: a 450 KB stdin over the API broke mid-stream on 2026-09-08 and the
-  # restore then failed on an empty file. Stage it on the node into the pod's own PV directory.
-  local pvdir; pvdir=$(ssh root@"$(TS_IP "$(kubectl -n openbao get pod openbao-0 -o jsonpath='{.spec.nodeName}')")" 'ls -d /var/lib/rancher/k3s/storage/*_openbao_data-openbao-0' | head -1)
-  scp "$snap" root@"$(TS_IP "$(kubectl -n openbao get pod openbao-0 -o jsonpath='{.spec.nodeName}')")":"$pvdir/latest.snap"
+  # Over exec stdin, checked by hash inside the pod: a 450 KB stdin once broke mid-stream
+  # (2026-09-08) and the restore then ran on an empty file, so the copy is verified before
+  # restore touches it. Snapshots are ~90 KB; if this ever fails on size, stage the file with
+  # a Job that mounts data-openbao-0 (no SSH on Talos).
+  local sum; sum=$(sha256sum "$snap" | cut -d' ' -f1)
+  kubectl -n openbao exec -i openbao-0 -- sh -c "cat > /openbao/data/latest.snap && echo '$sum  /openbao/data/latest.snap' | sha256sum -c - >/dev/null" < "$snap" \
+    || { echo "!! snapshot copy into the pod failed the hash check" >&2; exit 1; }
   echo ">> restore -force"
   # token via stdin, not argv: exec args land in the apiserver audit log + pod process table
   printf '%s\n' "$trt" | kubectl -n openbao exec -i openbao-0 -- \
@@ -157,7 +176,7 @@ restore() {
   echo ">> DONE. Then: tsh login --proxy=teleport.unorouter.com"
 }
 
-cmd="${1:?usage: dr.sh <ips|apply|destroy|storage_apply|bootstrap|kubeconfig|unseal|restore|root>}"
+cmd="${1:?usage: dr.sh <ips|apply|destroy|storage_apply|bootstrap|talosconfig|kubeconfig|unseal|restore|root>}"
 shift
 root() { generate_root; }
 bao-read() { bao_read "$@"; }

@@ -131,14 +131,14 @@
       "groupName": "teleport"
     },
     {
-      "description": "Cilium lives in a live HelmChart CR plus three DR copies",
+      "description": "Cilium: the chart in apps/ and the dr.sh bootstrap pin move together",
       "matchPackageNames": [
         "cilium"
       ],
       "groupName": "cilium"
     },
     {
-      "description": "ArgoCD chart in the live HelmChart CR plus the DR copies",
+      "description": "ArgoCD: the k3s HelmChart CR pin, retired with the k3s cluster",
       "matchPackageNames": [
         "argo-cd"
       ],
@@ -151,44 +151,63 @@
       ],
       "rangeStrategy": "bump",
       "groupName": "tofu providers"
+    },
+    {
+      "description": "Talos: one node at a time by hand after the merge",
+      "matchPackageNames": [
+        "siderolabs/talos"
+      ],
+      "groupName": "talos"
     }
   ],
   "customManagers": [
     {
-      "description": "k3s HelmChart CRs in cloud-init (Cilium, ArgoCD)",
+      "description": "Talos pin in talconfig.yaml (talosctl upgrade per node after the merge, docs/versions.md)",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^tofu/cloud-init\\.yaml\\.tftpl$/"
+        "/^bootstrap/talos/talconfig\\.yaml$/"
       ],
       "matchStrings": [
-        "repo: (?<registryUrl>\\S+)\\n\\s+chart: (?<depName>\\S+)\\n\\s+version: (?<currentValue>[\\d.]+)"
+        "talosVersion: (?<currentValue>v[\\d.]+)"
       ],
-      "datasourceTemplate": "helm"
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases"
     },
     {
-      "description": "k0s DR template charts",
+      "description": "talosctl image in the etcd backup CronJob, one group with the Talos pin",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^bootstrap/k0s/k0sctl\\.tmpl\\.yaml$/"
+        "/^infra/talos/.+\\.yaml$/"
       ],
       "matchStrings": [
-        "chartname: cilium/cilium\\n\\s+version: \"(?<currentValue>[\\d.]+)\""
+        "image: ghcr\\.io/siderolabs/talosctl:(?<currentValue>v[\\d.]+)"
       ],
-      "depNameTemplate": "cilium",
-      "registryUrlTemplate": "https://helm.cilium.io",
-      "datasourceTemplate": "helm"
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases"
     },
     {
+      "description": "Kubernetes pin in talconfig.yaml (talosctl upgrade-k8s after the merge; a minor must be inside the Talos release's supported range)",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^bootstrap/k0s/k0sctl\\.tmpl\\.yaml$/"
+        "/^bootstrap/talos/talconfig\\.yaml$/"
       ],
       "matchStrings": [
-        "chartname: argo/argo-cd\\n\\s+version: \"(?<currentValue>[\\d.]+)\""
+        "kubernetesVersion: (?<currentValue>v[\\d.]+)"
       ],
-      "depNameTemplate": "argo-cd",
-      "registryUrlTemplate": "https://argoproj.github.io/argo-helm",
-      "datasourceTemplate": "helm"
+      "depNameTemplate": "kubernetes/kubernetes",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "local-path-provisioner manifest pinned by release URL",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^infra/local-path/kustomization\\.yaml$/"
+      ],
+      "matchStrings": [
+        "rancher/local-path-provisioner/(?<currentValue>v[\\d.]+)/"
+      ],
+      "depNameTemplate": "rancher/local-path-provisioner",
+      "datasourceTemplate": "github-releases"
     },
     {
       "description": "DR fallback Cilium in scripts/dr.sh",
@@ -202,32 +221,6 @@
       "depNameTemplate": "cilium",
       "registryUrlTemplate": "https://helm.cilium.io",
       "datasourceTemplate": "helm"
-    },
-    {
-      "description": "k3s pin, stable channel only",
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^tofu/variables\\.tf$/"
-      ],
-      "matchStrings": [
-        "variable \"k3s_version\"[\\s\\S]*?default\\s*=\\s*\"(?<currentValue>v[\\d.]+\\+k3s\\d+)\""
-      ],
-      "depNameTemplate": "k3s",
-      "datasourceTemplate": "custom.k3s",
-      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(?<compatibility>\\+k3s)(?<build>\\d+)$"
-    },
-    {
-      "description": "k0s version in the DR template",
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^bootstrap/k0s/k0sctl\\.tmpl\\.yaml$/"
-      ],
-      "matchStrings": [
-        "version: (?<currentValue>v[\\d.]+\\+k0s\\.\\d+)"
-      ],
-      "depNameTemplate": "k0sproject/k0s",
-      "datasourceTemplate": "github-releases",
-      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(?<compatibility>\\+k0s)\\.(?<build>\\d+)$"
     },
     {
       "description": "Operator manifests pinned by release URL (version once in the URL)",
@@ -278,13 +271,5 @@
       ],
       "datasourceTemplate": "docker"
     }
-  ],
-  "customDatasources": {
-    "k3s": {
-      "defaultRegistryUrlTemplate": "https://update.k3s.io/v1-release/channels",
-      "transformTemplates": [
-        "{\"releases\":[{\"version\": $.(data[id = 'stable'].latest),\"sourceUrl\":\"https://github.com/k3s-io/k3s\",\"changelogUrl\":$join([\"https://github.com/k3s-io/k3s/releases/tag/\",$.(data[id = 'stable'].latest)])}]}"
-      ]
-    }
-  }
+  ]
 }

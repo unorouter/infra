@@ -1,13 +1,36 @@
-# GitHub SSO connector. client_secret comes from OpenBao (secret/teleport-github), applied
-# via tctl (not committed). teams_to_roles maps org teams -> teleport roles.
-# Client ID is public. Apply: tctl create -f (with secret injected).
-kind: github
-version: v3
+# GitHub SSO connector, reconciled by the Teleport operator. The client secret never enters
+# git: the operator resolves secret://<secret>/<key> against the ESO managed Secret
+# teleport-github-connector (OpenBao secret/teleport-github), which carries the lookup
+# annotation. teams_to_roles maps org teams to the roles in this directory.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: teleport-github-connector
+  namespace: teleport
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: teleport-github-connector
+    creationPolicy: Owner
+    template:
+      metadata:
+        annotations:
+          resources.teleport.dev/allow-lookup-from-cr: "*"
+  data:
+    - secretKey: client_secret
+      remoteRef: { key: teleport-github, property: client_secret }
+---
+apiVersion: resources.teleport.dev/v3
+kind: TeleportGithubConnector
 metadata:
   name: github
+  namespace: teleport
 spec:
   client_id: Ov23li6rNPrZg3tJr1v5
-  # client_secret: <from OpenBao secret/teleport-github, injected at apply time>
+  client_secret: secret://teleport-github-connector/client_secret
   redirect_url: https://teleport.unorouter.com/v1/webapi/github/callback
   teams_to_roles:
     - organization: unorouter
@@ -23,7 +46,7 @@ spec:
       # hand this tier argocd and openbao too. Without it the proxy 404s on
       # grafana.unorouter.com, because an app the caller cannot see does not exist.
       roles: ["auditor", "newapi-db-reader", "kube-viewer", "grafana-viewer"]
-    # Exec tier stacked on readonly: shell/port-forward into services pods only
+    # Log tier stacked on readonly: pods and pod logs in services only
     # (kube-debugger + kube-debugger-rbac.yaml). GitHub-side the team carries
     # pull on unorouter for the fork-PR flow (main takes no direct pushes from it).
     - organization: unorouter

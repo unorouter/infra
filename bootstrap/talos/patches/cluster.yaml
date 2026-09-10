@@ -1,15 +1,39 @@
 # Cluster level settings shared by every node. Pod and service CIDRs stay the k3s values so
 # TRUSTED_NETWORKS and every network policy keep matching. kube-proxy off: Cilium replaces it.
+# CoreDNS off: git's infra/coredns owns kube-dns (10.43.0.10) with the rewrites for
+# s3.unorouter.com and teleport.unorouter.com.
 cluster:
   network:
     podSubnets: [10.42.0.0/16]
     serviceSubnets: [10.43.0.0/16]
   proxy:
     disabled: true
+  coreDNS:
+    disabled: true
   etcd:
     extraArgs:
       listen-metrics-urls: http://0.0.0.0:2381
   apiServer:
+    # Talos enforces Pod Security `baseline` cluster wide (k3s enforced nothing). The
+    # namespaces with hostPath or root pods are exempted here rather than labelled in git,
+    # so the manifests stay valid on any cluster: Vector and node-exporter (monitoring),
+    # local-path, Velero's node agent.
+    admissionControl:
+      - name: PodSecurity
+        configuration:
+          apiVersion: pod-security.admission.config.k8s.io/v1alpha1
+          kind: PodSecurityConfiguration
+          defaults:
+            enforce: baseline
+            enforce-version: latest
+            audit: restricted
+            audit-version: latest
+            warn: restricted
+            warn-version: latest
+          exemptions:
+            usernames: []
+            runtimeClasses: []
+            namespaces: [kube-system, monitoring, local-path-storage, velero]
     # Who touched a secret or got a shell. Metadata only: the request URI names the object
     # (and the exec command), the body would carry the secret values. Log: /var/log/audit/kube.
     auditPolicy:

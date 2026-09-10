@@ -20,7 +20,7 @@ issue Renovate keeps current. The policy is `renovate.json`:
 - **k3s**: the pin in `tofu/variables.tf` is the DR rebuild version only. Running nodes are
   upgraded by swapping the binary, one server at a time, then bump the pin.
 - **Cilium and ArgoCD**: the live HelmChart CRs exist only in the cluster. Patch the live CR AND
-  accept the bump of `tofu/cloud-init.yaml.tftpl`, `bootstrap/k0s/k0sctl.tmpl.yaml` and
+  accept the bump of `tofu/cloud-init.yaml.tftpl` and
   `scripts/dr.sh` (grouped, one tick). See [cluster.md](cluster.md).
 - **OpenBao**: the StatefulSet is `OnDelete`. After the merge delete the pod, then unseal (3 of 5).
 - **Teleport**: the auth server chart and the kube agent chart are one group; the auth server

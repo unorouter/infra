@@ -151,7 +151,7 @@ spec:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:
-                matchExpressions: [{ key: node-role.kubernetes.io/etcd, operator: Exists }]
+                matchExpressions: [{ key: node-role.kubernetes.io/control-plane, operator: Exists }]
       containers:
         - name: edge-mode
           image: python:3.12-alpine

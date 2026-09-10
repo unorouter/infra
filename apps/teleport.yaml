@@ -16,6 +16,11 @@ spec:
       targetRevision: main
       ref: values
       path: infra/teleport/policies
+    # connector and roles as operator CRs plus the RBAC they bind; sync wave after the chart so
+    # the CRDs exist before the CRs are applied
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      path: infra/teleport/resources
   destination:
     server: https://kubernetes.default.svc
     namespace: teleport

@@ -1,83 +1,94 @@
-# Talos proof on the parked spares
+# Talos nodes
 
-Decision 2026-09-10: the next cluster runs Talos Linux. This directory holds the proof that
-was run on the two parked cx43 spares before any migration work; production, the k3s cluster
-and every other path in this repo were untouched. The comparison that led here is in the
-session plan of 2026-09-10; the short version: Talos removes the host OS as a thing to prepare,
-k0s would still have had an Ubuntu underneath, k3s bundles what we disable.
-
-## What is here
+The cluster runs Talos Linux: no shell, no SSH, no package manager. A node is the Image
+Factory snapshot plus one rendered machine config, and everything about it is in this
+directory. Kubernetes above the OS is unchanged: Cilium, ArgoCD and the apps come from `apps/`.
 
 | File | Purpose |
 | --- | --- |
-| `schematic.yaml` | Image Factory schematic: `qemu-guest-agent`, `tailscale` |
-| `upload-image.sh <talos version>` | builds the Hetzner snapshot from the factory image (one temporary rescue server), prints the snapshot id |
-| `talconfig.yaml`, `patches/` | talhelper input: two control plane nodes, KubePrism, no kube-proxy, k3s pod and service CIDRs, audit policy, etcd metrics, sysctls, kubelet swap posture, user volume for local-path, 4 GiB swap partition, Tailscale extension |
-| `poc-cilium-values.yaml` | `infra/cilium/values.yaml` plus the Talos keys (KubePrism address, cgroup, capabilities) |
-| `poc-restore.yaml` | scratch restore of bot-pg through a one replica gateway copy with a self signed cert, read only against the bucket |
+| `schematic.yaml` | Image Factory schematic: `qemu-guest-agent`, `tailscale`. Schematic id `7d4c31cb...` |
+| `upload-image.sh <talos version>` | builds the Hetzner snapshot from the factory image (one temporary rescue server), labels it `os=talos` |
+| `talconfig.yaml`, `patches/` | talhelper input: three control plane nodes, KubePrism, no kube-proxy, no bundled CoreDNS, the k3s pod and service CIDRs, audit policy, Pod Security exemptions, etcd metrics, sysctls, kubelet swap posture, the user volume for local-path, 4 GiB swap, Tailscale extension |
+| `spare-join.sh <server> <node>` | turns a parked spare into a node: rename, rebuild to the snapshot, apply the config over the maintenance API |
+| `../../secrets/talos.sops.yaml` | the cluster secrets (`talhelper gensecret`), break-glass age key only |
 
-Gitignored: `talsecret.yaml` (talhelper secrets), `clusterconfig/` (rendered machine configs
-and talosconfig), kubeconfigs, snapshots. Nothing rendered is ever committed.
+Gitignored: `talsecret.yaml` (decrypted secrets), `clusterconfig/` (rendered machine configs and
+the talosconfig), kubeconfigs, snapshots. Nothing rendered is ever committed.
 
-## Procedure as run
+## Rendering
 
-1. `talosctl` v1.13.10, `talhelper`, `hcloud-upload-image` in `~/.local/bin`.
-2. `./upload-image.sh v1.13.10` (needs a free server slot): snapshot `430137253`.
-3. Tailscale auth key: admin console, reusable, pre-approved, `tag:node`, 7 days, revoked
-   after the proof. `talhelper gensecret > talsecret.yaml`,
-   `TS_AUTHKEY=... talhelper genconfig`.
-4. Spares deleted and recreated by API from the snapshot with the rendered machine config as
-   user data (same names, private IPs 10.100.1.1 and 10.100.1.5, node firewall, cluster
-   network, no SSH key). The sniper on netcup was stopped for the duration.
-5. `talosctl --talosconfig clusterconfig/talosconfig -e <tailnet name> -n <tailnet name> bootstrap`
-   on node 1, `talosctl kubeconfig`.
-6. Cilium: `helm install cilium cilium/cilium --version 1.20.1 -n kube-system -f poc-cilium-values.yaml`.
-7. local-path-provisioner into `local-path-storage` (privileged), path `/var/mnt/local-path-provisioner`.
-8. cert-manager, CNPG operator, Barman plugin from the pinned URLs in `infra/`, secrets by hand
-   from OpenBao, `poc-restore.yaml`, wait for the cluster, run the check Job.
-9. Vector with the audit source on `/var/log/audit/kube`, console sink.
-10. `talosctl etcd snapshot`, then both servers deleted and recreated from the snapshot with the
-    corrected user data, `bootstrap --recover-from` on node 1, node 2 joined.
-11. Teardown: servers deleted (the sniper rebuys Ubuntu spares), tailnet devices removed, ACL
-    reverted, proof auth key and API token revoked, rendered configs and secrets deleted
-    locally. The Hetzner snapshot `430137253` stays: it is the migration's image.
+```sh
+sops -d secrets/talos.sops.yaml > bootstrap/talos/talsecret.yaml
+cd bootstrap/talos && TS_AUTHKEY=$(bao kv get -field=talos_auth_key secret/tailscale) talhelper genconfig
+wc -c clusterconfig/*.yaml      # Hetzner caps user data at 32768 bytes
+```
 
-## Findings (2026-09-10)
+The Tailscale key is tagged `tag:node`, reusable, pre-authorised and pre-signed for Tailnet
+Lock (`tailscale lock sign <key>` on a signer), so a node joining with it is trusted on
+arrival. Rotate it in the admin console, sign, `bao kv patch secret/tailscale talos_auth_key=@-`.
 
-- Hetzner boots the factory snapshot straight into an installed Talos; the machine config from
-  user data is applied at first boot, no install step, no ISO. Both nodes were on the tailnet
-  about three minutes after the create call.
-- Tailnet Lock holds new nodes until signed: `tailscale lock sign nodekey:<key>` from the
-  laptop for each, then they are reachable. The Tailscale ACL needed `50000` added to the
-  `2-don@github -> tag:node` grant for talosctl (done live for the proof, reverted after).
-- Interface names on Hetzner are `eth0` (public) and `eth1` (private network), both configured
-  by the hcloud platform and DHCP; nothing static in the machine config. The private IP must
-  be passed at server create (`networks[].ip`), otherwise Hetzner assigns the lowest free one.
-- Without a `VolumeConfig EPHEMERAL maxSize` the EPHEMERAL partition takes the whole disk at
-  install and the swap and user volumes fail with "not enough space". The cap is install time
-  only, so it belongs in the initial user data (added to `patches/volumes.yaml`).
-- `local-path-provisioner` on `/var/mnt/local-path-provisioner` binds PVCs even without the
-  user volume (the path is on EPHEMERAL); the user volume only matters for sizing.
-- The apiserver audit log `/var/log/audit/kube` is invisible to the kubelet's mount namespace:
-  a hostPath on it fails with "is not a directory" until the kubelet gets an `extraMounts`
-  bind for it (added to `patches/machine.yaml`, applied live without a reboot).
-- Cilium 1.20.1 with `k8sServiceHost: localhost`, `k8sServicePort: 7445` (KubePrism) and the
-  Talos cgroup and capability keys: nodes Ready in under 90 s, KubeProxyReplacement true,
-  Hubble relay up, cluster health 2/2.
-- CNPG 1.30 plus Barman plugin 0.15 restored `bot-pg` v7 through a one replica gateway copy
-  with a self signed CA pinned as `endpointCA`: base backup plus WAL replay, 17 populated
-  tables, gateway cache "to upload 0" the whole time (read only).
-- Pod Security: Talos enforces `baseline` cluster wide and warns on `restricted`; namespaces
-  with hostPath or root pods (`monitoring`, `local-path-storage`) need the `privileged` label.
-- The audit directory is `nobody:nobody 0700` (Talos runs the apiserver as nobody). Vector as
-  root with every capability dropped gets "Permission denied" on the glob; `DAC_READ_SEARCH`
-  added to its capabilities fixes it, after which every secret read shows up with the actor.
-- `talosctl etcd snapshot` of the fresh cluster: 15 MB, 904 keys. Total loss test: both servers
-  deleted and recreated from the snapshot image with corrected user data, `talosctl bootstrap
-  --recover-from poc.snapshot` on the first node, second node joined, both Ready, every
-  namespace and PVC object back (PV contents gone, as with any lost node).
-- Deleting a member server without `talosctl etcd remove-member` first leaves a two member
-  etcd without quorum ("no leader"); the way out was a non graceful reset of the survivor and
-  `--recover-from` again. With three nodes one loss keeps quorum; the removal step stays in
-  the node swap runbook regardless. Sizing that works on a 160 GB disk: EPHEMERAL max 80 GiB,
-  swap 4 GiB, user volume min 40 GiB grow (lands at 69 GB).
+## A new node
+
+The sniper (`bootstrap/hetzner-snipe.sh`) parks a spare that boots the snapshot with no
+config and waits in maintenance mode behind the node firewall. Give it a name in
+`talconfig.yaml` (next number, its private IP as Hetzner assigned it), render, then:
+
+```sh
+./spare-join.sh unorouter-spare-nbg1-1 unorouter-node14
+```
+
+Three minutes later `tailscale status` lists it and `talosctl -n unorouter-node14.taild195fa.ts.net
+health` passes; it is an etcd member and a Ready node. Add the tofu block and import it
+(`tofu/node.tf`), add its private IP to `infra/monitoring/extras/scrape/etcd.yaml`, and to the
+SANs here.
+
+Removing a node: evacuate (the node swap runbook in `bootstrap/dr/README.md`), then
+`talosctl -n <node> reset` (a graceful reset leaves etcd itself), `kubectl delete node`, the
+tofu targeted destroy. `talosctl etcd remove-member` is only for a node that is already gone;
+deleting a member without either leaves etcd without a leader (seen on the proof).
+
+## Operating
+
+```sh
+export TALOSCONFIG=bootstrap/talos/clusterconfig/talosconfig     # after rendering
+talosctl -n unorouter-node11.taild195fa.ts.net dashboard           # what a shell used to be
+talosctl -n <node> logs kubelet | services | dmesg
+talosctl -n <node> get volumestatus                                # partitions, the user volume, swap
+talosctl -n <node> read /var/log/audit/kube/audit.log
+talosctl -n <node> etcd status
+```
+
+Upgrades (Renovate bumps the pins in `talconfig.yaml`, the steps are by hand,
+`docs/versions.md`): Talos one node at a time, `talosctl -n <node> upgrade --image
+factory.talos.dev/installer/<schematic>:<version>` (A/B image, rolls back if the new one does
+not boot, the disk is never wiped); Kubernetes once, `talosctl -n <node11> upgrade-k8s --to
+<version>`, which walks every node.
+
+Machine config changes: edit here, render, `talosctl -n <node> apply-config -f
+clusterconfig/unorouter-<node>.yaml` (most settings apply live, the output says when a reboot
+is needed). Never `talosctl edit mc` by hand: the next render would undo it.
+
+## etcd
+
+`infra/talos/etcd-backup.yaml` snapshots every member nightly into
+`unorouter-backups/etcd/<node>/<date>.snapshot` through the s3-gateway, with a talosconfig
+that holds only the `os:etcd:backup` role. Recovery from total control plane loss and from
+quorum loss are in `bootstrap/dr/README.md`: reset the others, `talosctl bootstrap
+--recover-from <snapshot>` on one, the rest rejoin. Proven twice on the spares before the
+migration (2026-09-10).
+
+## Rules learned on the proof
+
+- Hetzner boots the snapshot straight into an installed Talos; a config from user data is
+  applied at first boot, one from the maintenance API on a rebuilt server the same way.
+- Without `VolumeConfig EPHEMERAL maxSize` the EPHEMERAL partition takes the whole disk at
+  install and the swap and user volumes fail with "not enough space". Install time only.
+- The apiserver audit log is outside the kubelet's mount namespace until
+  `machine.kubelet.extraMounts` binds it (`patches/machine.yaml`); the directory is
+  `nobody:nobody 0700`, so Vector needs `DAC_READ_SEARCH`.
+- Pod Security is `baseline` cluster wide; the hostPath namespaces are exempted in
+  `patches/cluster.yaml`, not labelled in git.
+- Interfaces are `eth0` (public) and `eth1` (private network), configured by the platform and
+  DHCP; nothing static in the config.
+- KubePrism (`localhost:7445`) is what Cilium and every in-cluster client use; the cluster
+  endpoint in `talconfig.yaml` only matters to talosctl and to the first bootstrap.

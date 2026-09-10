@@ -210,7 +210,7 @@ spec:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:
-                matchExpressions: [{ key: node-role.kubernetes.io/etcd, operator: Exists }]
+                matchExpressions: [{ key: node-role.kubernetes.io/control-plane, operator: Exists }]
       securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534 }
       containers:
         - name: canary-quarantine

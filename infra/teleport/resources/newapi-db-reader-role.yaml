@@ -4,10 +4,11 @@
 #
 # The RLS policy on `options` used to be the whole of it, which left the role able to
 # read every PAT, API key, password hash, upstream provider key and TOTP seed in the
-# database -- including root's second factor. Applied via tctl create -f.
-kind: role
-version: v7
+# database -- including root's second factor. Reconciled by the Teleport operator from this file.
+apiVersion: resources.teleport.dev/v1
+kind: TeleportRoleV7
 metadata:
+  namespace: teleport
   name: newapi-db-reader
 spec:
   allow:

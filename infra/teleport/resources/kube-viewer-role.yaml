@@ -2,10 +2,11 @@
 # `teleport-viewers`, which kube-viewer-binding.yaml binds to the built-in `view`
 # ClusterRole: pods/logs/deployments/services readable cluster-wide, k8s Secrets
 # NOT readable. Teleport-side verbs are also pinned read-only so neither layer
-# alone is load-bearing. Applied via tctl create -f.
-kind: role
-version: v7
+# alone is load-bearing. Reconciled by the Teleport operator from this file.
+apiVersion: resources.teleport.dev/v1
+kind: TeleportRoleV7
 metadata:
+  namespace: teleport
   name: kube-viewer
 spec:
   allow:

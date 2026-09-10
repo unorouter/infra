@@ -91,3 +91,84 @@ resource "hcloud_server" "node8" {
 
   depends_on = [hcloud_network_subnet.nodes]
 }
+
+# Talos fleet (2026-09-10). The image is the Image Factory snapshot uploaded by
+# bootstrap/talos/upload-image.sh (label os=talos, newest wins). user_data is the rendered
+# machine config under bootstrap/talos/clusterconfig/ (gitignored): both are read at create
+# only, so they sit in ignore_changes and a plan on a checkout without the rendered files
+# proposes nothing. Each node was configured by bootstrap/talos/spare-join.sh and imported.
+data "hcloud_image" "talos" {
+  with_selector     = "os=talos"
+  with_architecture = "x86"
+  most_recent       = true
+}
+
+locals {
+  talos_config_dir = "${path.module}/../bootstrap/talos/clusterconfig"
+}
+
+resource "hcloud_server" "node11" {
+  name         = "unorouter-node11"
+  server_type  = "cx43"
+  location     = "nbg1"
+  image        = data.hcloud_image.talos.id
+  firewall_ids = [hcloud_firewall.node.id]
+  labels       = { os = "talos" }
+
+  network {
+    network_id = hcloud_network.cluster.id
+    ip         = "10.100.1.1"
+  }
+
+  user_data = fileexists("${local.talos_config_dir}/unorouter-unorouter-node11.yaml") ? file("${local.talos_config_dir}/unorouter-unorouter-node11.yaml") : null
+
+  lifecycle {
+    ignore_changes = [user_data, image, ssh_keys]
+  }
+
+  depends_on = [hcloud_network_subnet.nodes]
+}
+
+resource "hcloud_server" "node12" {
+  name         = "unorouter-node12"
+  server_type  = "cx43"
+  location     = "nbg1"
+  image        = data.hcloud_image.talos.id
+  firewall_ids = [hcloud_firewall.node.id]
+  labels       = { os = "talos" }
+
+  network {
+    network_id = hcloud_network.cluster.id
+    ip         = "10.100.1.5"
+  }
+
+  user_data = fileexists("${local.talos_config_dir}/unorouter-unorouter-node12.yaml") ? file("${local.talos_config_dir}/unorouter-unorouter-node12.yaml") : null
+
+  lifecycle {
+    ignore_changes = [user_data, image, ssh_keys]
+  }
+
+  depends_on = [hcloud_network_subnet.nodes]
+}
+
+resource "hcloud_server" "node13" {
+  name         = "unorouter-node13"
+  server_type  = "cx43"
+  location     = "nbg1"
+  image        = data.hcloud_image.talos.id
+  firewall_ids = [hcloud_firewall.node.id]
+  labels       = { os = "talos" }
+
+  network {
+    network_id = hcloud_network.cluster.id
+    ip         = "10.100.1.6"
+  }
+
+  user_data = fileexists("${local.talos_config_dir}/unorouter-unorouter-node13.yaml") ? file("${local.talos_config_dir}/unorouter-unorouter-node13.yaml") : null
+
+  lifecycle {
+    ignore_changes = [user_data, image, ssh_keys]
+  }
+
+  depends_on = [hcloud_network_subnet.nodes]
+}

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Teleport resources from git: the connector and roles are operator CRs (namespace teleport),
+# the two Kubernetes RBAC objects bind the groups those roles inject. No namespace: here on
+# purpose, the debuggers Role lives in services.
+resources:
+  - github-connector.yaml
+  - grafana-viewer-role.yaml
+  - kube-admin-role.yaml
+  - kube-viewer-role.yaml
+  - kube-viewer-binding.yaml
+  - kube-debugger-role.yaml
+  - kube-debugger-rbac.yaml
+  - newapi-db-admin-role.yaml
+  - newapi-db-reader-role.yaml

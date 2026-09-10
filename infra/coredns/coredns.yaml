@@ -176,15 +176,6 @@ spec:
           name: coredns-custom
           optional: true
       affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: NotIn
-                values:
-                - unorouter-node8
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 50

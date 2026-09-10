@@ -1,9 +1,14 @@
 # Vector on every node: tails /var/log/pods, the kube-apiserver audit files and the Hubble
 # export, ships raw lines to Loki and a sanitized subset to the Object Locked unorouter-logs
 # bucket through the s3-gateway (rclone crypt on the way to Hetzner, Let's Encrypt cert, public
-# roots). Root because audit.log is root 0600; every host mount is read-only except the
-# checkpoint and buffer directory. The chart's Agent defaults mount all of /var/lib (k3s server
-# keys included), so defaultVolumes names the three directories actually read.
+# roots). Root because the audit log is root 0600; every host mount is read-only except the
+# checkpoint and buffer directory. The chart's Agent defaults mount all of /var/lib, so
+# defaultVolumes names the directories actually read. Two audit paths: k3s wrote
+# /var/lib/rancher/k3s/server/logs, Talos writes /var/log/audit/kube; each is
+# DirectoryOrCreate so the DaemonSet schedules on either distribution and the absent one is
+# an empty directory. On Talos the directory is nobody:nobody 0700 (the apiserver runs as
+# nobody), which root with every capability dropped cannot enter: DAC_READ_SEARCH is the one
+# capability added back.
 role: Agent
 tolerations:
   - { key: node-role.kubernetes.io/control-plane, operator: Exists }
@@ -12,18 +17,20 @@ persistence:
   hostPath: { enabled: true, path: /var/lib/vector }
 defaultVolumes:
   - { name: var-log, hostPath: { path: /var/log/, type: Directory } }
-  - { name: k3s-server-logs, hostPath: { path: /var/lib/rancher/k3s/server/logs, type: Directory } }
+  - { name: k3s-server-logs, hostPath: { path: /var/lib/rancher/k3s/server/logs, type: DirectoryOrCreate } }
+  - { name: audit-kube, hostPath: { path: /var/log/audit/kube, type: DirectoryOrCreate } }
   - { name: hubble, hostPath: { path: /var/run/cilium/hubble, type: DirectoryOrCreate } }
 defaultVolumeMounts:
   - { name: var-log, mountPath: /var/log/, readOnly: true }
   - { name: k3s-server-logs, mountPath: /var/lib/rancher/k3s/server/logs, readOnly: true }
+  - { name: audit-kube, mountPath: /var/log/audit/kube, readOnly: true }
   - { name: hubble, mountPath: /var/run/cilium/hubble, readOnly: true }
 securityContext:
   runAsUser: 0
   runAsGroup: 0
   readOnlyRootFilesystem: true
   allowPrivilegeEscalation: false
-  capabilities: { drop: [ALL] }
+  capabilities: { drop: [ALL], add: [DAC_READ_SEARCH] }
 envFrom:
   - secretRef: { name: logs-archive }
 env:
@@ -53,7 +60,7 @@ customConfig:
       max_line_bytes: 262144
     audit:
       type: file
-      include: [/var/lib/rancher/k3s/server/logs/audit*.log]
+      include: [/var/lib/rancher/k3s/server/logs/audit*.log, /var/log/audit/kube/*.log]
       read_from: end
       max_line_bytes: 1048576
     hubble:

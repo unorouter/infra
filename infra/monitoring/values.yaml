@@ -1,7 +1,7 @@
-# kube-prometheus-stack. Whole stack is PINNED TO node7: local-path PVCs bind to one node
-# forever, so pinning is explicit rather than accidental. Swapping node7 later = delete the
-# Prometheus/Grafana/Alertmanager PVCs and lose history (no prod impact); see DR runbook.
-# node1 is deliberately avoided (pg primaries + OpenBao + argocd controllers, hottest node).
+# kube-prometheus-stack. Whole stack is PINNED to the node labelled unorouter.com/monitoring
+# (one node carries it): local-path PVCs bind to one node forever, so pinning is explicit
+# rather than accidental. Moving it = label the new node, delete the Prometheus, Grafana and
+# Alertmanager PVCs and lose history (no prod impact); see the DR runbook.
 
 nameOverride: kps
 fullnameOverride: kps
@@ -9,7 +9,7 @@ fullnameOverride: kps
 alertmanager:
   alertmanagerSpec:
     nodeSelector:
-      kubernetes.io/hostname: unorouter-node9
+      unorouter.com/monitoring: "true"
     resources:
       requests: { cpu: 20m, memory: 64Mi }
       limits: { cpu: 100m, memory: 128Mi }
@@ -32,7 +32,7 @@ alertmanager:
 
 grafana:
   nodeSelector:
-    kubernetes.io/hostname: unorouter-node9
+    unorouter.com/monitoring: "true"
   # Velero PV backup is opt in; dashboards come from git, this keeps user preferences and annotations.
   podAnnotations: {backup.velero.io/backup-volumes: storage}
   # The chart ships 23 dashboards and has no per-dashboard switch. On a 3-node cluster
@@ -135,12 +135,10 @@ prometheus:
     podMetadata:
       annotations:
         backup.velero.io/backup-volumes-excludes: prometheus-kps-prometheus-db
-    # node9 (cx43, 8c/16GB). It lived on node1 from 2026-08-29 to 2026-09-02; node1 is
-    # the last 4-core node and also carries etcd's leader and ArgoCD, and on 2026-09-02
-    # it saturated within 90s every time it hosted the pg primary. Prometheus was ~1Gi
-    # and ~0.2 core of that. Keep it on a 16GB node until node1 is upgraded.
+    # The monitoring node. Prometheus is ~1Gi and ~0.2 core; on 2026-09-02 a 4-core node
+    # hosting it next to the pg primary saturated within 90s, so it stays off the busiest node.
     nodeSelector:
-      kubernetes.io/hostname: unorouter-node9
+      unorouter.com/monitoring: "true"
     retention: 15d
     # 10GB not 16GB: node1 has 34G free and the 16GB cap would park the node at 72% disk,
     # brushing the 75% NodeDiskFillingUp threshold with normal image churn on top.
@@ -218,14 +216,14 @@ kubelet:
 
 prometheusOperator:
   nodeSelector:
-    kubernetes.io/hostname: unorouter-node9
+    unorouter.com/monitoring: "true"
   resources:
     requests: { cpu: 20m, memory: 64Mi }
     limits: { cpu: 200m, memory: 256Mi }
 
 kube-state-metrics:
   nodeSelector:
-    kubernetes.io/hostname: unorouter-node9
+    unorouter.com/monitoring: "true"
   resources:
     requests: { cpu: 20m, memory: 64Mi }
     limits: { cpu: 200m, memory: 192Mi }

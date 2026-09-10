@@ -1,10 +1,11 @@
 # DB admin role for the admins team: connects as the cert-only superuser `dbadmin`
 # (new-api/k8s/pg.yaml managed role, hba `hostssl all dbadmin all cert`). Every session
 # and query is in Teleport's audit under the GitHub identity; this is the prod write path,
-# `kubectl exec ... psql -U postgres` is break-glass. Applied via tctl create -f.
-kind: role
-version: v7
+# `kubectl exec ... psql -U postgres` is break-glass. Reconciled by the Teleport operator from this file.
+apiVersion: resources.teleport.dev/v1
+kind: TeleportRoleV7
 metadata:
+  namespace: teleport
   name: newapi-db-admin
 spec:
   allow:

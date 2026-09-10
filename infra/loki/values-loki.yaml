@@ -84,7 +84,7 @@ singleBinary:
   extraEnvFrom:
     - secretRef: { name: loki-s3 }
   # local-path PVCs bind to one node forever; the rest of the monitoring stack is here too
-  nodeSelector: { kubernetes.io/hostname: unorouter-node9 }
+  nodeSelector: { unorouter.com/monitoring: "true" }
   resources:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { memory: 2Gi }

@@ -86,7 +86,7 @@ monitoring), every pod.
 Drive it from `./scripts/dr.sh kubeconfig`: the Teleport context routes through the in-cluster
 apiserver Service, which loses endpoints mid-swap.
 
-0. **A sniped spare** (`bootstrap/k0s/hetzner-snipe.sh`) has no cloud-init, so replay
+0. **A sniped spare** (`bootstrap/hetzner-snipe.sh`) has no cloud-init, so replay
    `tofu/cloud-init-join.yaml.tftpl` by hand: the 4G swapfile with `vm.swappiness=10`, the
    `coredns.yaml.skip` marker, Tailscale with `--ssh --accept-dns=false`, the tailnet address in
    `tls-san` of `/etc/rancher/k3s/config.yaml`, then k3s with the template's exact

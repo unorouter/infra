@@ -12,10 +12,11 @@
 #
 # Grafana maps its own permissions from the teleport roles in the JWT
 # (role_attribute_path in monitoring values.yaml): no `editor` here, so a holder of this
-# role lands as a Grafana Viewer. Applied via tctl create -f.
-kind: role
-version: v7
+# role lands as a Grafana Viewer. Reconciled by the Teleport operator from this file.
+apiVersion: resources.teleport.dev/v1
+kind: TeleportRoleV7
 metadata:
+  namespace: teleport
   name: grafana-viewer
 spec:
   allow:

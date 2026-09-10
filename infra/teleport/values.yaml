@@ -92,6 +92,13 @@ proxy:
   # addresses should be valid same TCP version" because the forwarded v6 address is paired with
   # the v4 pod address. Client addresses come from the Cloudflare request log instead.
 
-# GitHub SSO connector + roles are applied as Teleport resources (tctl / operator) after
-# install -- Client Secret is not committed; it goes into a k8s Secret via SOPS/ESO.
+# The GitHub SSO connector and every role are TeleportGithubConnector / TeleportRoleV7
+# objects in infra/teleport/resources, reconciled by the chart's operator (a sidecar of the
+# auth pod) so a fresh cluster gets SSO from git with no tctl step. The client secret is read
+# from the ESO Secret teleport-github-connector by the operator's secret:// lookup.
 # Client ID (not secret): Ov23li6rNPrZg3tJr1v5
+operator:
+  enabled: true
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 256Mi }

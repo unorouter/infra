@@ -1,9 +1,12 @@
-# talhelper input for the Talos proof on the two parked spares. `talhelper genconfig` renders
-# clusterconfig/*.yaml (gitignored) from this file plus talsecret.yaml (gitignored).
-# Endpoint: the first node's private address, in-cluster traffic goes through KubePrism; from
-# the laptop kubectl and talosctl use the tailnet names listed as SANs. Interfaces come from
-# the Hetzner metadata (public) and DHCP (private network), nothing static here.
-clusterName: unorouter-talos-poc
+# talhelper input for the cluster. `talhelper genconfig` renders clusterconfig/*.yaml
+# (gitignored) from this file plus talsecret.yaml (gitignored, the sops copy is
+# secrets/talos.sops.yaml). Endpoint: the first node's private address; in-cluster clients go
+# through KubePrism, the laptop reaches kubectl and talosctl by the tailnet names listed as
+# SANs. Interfaces come from the Hetzner metadata (public) and DHCP (private network), nothing
+# static here. TS_AUTHKEY is the pre-signed key from OpenBao secret/tailscale, set in the
+# environment at genconfig time. node12 carries the monitoring label: Prometheus, Loki,
+# Grafana and Alertmanager pin to it because local-path volumes bind to one node forever.
+clusterName: unorouter
 talosVersion: v1.13.10
 kubernetesVersion: v1.36.4
 endpoint: https://10.100.1.1:6443
@@ -11,17 +14,19 @@ allowSchedulingOnControlPlanes: true
 cniConfig:
   name: none
 additionalApiServerCertSans: &sans
-  - unorouter-spare-nbg1-1.taild195fa.ts.net
-  - unorouter-spare-nbg1-2.taild195fa.ts.net
+  - unorouter-node11.taild195fa.ts.net
+  - unorouter-node12.taild195fa.ts.net
+  - unorouter-node13.taild195fa.ts.net
   - 10.100.1.1
   - 10.100.1.5
+  - 10.100.1.6
 additionalMachineCertSans: *sans
 patches:
   - "@./patches/cluster.yaml"
   - "@./patches/machine.yaml"
   - "@./patches/volumes.yaml"
 nodes:
-  - hostname: unorouter-spare-nbg1-1
+  - hostname: unorouter-node11
     ipAddress: 10.100.1.1
     controlPlane: true
     installDisk: /dev/sda
@@ -30,11 +35,25 @@ nodes:
       - name: tailscale
         environment:
           - TS_AUTHKEY=${TS_AUTHKEY}
-          - TS_HOSTNAME=unorouter-spare-nbg1-1
+          - TS_HOSTNAME=unorouter-node11
           - TS_USERSPACE=false
           - TS_EXTRA_ARGS=--accept-dns=false
-  - hostname: unorouter-spare-nbg1-2
+  - hostname: unorouter-node12
     ipAddress: 10.100.1.5
+    controlPlane: true
+    installDisk: /dev/sda
+    talosImageURL: factory.talos.dev/installer/7d4c31cbd96db9f90c874990697c523482b2bae27fb4631d5583dcd9c281b1ff
+    nodeLabels:
+      unorouter.com/monitoring: "true"
+    extensionServices:
+      - name: tailscale
+        environment:
+          - TS_AUTHKEY=${TS_AUTHKEY}
+          - TS_HOSTNAME=unorouter-node12
+          - TS_USERSPACE=false
+          - TS_EXTRA_ARGS=--accept-dns=false
+  - hostname: unorouter-node13
+    ipAddress: 10.100.1.6
     controlPlane: true
     installDisk: /dev/sda
     talosImageURL: factory.talos.dev/installer/7d4c31cbd96db9f90c874990697c523482b2bae27fb4631d5583dcd9c281b1ff
@@ -42,6 +61,6 @@ nodes:
       - name: tailscale
         environment:
           - TS_AUTHKEY=${TS_AUTHKEY}
-          - TS_HOSTNAME=unorouter-spare-nbg1-2
+          - TS_HOSTNAME=unorouter-node13
           - TS_USERSPACE=false
           - TS_EXTRA_ARGS=--accept-dns=false

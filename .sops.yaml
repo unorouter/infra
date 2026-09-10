@@ -1,8 +1,8 @@
 creation_rules:
   # Two keys. DAILY (age13wz...): in OpenBao secret/sops-age, read through Teleport plus the
   # OIDC token (`. scripts/bao.sh sops`), guards operational files. BREAK-GLASS (age100x...): on the
-  # VeraCrypt volume and in Bitwarden only, never in OpenBao, guards the unseal keys and the
-  # tailnet lock secrets (whoever holds it can mint an OpenBao root token). Daily files list both
+  # VeraCrypt volume and in Bitwarden only, never in OpenBao, guards the unseal keys, the
+  # tailnet lock secrets and the Talos cluster secrets (whoever holds it can mint an OpenBao root token). Daily files list both
   # recipients so the break-glass key still opens everything.
   # edge config: whole-file, the rule expressions are the secret
   - path_regex: infra/cloudflare/.*\.sops\.ya?ml$
@@ -13,6 +13,8 @@ creation_rules:
   - path_regex: secrets/openbao-init\.sops\.ya?ml$
     age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
   - path_regex: secrets/tailnet-lock\.sops\.ya?ml$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
+  - path_regex: secrets/talos\.sops\.ya?ml$
     age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
   - path_regex: secrets/.*\.(ya?ml|json|env)$
     encrypted_regex: ^(data|stringData)$
