@@ -1,0 +1,5 @@
+clusterconfig/
+talosconfig
+talsecret.yaml
+kubeconfig*
+*.snapshot

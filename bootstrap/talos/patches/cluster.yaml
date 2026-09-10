@@ -1,0 +1,36 @@
+# Cluster level settings shared by every node. Pod and service CIDRs stay the k3s values so
+# TRUSTED_NETWORKS and every network policy keep matching. kube-proxy off: Cilium replaces it.
+cluster:
+  network:
+    podSubnets: [10.42.0.0/16]
+    serviceSubnets: [10.43.0.0/16]
+  proxy:
+    disabled: true
+  etcd:
+    extraArgs:
+      listen-metrics-urls: http://0.0.0.0:2381
+  apiServer:
+    # Who touched a secret or got a shell. Metadata only: the request URI names the object
+    # (and the exec command), the body would carry the secret values. Log: /var/log/audit/kube.
+    auditPolicy:
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      omitStages: [RequestReceived]
+      rules:
+        - level: Metadata
+          resources:
+            - group: ""
+              resources: [secrets, pods, pods/exec, pods/attach, pods/portforward, serviceaccounts, serviceaccounts/token, replicationcontrollers]
+            - group: apps
+              resources: [deployments, daemonsets, statefulsets, replicasets]
+            - group: batch
+              resources: [jobs, cronjobs]
+            - group: external-secrets.io
+              resources: [externalsecrets, secretstores, clustersecretstores, clusterexternalsecrets]
+            - group: networking.k8s.io
+              resources: [networkpolicies]
+            - group: cilium.io
+              resources: [ciliumnetworkpolicies, ciliumclusterwidenetworkpolicies]
+            - group: rbac.authorization.k8s.io
+              resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+        - level: None

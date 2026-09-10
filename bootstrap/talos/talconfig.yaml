@@ -1,0 +1,47 @@
+# talhelper input for the Talos proof on the two parked spares. `talhelper genconfig` renders
+# clusterconfig/*.yaml (gitignored) from this file plus talsecret.yaml (gitignored).
+# Endpoint: the first node's private address, in-cluster traffic goes through KubePrism; from
+# the laptop kubectl and talosctl use the tailnet names listed as SANs. Interfaces come from
+# the Hetzner metadata (public) and DHCP (private network), nothing static here.
+clusterName: unorouter-talos-poc
+talosVersion: v1.13.10
+kubernetesVersion: v1.36.4
+endpoint: https://10.100.1.1:6443
+allowSchedulingOnControlPlanes: true
+cniConfig:
+  name: none
+additionalApiServerCertSans: &sans
+  - unorouter-spare-nbg1-1.taild195fa.ts.net
+  - unorouter-spare-nbg1-2.taild195fa.ts.net
+  - 10.100.1.1
+  - 10.100.1.5
+additionalMachineCertSans: *sans
+patches:
+  - "@./patches/cluster.yaml"
+  - "@./patches/machine.yaml"
+  - "@./patches/volumes.yaml"
+nodes:
+  - hostname: unorouter-spare-nbg1-1
+    ipAddress: 10.100.1.1
+    controlPlane: true
+    installDisk: /dev/sda
+    talosImageURL: factory.talos.dev/installer/7d4c31cbd96db9f90c874990697c523482b2bae27fb4631d5583dcd9c281b1ff
+    extensionServices:
+      - name: tailscale
+        environment:
+          - TS_AUTHKEY=${TS_AUTHKEY}
+          - TS_HOSTNAME=unorouter-spare-nbg1-1
+          - TS_USERSPACE=false
+          - TS_EXTRA_ARGS=--accept-dns=false
+  - hostname: unorouter-spare-nbg1-2
+    ipAddress: 10.100.1.5
+    controlPlane: true
+    installDisk: /dev/sda
+    talosImageURL: factory.talos.dev/installer/7d4c31cbd96db9f90c874990697c523482b2bae27fb4631d5583dcd9c281b1ff
+    extensionServices:
+      - name: tailscale
+        environment:
+          - TS_AUTHKEY=${TS_AUTHKEY}
+          - TS_HOSTNAME=unorouter-spare-nbg1-2
+          - TS_USERSPACE=false
+          - TS_EXTRA_ARGS=--accept-dns=false

@@ -1,0 +1,34 @@
+# Partitions on the install disk next to Talos's own: the local-path volume for every PVC on
+# the node, and 4 GiB of host swap (the k3s nodes carry the same as a swapfile).
+apiVersion: v1alpha1
+kind: UserVolumeConfig
+name: local-path-provisioner
+provisioning:
+  diskSelector:
+    match: system_disk
+  minSize: 40GiB
+  grow: true
+filesystem:
+  type: xfs
+---
+apiVersion: v1alpha1
+kind: SwapVolumeConfig
+name: swap
+provisioning:
+  diskSelector:
+    match: system_disk
+  minSize: 4GiB
+  maxSize: 4GiB
+---
+# Without a cap EPHEMERAL grows over the whole disk at install and the two volumes above never
+# get a partition (seen on the proof: "not enough space"). Install time only. On a 160 GB cx43
+# disk: system 2.3 GB, EPHEMERAL 80, swap 4, the user volume takes the remaining ~70.
+apiVersion: v1alpha1
+kind: VolumeConfig
+name: EPHEMERAL
+provisioning:
+  diskSelector:
+    match: system_disk
+  minSize: 60GiB
+  maxSize: 80GiB
+  grow: false

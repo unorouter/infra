@@ -1,0 +1,226 @@
+# Vector on every node: tails /var/log/pods, the kube-apiserver audit files and the Hubble
+# export, ships raw lines to Loki and a sanitized subset to the Object Locked unorouter-logs
+# bucket through the s3-gateway (rclone crypt on the way to Hetzner, Let's Encrypt cert, public
+# roots). Root because audit.log is root 0600; every host mount is read-only except the
+# checkpoint and buffer directory. The chart's Agent defaults mount all of /var/lib (k3s server
+# keys included), so defaultVolumes names the three directories actually read.
+role: Agent
+tolerations:
+  - { key: node-role.kubernetes.io/control-plane, operator: Exists }
+  - { key: node-role.kubernetes.io/master, operator: Exists }
+persistence:
+  hostPath: { enabled: true, path: /var/lib/vector }
+defaultVolumes:
+  - { name: var-log, hostPath: { path: /var/log/, type: Directory } }
+  - { name: k3s-server-logs, hostPath: { path: /var/log/audit/kube, type: Directory } }
+  - { name: hubble, hostPath: { path: /var/run/cilium/hubble, type: DirectoryOrCreate } }
+defaultVolumeMounts:
+  - { name: var-log, mountPath: /var/log/, readOnly: true }
+  - { name: k3s-server-logs, mountPath: /var/log/audit/kube, readOnly: true }
+  - { name: hubble, mountPath: /var/run/cilium/hubble, readOnly: true }
+securityContext:
+  runAsUser: 0
+  runAsGroup: 0
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  # Talos: the audit dir is nobody:nobody 0700 (the apiserver runs as nobody); root without
+  # DAC_READ_SEARCH cannot enter it
+  capabilities: { drop: [ALL], add: [DAC_READ_SEARCH] }
+env:
+  # 0.57 turned ${VAR} interpolation off by default; the config reads the archive credential
+  # and the node name from the environment, nothing an attacker controls
+  - { name: VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION, value: "true" }
+  # the rclone gateway rejects aws-chunked CRC request checksums, the same setting CNPG and Loki use
+  - { name: AWS_REQUEST_CHECKSUM_CALCULATION, value: when_required }
+  - { name: AWS_RESPONSE_CHECKSUM_VALIDATION, value: when_required }
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+service: { enabled: false }
+serviceHeadless: { enabled: false }
+podMonitor:
+  enabled: true
+  additionalLabels: { release: kps }
+customConfig:
+  data_dir: /vector-data-dir
+  api: { enabled: false }
+  sources:
+    pods:
+      type: kubernetes_logs
+      self_node_name: ${VECTOR_SELF_NODE_NAME}
+      auto_partial_merge: true
+      read_from: end
+      max_line_bytes: 262144
+    audit:
+      type: file
+      include: [/var/log/audit/kube/*.log]
+      read_from: end
+      max_line_bytes: 1048576
+    hubble:
+      type: file
+      include: [/var/run/cilium/hubble/evidence*.log]
+      read_from: end
+    internal_metrics:
+      type: internal_metrics
+  transforms:
+    # Labels are exactly namespace, pod, container, node, app, stream: never IP, uid, hash or level.
+    pods_labels:
+      type: remap
+      inputs: [pods]
+      source: |
+        .namespace = .kubernetes.pod_namespace
+        .pod = .kubernetes.pod_name
+        .container = .kubernetes.container_name
+        .node = .kubernetes.pod_node_name
+        app = .kubernetes.pod_labels."app.kubernetes.io/name" || .kubernetes.pod_labels.app
+        if app != null { .app = app }
+        del(.kubernetes)
+        del(.file)
+        del(.source_type)
+    # The archive keeps what the collector kept: five pod families with a field allowlist
+    # each (never a statement, a body or a token), plus the responder's SECURITY_EVIDENCE lines.
+    # Everything else is dropped here; Loki has the raw line for 90 days.
+    pods_archive:
+      type: remap
+      inputs: [pods_labels]
+      drop_on_abort: true
+      drop_on_error: true
+      source: |
+        key = (string(.namespace) ?? "") + "_" + (string(.pod) ?? "")
+        family = if starts_with(key, "openbao_openbao-") { "openbao" }
+          else if starts_with(key, "services_new-api-") { "gateway" }
+          else if starts_with(key, "services_unorouter-bot-") { "bot" }
+          else if starts_with(key, "databases_newapi-pg-") { "postgres" }
+          else if starts_with(key, "teleport_teleport-") { "teleport" }
+          else if starts_with(key, "monitoring_canary-quarantine-") { "responder" }
+          else { abort }
+        msg = string(.message) ?? ""
+        app_family = family == "gateway" || family == "bot" || family == "responder"
+        # the gateway writes hundreds of lines a second, a substring test beats parsing each one
+        if app_family && !contains(msg, "security.") { abort }
+        if family == "postgres" && !contains(msg, "\"audit\"") { abort }
+        if contains(msg, "SECURITY_EVIDENCE ") { msg = string!(split(msg, "SECURITY_EVIDENCE ", limit: 2)[1]) }
+        ev, err = parse_json(msg)
+        if err != null || !is_object(ev) { abort }
+        safe = {}
+        if family == "openbao" {
+          if ev.request.id == null { abort }
+          safe = {
+            "type": ev.type, "time": ev.time,
+            "error_present": ev.error != null && ev.error != "",
+            "request": { "id": ev.request.id, "operation": ev.request.operation, "path": ev.request.path,
+                         "remote_address": ev.request.remote_address, "remote_port": ev.request.remote_port,
+                         "mount_type": ev.request.mount_type },
+            "auth": { "display_name": ev.auth.display_name, "entity_id": ev.auth.entity_id,
+                      "policies": ev.auth.policies, "token_type": ev.auth.token_type, "accessor": ev.auth.accessor }
+          }
+        } else if app_family {
+          if !starts_with(string(ev.event) ?? "", "security.") { abort }
+          safe = { "event": ev.event, "audit_key_version": ev.audit_key_version,
+            "audit_credential_fingerprint": ev.audit_credential_fingerprint, "credential_kind": ev.credential_kind,
+            "fingerprint_status": ev.fingerprint_status, "user_id": ev.user_id, "role": ev.role,
+            "auth_method": ev.auth_method, "principal_kind": ev.principal_kind, "source_ip": ev.source_ip,
+            "trusted_network": ev.trusted_network, "method": ev.method, "route": ev.route, "pod_uid": ev.pod_uid,
+            "scope": ev.scope, "attempt_id": ev.attempt_id, "route_kind": ev.route_kind, "channel_id": ev.channel_id,
+            "message_id": ev.message_id, "build": ev.build, "outcome": ev.outcome, "time": ev.time }
+        } else if family == "postgres" {
+          # CNPG emits structured pgaudit records; SQL text is off and never copied anyway
+          rec = ev.record
+          if !is_object(rec.audit) { abort }
+          safe = {
+            "audit": { "audit_type": rec.audit.audit_type, "statement_id": rec.audit.statement_id,
+                       "substatement_id": rec.audit.substatement_id, "class": rec.audit.class,
+                       "command": rec.audit.command, "object_type": rec.audit.object_type,
+                       "object_name": rec.audit.object_name },
+            "database": { "user_name": rec.user_name, "database_name": rec.database_name,
+                          "process_id": rec.process_id, "connection_from": rec.connection_from,
+                          "session_id": rec.session_id, "application_name": rec.application_name,
+                          "transaction_id": rec.transaction_id }
+          }
+        } else if family == "teleport" {
+          if ev.event == null { abort }
+          safe = { "event": ev.event, "code": ev.code, "time": ev.time, "uid": ev.uid, "user": ev.user,
+            "login": ev.login, "addr.remote": ev."addr.remote", "addr.local": ev."addr.local",
+            "server_id": ev.server_id, "sid": ev.sid, "db.service": ev."db.service",
+            "db.protocol": ev."db.protocol", "db.user": ev."db.user", "db.name": ev."db.name",
+            "success": ev.success }
+        }
+        . = compact({ "source": "pods", "family": family, "timestamp": .timestamp, "stream": .stream,
+                      "namespace": .namespace, "pod": .pod, "container": .container, "node": .node,
+                      "event": safe }, recursive: true)
+    # Loki gets the raw line stamped with requestReceivedTimestamp.
+    audit_labels:
+      type: remap
+      inputs: [audit]
+      source: |
+        .job = "k8s-audit"
+        .node = get_env_var!("VECTOR_SELF_NODE_NAME")
+        ev, err = parse_json(.message)
+        if err == null {
+          ts, terr = parse_timestamp(ev.requestReceivedTimestamp, "%+")
+          if terr == null { .timestamp = ts }
+        }
+        del(.file)
+        del(.host)
+        del(.source_type)
+    # Allowlist: no URI queries, exec arguments, body, status message, annotations, user agent
+    # or arbitrary user extras cross into the archive.
+    audit_archive:
+      type: remap
+      inputs: [audit_labels]
+      drop_on_abort: true
+      drop_on_error: true
+      source: |
+        ev, err = parse_json(.message)
+        if err != null || !is_object(ev) { abort }
+        u = ev.user
+        iu = ev.impersonatedUser
+        r = ev.objectRef
+        . = compact({
+          "source": "k8s-audit", "node": .node, "timestamp": .timestamp,
+          "auditID": ev.auditID, "stage": ev.stage, "verb": ev.verb,
+          "requestReceivedTimestamp": ev.requestReceivedTimestamp, "stageTimestamp": ev.stageTimestamp,
+          "sourceIPs": ev.sourceIPs,
+          "user": { "username": u.username, "uid": u.uid, "groups": u.groups, "extra": {
+            "authentication.kubernetes.io/credential-id": u.extra."authentication.kubernetes.io/credential-id",
+            "authentication.kubernetes.io/pod-name": u.extra."authentication.kubernetes.io/pod-name",
+            "authentication.kubernetes.io/pod-uid": u.extra."authentication.kubernetes.io/pod-uid",
+            "authentication.kubernetes.io/node-name": u.extra."authentication.kubernetes.io/node-name",
+            "authentication.kubernetes.io/node-uid": u.extra."authentication.kubernetes.io/node-uid" } },
+          "impersonatedUser": { "username": iu.username, "uid": iu.uid, "groups": iu.groups, "extra": {
+            "authentication.kubernetes.io/credential-id": iu.extra."authentication.kubernetes.io/credential-id",
+            "authentication.kubernetes.io/pod-name": iu.extra."authentication.kubernetes.io/pod-name",
+            "authentication.kubernetes.io/pod-uid": iu.extra."authentication.kubernetes.io/pod-uid",
+            "authentication.kubernetes.io/node-name": iu.extra."authentication.kubernetes.io/node-name",
+            "authentication.kubernetes.io/node-uid": iu.extra."authentication.kubernetes.io/node-uid" } },
+          "objectRef": { "resource": r.resource, "namespace": r.namespace, "name": r.name, "uid": r.uid,
+                         "apiGroup": r.apiGroup, "apiVersion": r.apiVersion,
+                         "resourceVersion": r.resourceVersion, "subresource": r.subresource },
+          "responseCode": ev.responseStatus.code
+        }, recursive: true)
+    # Hubble flows are archive only (the fieldMask in infra/cilium/values.yaml is the first
+    # allowlist, this is the second): verdict, addresses, ports, identities, never payload.
+    hubble_archive:
+      type: remap
+      inputs: [hubble]
+      drop_on_abort: true
+      drop_on_error: true
+      source: |
+        ev, err = parse_json(.message)
+        if err != null || !is_object(ev) { abort }
+        f = ev.flow || ev
+        stamp = .timestamp
+        ts, terr = parse_timestamp(f.time, "%+")
+        if terr == null { stamp = ts }
+        . = compact({
+          "source": "hubble", "node": get_env_var!("VECTOR_SELF_NODE_NAME"), "timestamp": stamp,
+          "flow": { "time": f.time, "verdict": f.verdict, "IP": f.IP, "l4": f.l4, "node_name": f.node_name,
+                    "traffic_direction": f.traffic_direction, "drop_reason_desc": f.drop_reason_desc,
+                    "source": { "namespace": f.source.namespace, "pod_name": f.source.pod_name, "identity": f.source.identity },
+                    "destination": { "namespace": f.destination.namespace, "pod_name": f.destination.pod_name, "identity": f.destination.identity } }
+        }, recursive: true)
+  sinks:
+    out:
+      type: console
+      inputs: [pods_labels, audit_labels, hubble_archive]
+      encoding: { codec: json }

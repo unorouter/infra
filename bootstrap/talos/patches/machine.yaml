@@ -1,0 +1,35 @@
+# Node settings that cloud-init used to write by hand. Host swap is a partition (volumes.yaml)
+# that pods never use: failSwapOn off, NoSwap. The kubelet bind mount makes the user volume
+# visible to local-path-provisioner with shared propagation.
+machine:
+  features:
+    kubePrism:
+      enabled: true
+      port: 7445
+  sysctls:
+    # the default 131k conntrack table fills under a SYN flood and every service on the node stalls
+    net.netfilter.nf_conntrack_max: "2097152"
+    net.netfilter.nf_conntrack_tcp_timeout_time_wait: "30"
+    net.netfilter.nf_conntrack_tcp_timeout_established: "300"
+    net.netfilter.nf_conntrack_tcp_timeout_close_wait: "10"
+    fs.inotify.max_user_instances: "8192"
+    fs.inotify.max_user_watches: "524288"
+    vm.swappiness: "10"
+  kubelet:
+    extraConfig:
+      failSwapOn: false
+      memorySwap:
+        swapBehavior: NoSwap
+      imageGCHighThresholdPercent: 70
+      imageGCLowThresholdPercent: 55
+    extraMounts:
+      - destination: /var/mnt/local-path-provisioner
+        type: bind
+        source: /var/mnt/local-path-provisioner
+        options: [bind, rshared, rw]
+      # the apiserver audit log is written outside the kubelet's mount namespace; Vector
+      # reads it as a hostPath, so the kubelet needs the bind
+      - destination: /var/log/audit/kube
+        type: bind
+        source: /var/log/audit/kube
+        options: [bind, rshared, ro]

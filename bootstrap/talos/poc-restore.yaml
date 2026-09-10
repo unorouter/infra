@@ -1,0 +1,222 @@
+# Proof only: restore bot-pg from the locked bucket into a scratch CNPG cluster on the Talos
+# nodes, through a one replica copy of the s3-gateway with a self signed certificate. Read
+# only against Hetzner: the scratch cluster has no plugins block, so it never archives.
+# Prerequisites applied by hand before this file: cert-manager, the CNPG operator and the
+# Barman plugin (the pinned release URLs from infra/), and Secret s3-gateway/s3-gateway with
+# the same keys as production (RCLONE_CONFIG_HZ_ACCESS_KEY_ID, RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY,
+# CRYPT_PASSWORD, CRYPT_SALT, AUTH_KEY) plus Secret databases/s3gw (ACCESS_KEY_ID,
+# ACCESS_SECRET_KEY, REGION), both read from OpenBao with the reader token, never committed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-gateway
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: databases
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+---
+# Self signed: the secret also carries ca.crt, which the ObjectStore below pins as endpointCA.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: s3-gateway-tls
+  namespace: s3-gateway
+spec:
+  secretName: s3-gateway-tls
+  issuerRef:
+    name: selfsigned
+    kind: ClusterIssuer
+  commonName: s3.unorouter.com
+  dnsNames:
+    - s3.unorouter.com
+    - s3-gateway.s3-gateway.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3-gateway
+  namespace: s3-gateway
+spec:
+  selector: {app: s3-gateway}
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: s3-gateway
+  namespace: s3-gateway
+spec:
+  serviceName: s3-gateway
+  replicas: 1
+  selector:
+    matchLabels: {app: s3-gateway}
+  template:
+    metadata:
+      labels: {app: s3-gateway}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, runAsNonRoot: true}
+      containers:
+        - name: rclone
+          image: rclone/rclone:1.75.1
+          command:
+            - sh
+            - -c
+            - >-
+              export RCLONE_CONFIG_CR_PASSWORD="$(rclone obscure "$CRYPT_PASSWORD")"
+              RCLONE_CONFIG_CR_PASSWORD2="$(rclone obscure "$CRYPT_SALT")";
+              unset CRYPT_PASSWORD CRYPT_SALT;
+              exec rclone serve s3 cr:
+              --addr :8443 --cert /tls/tls.crt --key /tls/tls.key --min-tls-version tls1.2
+              --auth-key "$AUTH_KEY"
+              --vfs-cache-mode writes --cache-dir /cache --vfs-cache-max-size 10G
+              --vfs-write-back 5s
+              -v
+          env:
+            - {name: RCLONE_CONFIG_HZ_TYPE, value: s3}
+            - {name: RCLONE_CONFIG_HZ_PROVIDER, value: Ceph}
+            - {name: RCLONE_CONFIG_HZ_ENDPOINT, value: https://fsn1.your-objectstorage.com}
+            - {name: RCLONE_CONFIG_HZ_REGION, value: fsn1}
+            - {name: RCLONE_CONFIG_HZ_NO_CHECK_BUCKET, value: "true"}
+            - {name: RCLONE_CONFIG_CR_TYPE, value: crypt}
+            - {name: RCLONE_CONFIG_CR_REMOTE, value: "hz:"}
+            - {name: RCLONE_CONFIG_CR_FILENAME_ENCRYPTION, value: "off"}
+            - {name: RCLONE_CONFIG_CR_DIRECTORY_NAME_ENCRYPTION, value: "false"}
+            - {name: RCLONE_CONFIG_CR_SUFFIX, value: none}
+            - {name: HOME, value: /tmp}
+          envFrom:
+            - secretRef: {name: s3-gateway}
+          ports:
+            - {name: s3, containerPort: 8443}
+          readinessProbe:
+            tcpSocket: {port: 8443}
+            periodSeconds: 10
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - {name: tls, mountPath: /tls, readOnly: true}
+            - {name: cache, mountPath: /cache}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tls
+          secret: {secretName: s3-gateway-tls}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: cache
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests: {storage: 20Gi}
+---
+# The gateway's certificate secret lives in s3-gateway; CNPG reads the CA from its own namespace.
+# Copied by hand after cert-manager issued it: kubectl -n s3-gateway get secret s3-gateway-tls
+# -o jsonpath='{.data.ca\.crt}' into Secret databases/s3-gateway-ca key ca.crt.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: bot-pg-hz
+  namespace: databases
+spec:
+  configuration:
+    destinationPath: s3://unorouter-backups/
+    endpointURL: https://s3.unorouter.com
+    endpointCA:
+      name: s3-gateway-ca
+      key: ca.crt
+    s3Credentials:
+      accessKeyId:
+        name: s3gw
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: s3gw
+        key: ACCESS_SECRET_KEY
+      region:
+        name: s3gw
+        key: REGION
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
+  instanceSidecarConfiguration:
+    env:
+      - name: AWS_REQUEST_CHECKSUM_CALCULATION
+        value: when_required
+      - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+        value: when_required
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: dr-bot-pg
+  namespace: databases
+spec:
+  env:
+    - { name: AWS_REQUEST_CHECKSUM_CALCULATION, value: when_required }
+    - { name: AWS_RESPONSE_CHECKSUM_VALIDATION, value: when_required }
+  imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm
+  instances: 1
+  enableSuperuserAccess: true
+  storage: { size: 8Gi, storageClass: local-path }
+  bootstrap:
+    recovery:
+      source: bot-pg-origin
+  externalClusters:
+    - name: bot-pg-origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        enabled: true
+        isWALArchiver: false
+        parameters:
+          barmanObjectName: bot-pg-hz
+          serverName: bot-pg-v7
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dr-drill-check
+  namespace: databases
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: { runAsUser: 26, runAsGroup: 26, runAsNonRoot: true }
+      containers:
+        - name: check
+          image: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm
+          command: [sh, -c]
+          args:
+            - >-
+              set -e; export PGHOST=dr-bot-pg-rw PGUSER=postgres;
+              db=$(psql -d postgres -Atc "select datname from pg_database where datistemplate = false order by pg_database_size(datname) desc limit 1");
+              n=$(psql -d "$db" -Atc "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind = 'r' and n.nspname not in ('pg_catalog','information_schema') and c.reltuples > 0");
+              echo "db=$db populated_tables=$n";
+              test "$n" -gt 0
+          env:
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: dr-bot-pg-superuser, key: password } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
