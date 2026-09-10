@@ -166,6 +166,9 @@ spec:
       - name: config-volume
         configMap:
           name: coredns
+          # optional: k3s injected a NodeHosts key at runtime, Talos does not; the hosts block in
+          # the Corefile falls through when the file is absent
+          optional: true
           items:
           - key: Corefile
             path: Corefile

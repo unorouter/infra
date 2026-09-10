@@ -107,8 +107,8 @@ bao_read() {
     BAO_TOKEN="$T" bao token revoke -self >/dev/null 2>&1; exit $rc'
 }
 
-# The three things a fresh Talos cluster needs before ArgoCD can take over from git: Cilium
-# (the nodes are NotReady without a CNI), the local-path StorageClass, ArgoCD and its root
+# The four things a fresh Talos cluster needs before ArgoCD can take over from git: Cilium
+# (the nodes are NotReady without a CNI), the local-path StorageClass, CoreDNS, ArgoCD and its root
 # app. After this every one of them is also an Application in apps/ and ArgoCD adopts the
 # install in place. Runs against the talosctl kubeconfig (kubeconfig.talos or breakglass).
 bootstrap() {
@@ -117,6 +117,9 @@ bootstrap() {
   helm upgrade --install cilium cilium/cilium --version "$cil" -n kube-system -f infra/cilium/values.yaml
   kubectl -n kube-system rollout status ds/cilium --timeout=180s
   kubectl apply -k infra/local-path
+  # Talos ships no CoreDNS (cluster.coreDNS.disabled); ArgoCD cannot fetch git without it
+  kubectl apply -f infra/coredns/
+  kubectl -n kube-system rollout status deploy/coredns --timeout=120s
   kubectl create namespace argocd 2>/dev/null || true
   kubectl apply -k bootstrap/argocd/ --server-side --force-conflicts
   kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
