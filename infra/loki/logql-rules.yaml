@@ -520,3 +520,32 @@ data:
             labels: { severity: critical, source: loki }
             annotations:
               summary: "canary pod {{ $labels.pod_name }} in services: containment={{ $labels.outcome }}"
+          # The gateway auto-disabled lanes 1,300 times an hour during the Sep 3 to 10
+          # churn; with cooldowns in place anything near that is a regression.
+          - alert: GatewayDisableStorm
+            expr: >-
+              sum(
+                count_over_time(
+                  {namespace="services", app="new-api"}
+                    |= "preparing to disable"
+                  [1h]
+                )
+              ) > 300
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "gateway auto-disabled {{ $value }} lanes in the last hour"
+          # Share of relay attempts that ended in an upstream channel error over 15
+          # minutes, gateway-wide (the log carries the channel id, not the provider).
+          - alert: GatewayChannelErrorRate
+            expr: >-
+              (
+                sum(count_over_time({namespace="services", app="new-api"} |= "channel error (channel #" [15m]))
+                /
+                (
+                  sum(count_over_time({namespace="services", app="new-api"} |= "channel error (channel #" [15m]))
+                  + sum(count_over_time({namespace="services", app="new-api"} |= "record consume log" [15m]))
+                )
+              ) > 0.2
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "{{ $value | humanizePercentage }} of relay attempts hit an upstream channel error in the last 15 minutes"
