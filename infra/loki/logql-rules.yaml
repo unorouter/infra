@@ -490,6 +490,10 @@ data:
       - name: apps
         interval: 1m
         rules:
+          # A review lead, not proof: any send whose response carries no message id
+          # lands here too. warning, because the responder has to go look rather
+          # than act. The bot asks Discord for with_response on interaction
+          # callbacks so the ordinary reply path no longer trips this.
           - alert: DiscordMessageNeedsReview
             expr: >-
               sum by (pod, message_id) (
@@ -501,9 +505,9 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: loki }
+            labels: { severity: warning, source: loki }
             annotations:
-              summary: "Discord message {{ $labels.message_id }} has no matching request in {{ $labels.pod }}; check other replicas and coverage"
+              summary: "Discord message {{ $labels.message_id }} has no matching request in {{ $labels.pod }}; confirm the bot account sent it"
           - alert: QuarantineApplied
             expr: >-
               sum by (pod_name, outcome) (
