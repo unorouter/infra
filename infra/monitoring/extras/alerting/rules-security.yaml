@@ -508,8 +508,14 @@ spec:
               quota_setting.free_abuse_network_min_accounts, but read
               cnpg_newapi_farm_networks_paid_accounts first.
 
+        # Plain subtraction against a 6h-old sample, NOT increase()/delta(): those
+        # extrapolate across the whole window, so a gauge that has only existed for
+        # half an hour reports its entire current value as growth and pages on its
+        # first scrape. This form yields no series at all until the offset sample
+        # exists, which is the right behaviour for a young metric.
         - alert: NewApiFarmNetworksGrowing
-          expr: increase(cnpg_newapi_farm_networks_networks[6h]) > 25
+          expr: cnpg_newapi_farm_networks_networks - (cnpg_newapi_farm_networks_networks offset 6h) > 25
+          for: 15m
           labels: { severity: warning }
           annotations:
             summary: "{{ $value }} more networks flagged as account farms in 6h"
