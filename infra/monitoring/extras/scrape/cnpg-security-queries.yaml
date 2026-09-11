@@ -975,6 +975,19 @@ data:
     # the gauge you check before changing it. min_accounts = 0 means the feature is off
     # and every column reports zero, matching the early return in the Go.
     #
+    # That read depends on an RLS ALLOWLIST. public.options carries the policy
+    # metrics_exporter_catalog_maps, which names every key cnpg_metrics_exporter may
+    # see; the three free_abuse_network keys were added to it for this query. A key
+    # missing from that list is not an error, it returns NO ROW, so the coalesce below
+    # yields 0 and the whole metric reports "feature off" while the feature is on. That
+    # is exactly what happened on first deploy. min_accounts is exported as a fourth
+    # gauge so the config the numbers were computed at is always visible and that
+    # failure can never look like a clean zero again.
+    #
+    # users is readable here only through a 13-column grant to cnpg_metrics_exporter
+    # (no password, access_token, email, setting or username). Adding a column to this
+    # query means extending that grant too.
+    #
     # Soft-deleted rows are included (no deleted_at filter) because the Go uses
     # Unscoped(): a register/delete/re-register cycle must not launder a network.
     # Rows whose register_ip will not parse are skipped, which is what net.ParseIP
@@ -1022,7 +1035,8 @@ data:
         SELECT (SELECT count(*)::float8 FROM flagged) AS networks,
                (SELECT coalesce(sum(accts), 0)::float8 FROM flagged) AS accounts,
                (SELECT count(*)::float8 FROM prov p JOIN flagged f ON f.net = p.net
-                 WHERE p.used_quota > 0) AS paid_accounts
+                 WHERE p.used_quota > 0) AS paid_accounts,
+               (SELECT min_accounts::float8 FROM cfg) AS min_accounts
       primary: true
       target_databases:
         - newapi
@@ -1035,4 +1049,7 @@ data:
             description: "Accounts registered on those networks inside the reputation window."
         - paid_accounts:
             usage: "GAUGE"
-            description: "Of those, how many ever spent quota. Expected zero; above zero means a real network was flagged."
+            description: "Of those, how many ever spent quota. Expected a low floor (Tor exits); a climbing count means the threshold is too tight."
+        - min_accounts:
+            usage: "GAUGE"
+            description: "The live free_abuse_network_min_accounts the three gauges above were computed at. Zero means the feature is off."
