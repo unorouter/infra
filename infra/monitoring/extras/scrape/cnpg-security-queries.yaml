@@ -872,3 +872,167 @@ data:
         - count:
             usage: "GAUGE"
             description: "Error rows written under the shared guest chat key in the last 5 minutes."
+
+    # --- account-farm abuse -------------------------------------------------
+    # 2026-09-06: a farm registered 12,293 accounts in a day and ran for five days
+    # before anyone noticed, because nothing here measured registrations. Enforcement
+    # already existed (service/network_reputation.go); only the alarm was missing.
+    #
+    # Identity means the same seven columns RegistrationProvenance.HasIdentity checks
+    # (model/network_reputation.go:26). A typed email is deliberately NOT identity
+    # while EmailVerificationEnabled is false: the farms all set one.
+    #
+    # These are unlabelled aggregates on purpose. A GROUP BY-labelled series emits
+    # nothing while idle, so absent() cannot tell quiet from broken.
+    newapi_registrations:
+      query: |
+        SELECT count(*)::float8 AS total_5m,
+               count(*) FILTER (
+                 WHERE coalesce(github_id,'') <> '' OR coalesce(discord_id,'') <> ''
+                    OR coalesce(oidc_id,'') <> '' OR coalesce(telegram_id,'') <> ''
+                    OR coalesce(linux_do_id,'') <> '' OR coalesce(wechat_id,'') <> ''
+                    OR coalesce(google_id,'') <> '')::float8 AS with_identity_5m
+        FROM users
+        WHERE created_at > extract(epoch from now())::bigint - 300
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - total_5m:
+            usage: "GAUGE"
+            description: "Accounts registered in the last 5 minutes."
+        - with_identity_5m:
+            usage: "GAUGE"
+            description: "Of those, how many bound a third-party identity (github, discord, oidc, telegram, linuxdo, wechat, google)."
+
+    # Free-tier volume, kept as a gauge and deliberately NOT alerted on: the error
+    # share is driven as much by upstream free-lane saturation as by abuse, and sat
+    # at 64.5% on 2026-09-10 with nothing wrong on our side. newapi_abuse below is
+    # the signal worth paging on.
+    #
+    # ':free' is the NAMING CONVENTION (notify.IsFreeModel, notify/types.go:103), not
+    # the pricing truth: the gateway decides free from modelPrice == 0
+    # (relay/helper/price.go:164), so a zero-priced model without the suffix is
+    # invisible here while still counted by every Go abuse signal.
+    newapi_free_tier:
+      query: |
+        SELECT count(*) FILTER (WHERE type = 5)::float8 AS errors_5m,
+               count(*) FILTER (WHERE type = 2)::float8 AS ok_5m
+        FROM logs
+        WHERE created_at > extract(epoch from now())::bigint - 300
+          AND type IN (2, 5)
+          AND lower(model_name) LIKE '%:free'
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - errors_5m:
+            usage: "GAUGE"
+            description: "Failed free-model requests in the last 5 minutes."
+        - ok_5m:
+            usage: "GAUGE"
+            description: "Successful free-model requests in the last 5 minutes."
+
+    # Accounts behaving like the farm right now: no identity, no balance, and almost
+    # every request failing. Over 72h on 2026-09-10 this shape covered 2,015 accounts
+    # producing 22% of all requests and 43% of all errors.
+    newapi_abuse:
+      query: |
+        WITH act AS (
+          SELECT user_id,
+                 count(*) AS req,
+                 count(*) FILTER (WHERE type = 5) AS errs
+          FROM logs
+          WHERE created_at > extract(epoch from now())::bigint - 300
+            AND type IN (2, 5)
+          GROUP BY user_id
+          HAVING count(*) >= 5
+        )
+        SELECT count(*)::float8 AS accounts_5m,
+               coalesce(sum(a.req), 0)::float8 AS requests_5m
+        FROM act a
+        JOIN users u ON u.id = a.user_id
+        WHERE u.quota <= 0
+          AND a.errs * 100 >= a.req * 80
+          AND coalesce(u.github_id,'') = '' AND coalesce(u.discord_id,'') = ''
+          AND coalesce(u.oidc_id,'') = '' AND coalesce(u.telegram_id,'') = ''
+          AND coalesce(u.linux_do_id,'') = '' AND coalesce(u.wechat_id,'') = ''
+          AND coalesce(u.google_id,'') = ''
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - accounts_5m:
+            usage: "GAUGE"
+            description: "Zero-balance accounts with no identity, 5+ requests and 80%+ errors in the last 5 minutes."
+        - requests_5m:
+            usage: "GAUGE"
+            description: "Requests those accounts made in the last 5 minutes."
+
+    # Mirrors refreshNetworkReputation (service/network_reputation.go:52) in SQL so the
+    # verdict is observable. Thresholds are READ FROM THE OPTIONS TABLE, never hardcoded:
+    # a copy would silently diverge the moment anyone changes the setting, and this is
+    # the gauge you check before changing it. min_accounts = 0 means the feature is off
+    # and every column reports zero, matching the early return in the Go.
+    #
+    # Soft-deleted rows are included (no deleted_at filter) because the Go uses
+    # Unscoped(): a register/delete/re-register cycle must not launder a network.
+    # Rows whose register_ip will not parse are skipped, which is what net.ParseIP
+    # does there via the empty registrationNetworkKey.
+    #
+    # paid_accounts is the FALSE-POSITIVE CANARY. Flagged networks are supposed to hold
+    # nothing but disposable accounts; it was 0 across all 153 networks on 2026-09-10.
+    # Above zero means a paying customer's network got caught and the threshold is wrong.
+    newapi_farm_networks:
+      query: |
+        WITH cfg AS (
+          SELECT coalesce((SELECT value::int FROM options
+                            WHERE key = 'quota_setting.free_abuse_network_min_accounts'), 0) AS min_accounts,
+                 coalesce((SELECT value::int FROM options
+                            WHERE key = 'quota_setting.free_abuse_network_max_identity_pct'), 10) AS max_identity_pct,
+                 coalesce((SELECT value::int FROM options
+                            WHERE key = 'quota_setting.free_abuse_network_window_days'), 14) AS window_days
+        ),
+        prov AS (
+          SELECT CASE WHEN u.register_ip LIKE '%:%'
+                      THEN host(network(set_masklen(u.register_ip::inet, 48))) || '/48'
+                      ELSE host(network(set_masklen(u.register_ip::inet, 24))) || '/24' END AS net,
+                 (coalesce(u.github_id,'') <> '' OR coalesce(u.discord_id,'') <> ''
+                   OR coalesce(u.oidc_id,'') <> '' OR coalesce(u.telegram_id,'') <> ''
+                   OR coalesce(u.linux_do_id,'') <> '' OR coalesce(u.wechat_id,'') <> ''
+                   OR coalesce(u.google_id,'') <> '') AS has_ident,
+                 u.used_quota
+          FROM users u, cfg
+          WHERE cfg.min_accounts > 0
+            AND u.role = 1
+            AND u.created_at > extract(epoch from now())::bigint - cfg.window_days * 86400
+            AND (u.register_ip ~ '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
+              OR (u.register_ip ~ '^[0-9a-fA-F:]+$' AND u.register_ip LIKE '%:%'))
+        ),
+        nets AS (
+          SELECT net, count(*) AS accts, count(*) FILTER (WHERE has_ident) AS idents
+          FROM prov GROUP BY net
+        ),
+        flagged AS (
+          SELECT n.net, n.accts
+          FROM nets n, cfg
+          WHERE n.accts >= cfg.min_accounts
+            AND n.idents * 100 < n.accts * cfg.max_identity_pct
+        )
+        SELECT (SELECT count(*)::float8 FROM flagged) AS networks,
+               (SELECT coalesce(sum(accts), 0)::float8 FROM flagged) AS accounts,
+               (SELECT count(*)::float8 FROM prov p JOIN flagged f ON f.net = p.net
+                 WHERE p.used_quota > 0) AS paid_accounts
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - networks:
+            usage: "GAUGE"
+            description: "Networks (IPv4 /24, IPv6 /48) currently flagged as account farms at the live setting."
+        - accounts:
+            usage: "GAUGE"
+            description: "Accounts registered on those networks inside the reputation window."
+        - paid_accounts:
+            usage: "GAUGE"
+            description: "Of those, how many ever spent quota. Expected zero; above zero means a real network was flagged."

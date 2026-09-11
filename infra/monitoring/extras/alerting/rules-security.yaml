@@ -13,7 +13,10 @@
 # backups,postgres,ingress,cluster} -- these use the newapi.security.* prefix.
 #
 # These depend on scrape/cnpg-security-queries.yaml being wired into the newapi-pg
-# Cluster's monitoring.customQueriesConfigMap AND enablePodMonitor: true.
+# Cluster's monitoring.customQueriesConfigMap. Scraping comes from the standalone
+# PodMonitor in scrape/cnpg.yaml, NOT from enablePodMonitor, which the Cluster sets
+# to false on purpose: a second PodMonitor over the same pods made every series exist
+# six times and each `> 0` alert paged six times per event.
 #
 # METRIC NAMING: CNPG prefixes every custom-query metric with `cnpg_`, so the
 # ConfigMap key `newapi_admin_actions` becomes `cnpg_newapi_admin_actions_count`.
@@ -462,6 +465,77 @@ spec:
               Normal is under 20 per 5m. Check unorouter.com POST /api/ai/chat/forward at the
               edge for the user agent and ASN mix; the browser-only edge rule may need a new fingerprint.
 
+    # E2. Account farms. 2026-09-06: 12,293 accounts registered in one day and the farm
+    # ran five more days before a human noticed, because nothing measured registrations.
+    # service/network_reputation.go already had the enforcement; only the alarm was
+    # missing. Thresholds below are anchored to measured values, not guessed: normal
+    # peak is about 8 registrations per 5 minutes and that attack averaged 43.
+    - name: newapi.security.abuse
+      rules:
+        - alert: NewApiRegistrationSpike
+          expr: cnpg_newapi_registrations_total_5m > 25
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Registrations running at {{ $value }} per 5 minutes"
+            description: >-
+              Sustained well above the normal peak of about 8 per 5 minutes. Check the
+              register_ip spread: a farm rents a range and rotates inside it, so group by
+              /24 before judging. cnpg_newapi_farm_networks_networks shows whether the
+              reputation system is already catching it.
+
+        - alert: NewApiUnverifiedRegistrationSurge
+          expr: (cnpg_newapi_registrations_total_5m - cnpg_newapi_registrations_with_identity_5m) / cnpg_newapi_registrations_total_5m > 0.7 and cnpg_newapi_registrations_total_5m > 15
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Most new accounts are binding no identity"
+            description: >-
+              Over 70 percent of registrations bound no third-party login, at a volume high
+              enough to matter. Organic signup sits far lower. Email does not count as
+              identity while EmailVerificationEnabled is false, because the farms all set one.
+
+        - alert: NewApiAbuseAccountsHigh
+          expr: cnpg_newapi_abuse_accounts_5m > 150
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} accounts are burning free capacity and failing almost every call"
+            description: >-
+              Zero balance, no identity, and over 80 percent errors. Baseline after the
+              2026-09-10 shadow ban was about 40. These requests produce nothing and
+              saturate the free lanes for real users. Consider lowering
+              quota_setting.free_abuse_network_min_accounts, but read
+              cnpg_newapi_farm_networks_paid_accounts first.
+
+        - alert: NewApiFarmNetworksGrowing
+          expr: increase(cnpg_newapi_farm_networks_networks[6h]) > 25
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} more networks flagged as account farms in 6h"
+            description: >-
+              A new range is being rented and filled. The reputation verdict rebuilds every
+              10 minutes and refuses further signups from each flagged network on its own,
+              so this is information rather than an emergency, unless it keeps climbing.
+
+        # The false-positive gauge for free_abuse_network_min_accounts. Flagged networks
+        # are meant to hold nothing but disposable accounts. An account that has SPENT on
+        # one is a real person sharing that range. It is never shadow-banned (the Go skips
+        # anyone with identity or spend) but it would be refused a second signup, so a
+        # climbing count means the threshold is too tight. Expect a low non-zero floor:
+        # Tor exits land here, 185.220.101.0/24 held one paying user on 2026-09-10.
+        - alert: NewApiFarmNetworkHoldsRealUsers
+          expr: cnpg_newapi_farm_networks_paid_accounts > 5
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} paying accounts live on networks flagged as farms"
+            description: >-
+              Real customers share a range we now refuse signups from. Raise
+              quota_setting.free_abuse_network_min_accounts, or raise
+              free_abuse_network_max_identity_pct so shared networks are exempted sooner.
+              Setting min_accounts back to 0 disables the whole thing within 10 minutes.
+
     # F. The meta-alert. Every rule above depends on the CNPG custom queries being
     # scraped. If that breaks, the alerts do not fire and the silence looks like
     # safety.
@@ -472,7 +546,7 @@ spec:
         # legitimately vanish while idle, because a GROUP BY over zero rows produces no
         # series at all -- using one of those here would page every quiet night.
         - alert: SecurityMetricsMissing
-          expr: absent(cnpg_newapi_channel_key_reads_count) or absent(cnpg_newapi_admin_logins_total_count) or absent(cnpg_newapi_security_denials_total_count) or absent(cnpg_newapi_denials_from_new_ip_offending_ips) or absent(cnpg_newapi_privilege_probes_pat_route_count) or absent(cnpg_newapi_honeytoken_hits_count) or absent(cnpg_newapi_root_pat_from_new_network_count)
+          expr: absent(cnpg_newapi_channel_key_reads_count) or absent(cnpg_newapi_admin_logins_total_count) or absent(cnpg_newapi_security_denials_total_count) or absent(cnpg_newapi_denials_from_new_ip_offending_ips) or absent(cnpg_newapi_privilege_probes_pat_route_count) or absent(cnpg_newapi_honeytoken_hits_count) or absent(cnpg_newapi_root_pat_from_new_network_count) or absent(cnpg_newapi_registrations_total_5m) or absent(cnpg_newapi_abuse_accounts_5m)
           for: 1h
           labels: { severity: warning }
           annotations:
