@@ -28,6 +28,8 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api }
         - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
         - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+        # a joining replica (pg_basebackup) carries jobRole, not podRole
+        - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/jobRole: join }
         # Grafana reads the pre-aggregated tables (quota_data, model_status_pings,
         # perf_metrics, channel_diagnostics) as the column-masked `reader` role. Its
         # datasource points at the -ro service, so dashboards never touch the primary.
@@ -79,6 +81,8 @@ spec:
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: services, app: unorouter-bot }
         - matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
+        # a joining replica (pg_basebackup) carries jobRole, not podRole
+        - matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/jobRole: join }
       toPorts:
         - ports: [{ port: "5432", protocol: TCP }]
     - fromEndpoints:
@@ -114,9 +118,10 @@ spec:
       toPorts:
         - ports: [{ port: "8443", protocol: TCP }]
 ---
-# CNPG bootstrap Jobs (initdb, full-recovery) carry cnpg.io/jobRole instead of podRole and sat
+# CNPG Jobs (initdb, full-recovery, join) carry cnpg.io/jobRole instead of podRole and sat
 # under default deny until 2026-09-09: a DR recovery needs the API server, DNS and the
-# s3-gateway from the job pod, before any instance pod exists.
+# s3-gateway from the job pod, before any instance pod exists. Join jobs also need the
+# primary (added 2026-09-12 after replicas hung 41h in Creating a new replica on Talos).
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -140,3 +145,9 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
       toPorts:
         - ports: [{ port: "8443", protocol: TCP }]
+    # a join job streams pg_basebackup from its own cluster's primary on 5432
+    - toEndpoints:
+        - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+        - matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
