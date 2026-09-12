@@ -58,7 +58,7 @@ metadata:
   name: dr-drill
   namespace: databases
 data:
-  LINEAGE: bot-pg-v7
+  LINEAGE: bot-pg-v8
   drill.sh: |
     #!/bin/sh
     set -eu
