@@ -16,6 +16,9 @@ machine:
     fs.inotify.max_user_watches: "524288"
     vm.swappiness: "10"
   kubelet:
+    # same pin for the kubelet: the node address must be the private one, never tailscale0
+    nodeIP:
+      validSubnets: [10.100.1.0/24]
     extraConfig:
       failSwapOn: false
       memorySwap:

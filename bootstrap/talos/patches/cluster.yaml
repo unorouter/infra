@@ -13,6 +13,10 @@ cluster:
   etcd:
     extraArgs:
       listen-metrics-urls: http://0.0.0.0:2381
+    # peer and client traffic pinned to the Hetzner private subnet; without this etcd
+    # advertises the first address it finds (node13 came up on its public IP on 2026-09-10)
+    advertisedSubnets: [10.100.1.0/24]
+    listenSubnets: [10.100.1.0/24]
   apiServer:
     # Talos enforces Pod Security `baseline` cluster wide (k3s enforced nothing). The
     # namespaces with hostPath or root pods are exempted here rather than labelled in git,
