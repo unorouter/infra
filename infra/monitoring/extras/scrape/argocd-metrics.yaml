@@ -18,8 +18,15 @@ spec:
       - key: app.kubernetes.io/name
         operator: In
         values: [argocd-application-controller, argocd-repo-server, argocd-server]
+  # by port number: the upstream install (bootstrap/argocd) leaves the container ports unnamed,
+  # the chart named them "metrics"; a number matches both. One endpoint per component, each pod
+  # exposes only its own.
   podMetricsEndpoints:
-    - port: metrics
+    - targetPort: 8082
+      interval: 30s
+    - targetPort: 8083
+      interval: 30s
+    - targetPort: 8084
       interval: 30s
 ---
 apiVersion: monitoring.coreos.com/v1
