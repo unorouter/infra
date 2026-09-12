@@ -16,6 +16,7 @@ spec:
   destinations:
     - { server: https://kubernetes.default.svc, namespace: services }
     - { server: https://kubernetes.default.svc, namespace: databases }
+    - { server: https://kubernetes.default.svc, namespace: uno-import }
   # EMPTY on purpose: an app repo cannot create Namespaces, ClusterRoles, or a
   # ClusterSecretStore. Cluster-scoped resources stay in this repo.
   clusterResourceWhitelist: []

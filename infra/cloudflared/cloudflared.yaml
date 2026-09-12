@@ -81,10 +81,10 @@ data:
       # echo surfaces still need the token and are NOT routed here.
       - hostname: cards.unorouter.com
         path: ^/openapi/.*
-        service: http://uno-import.services.svc.cluster.local:4000
+        service: http://uno-import.uno-import.svc.cluster.local:4000
       - hostname: cards.unorouter.com
         path: ^/api/jobs(/.*)?$
-        service: http://uno-import.services.svc.cluster.local:4000
+        service: http://uno-import.uno-import.svc.cluster.local:4000
       - hostname: cards.unorouter.com
         service: http_status:404
       - hostname: api.unorouter.com

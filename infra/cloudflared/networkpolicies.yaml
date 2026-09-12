@@ -55,7 +55,7 @@ spec:
         - ports: [{ port: "3000", protocol: TCP }]
     - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: services, app: unorouter-bot }
-        - matchLabels: { io.kubernetes.pod.namespace: services, app: uno-import }
+        - matchLabels: { io.kubernetes.pod.namespace: uno-import, app: uno-import }
       toPorts:
         - ports: [{ port: "4000", protocol: TCP }]
     - toEndpoints:

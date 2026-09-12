@@ -170,38 +170,6 @@ spec:
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
 ---
-# Card importer behind a gluetun sidecar. In from the tunnel (cards.unorouter.com). Out: only
-# the PIA OpenVPN tunnel and PIA's API; every card site is fetched inside the tunnel.
-apiVersion: cilium.io/v2
-kind: CiliumNetworkPolicy
-metadata:
-  name: uno-import
-  namespace: services
-spec:
-  endpointSelector:
-    matchLabels: { app: uno-import }
-  ingress:
-    - fromEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
-      toPorts:
-        - ports: [{ port: "4000", protocol: TCP }]
-    - fromEntities: [host]
-      toPorts:
-        - ports: [{ port: "4000", protocol: TCP }]
-  egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEntities: [world]
-      toPorts:
-        - ports:
-            - { port: "1197", protocol: UDP }
-            - { port: "1198", protocol: UDP }
-            - { port: "443", protocol: TCP }
----
 # Sync CronJobs (15-minute and nightly full). Nothing in. Out: the gateway and the upstream
 # catalogs on 443.
 apiVersion: cilium.io/v2
