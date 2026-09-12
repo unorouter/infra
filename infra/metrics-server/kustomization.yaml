@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# metrics-server: k3s shipped one built in, Talos ships none, and the unorouter HPA reads
+# cpu through it. Pinned upstream release. kubelet-insecure-tls because Talos kubelets serve
+# self-signed certificates unless a serving-cert approver is installed (hardening item).
+namespace: kube-system
+resources:
+  - https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: metrics-server
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kubelet-insecure-tls
