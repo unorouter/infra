@@ -17,37 +17,37 @@ tofu plan    # read before apply; server ops one node at a time
 tofu apply   # manual only
 ```
 
-Cloud-init writes k3s auto-deploy manifests (Cilium + ArgoCD + root app), so a fresh apply brings
-the stack up from git. Prerequisites: the break-glass age key (VeraCrypt volume plus Bitwarden,
-loss = secrets unrecoverable), Hetzner token, the Hetzner Object Storage key (`tofu/.env`).
+Servers boot the Talos snapshot (`bootstrap/talos/upload-image.sh`) with their rendered machine
+config as user data, so a fresh apply brings the OS and Kubernetes up; `./scripts/dr.sh
+bootstrap` then installs Cilium, ArgoCD and the root app from git. Prerequisites: the
+break-glass age key (VeraCrypt volume plus Bitwarden, loss = secrets unrecoverable), Hetzner
+token, the Hetzner Object Storage key (`tofu/.env`), talhelper and talosctl.
 
 ### Node disk
 
-Images are the only reclaimable chunk; the rest of the 150G root is live local-path data. Kubelet
-`image-gc-high-threshold=70` / `low=55` is set in `tofu/cloud-init*.tftpl` AND
-`/etc/rancher/k3s/config.yaml` on each node (keep in sync). Manual prune:
-
-```sh
-/var/lib/rancher/k3s/data/current/bin/crictl -r unix:///run/k3s/containerd/containerd.sock rmi --prune
-```
+Images are the only reclaimable chunk; the rest of the disk is live local-path data on the
+user volume (`bootstrap/talos/patches/volumes.yaml`). Kubelet `imageGCHighThresholdPercent: 70`
+/ `low: 55` is set in `bootstrap/talos/patches/machine.yaml`. There is no shell to prune by
+hand: `talosctl -n <node> get volumestatus` shows the partitions, `talosctl -n <node> image ls`
+the images.
 
 `NodeDiskFillingUp` at 75% means GC already ran and the growth is real data.
 
 ## Non-negotiable gotchas
 
-- All nodes are k3s SERVERS with `--advertise-address=<private-ip>`. Cilium
-  `k8sServiceHost: 127.0.0.1` is valid only while that holds.
-- After changing a `--node-ip`: restart the cilium DaemonSet.
+- All nodes are Talos control planes; etcd and the kubelet are pinned to `10.100.1.0/24`
+  (`patches/cluster.yaml`, `patches/machine.yaml`). Cilium and every in-cluster client reach the
+  apiserver through KubePrism (`localhost:7445`).
 - CNPG uses the Barman Cloud PLUGIN. A test-restore from the real bucket is a hard gate.
 - ACME HTTP-01 can never reach an origin behind the tunnel: use the `letsencrypt-dns`
   ClusterIssuer (DNS-01).
 - Node ops manual, one node per apply, plan reviewed (a both-nodes `-replace` = 34 min DB outage).
 - new-api master stays `replicas: 1`. CNPG primaries drift on failover: read
-  `status.currentPrimary` every time. Keep the primary in hel1, next to the gateway.
-- **The Cilium and ArgoCD HelmChart CRs exist only in the cluster.** Upgrade by patching the live
-  CR (`spec.valuesContent`) AND `tofu/cloud-init.yaml.tftpl`, the DR copy. Both carry
-  `failurePolicy: abort` and ArgoCD keeps its CRDs, because a re-applied bootstrap file with the
-  default `reinstall` policy once uninstalled ArgoCD and every Application vanished.
+  `status.currentPrimary` every time.
+- Cilium is `infra/cilium` and ArgoCD is the upstream install in `bootstrap/argocd`, both
+  applied by `dr.sh bootstrap` before ArgoCD exists and owned by git afterwards. Pod Security is
+  `baseline` cluster wide; a workload that needs more gets its own labelled namespace
+  (`infra/services/uno-import.yaml`), never a wider exemption.
 - ArgoCD polls every 120s + up to 60s jitter with a 3-min repo cache, so a push lands 1.5 to 6
   minutes later. There is no webhook. A CNPG or ScrapeConfig field defaulted by a webhook inside
   an atomic list reads OutOfSync forever: state the default in the manifest.

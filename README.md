@@ -1,7 +1,8 @@
 # infra
 
-unorouter revenue stack. 3-node k3s HA on Hetzner (node8 hel1, node9 nbg1, node10 hel1, cx43,
-embedded etcd, private net 10.100.0.0/16), Cilium without kube-proxy, ArgoCD app-of-apps,
+unorouter revenue stack. Three Talos Linux control planes on Hetzner (node11, node12, node13,
+nbg1, cx43, private net 10.100.1.0/24, KubePrism, no SSH, machine configs in `bootstrap/talos`),
+Cilium without kube-proxy, ArgoCD app-of-apps,
 CloudNativePG with PITR to Hetzner Object Storage, OpenBao, ESO, cloudflared, kube-prometheus-stack.
 
 Everything enters through the Cloudflare tunnel. The Hetzner firewall allows only Tailscale UDP

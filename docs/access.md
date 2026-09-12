@@ -8,7 +8,7 @@ Daily work is a named, expiring session. Nothing standing lives on a laptop.
 | Postgres | `tsh db login newapi-pg --db-user dbadmin\|reader --db-name newapi`, then `tsh db connect newapi-pg` | 12 h cert |
 | OpenBao | `./scripts/bao.sh login` (reader, kv-read) or `./scripts/bao.sh login admin` (writes); trades the Teleport session for a token via `auth/jwt-teleport`, `BAO_ADDR=http://127.0.0.1:18200` (unit `tsh-openbao`) | 24 h / 1 h |
 | Logs | `logcli` with `LOKI_ADDR=http://127.0.0.1:18300/api/datasources/proxy/uid/loki` (unit `tsh-grafana` runs `tsh proxy app grafana --port 18300`); Grafana's datasource proxy forwards to Loki, Teleport audits each query as you | 12 h cert |
-| Node shell | `ssh root@<tailscale ip>` (Tailscale SSH, no key) | identity check every 12 h |
+| Node | `talosctl -n <tailnet ip> dashboard\|logs\|etcd status` with `TALOSCONFIG=bootstrap/talos/clusterconfig/talosconfig` (rendered from sops, never committed); no SSH exists on Talos | talosconfig cert, 1 year |
 | Ops UIs | argocd / openbao / grafana.unorouter.com through Teleport App Access, GitHub SSO | 12 h |
 
 Re-login: `tsh login --proxy=teleport.unorouter.com:443 --auth=github --browser=none`, open the
@@ -19,9 +19,9 @@ OpenBao has no Teleport dependency of its own: `bao login -method=oidc role=admi
 
 **Break-glass** (Teleport, GitHub or Dex down). Each path is account-free and pages on use:
 
-- Cluster: `./scripts/dr.sh kubeconfig [node]` pulls `/etc/rancher/k3s/k3s.yaml` over Tailscale
-  into `kubeconfig.breakglass`. It authenticates as `system:admin`, so every request fires
-  `K8sSecretRead` / `K8sPodExec`. `shred -u` it when done.
+- Cluster: `./scripts/dr.sh kubeconfig [node]` asks a node for an admin kubeconfig over the
+  Talos API (tailnet) into `kubeconfig.breakglass`. It authenticates as `system:admin`, so every
+  request fires `K8sSecretRead` / `K8sPodExec`. `shred -u` it when done.
 - OpenBao, one value: `./scripts/dr.sh bao-read <path> <field>` reads a KV field through
   ESO's kubernetes-auth role inside the pod (no Teleport, no operator token, nothing on
   disk); an exec, so it pages `K8sPodExec`. This is how the Teleport connector secret is
@@ -29,7 +29,7 @@ OpenBao has no Teleport dependency of its own: `bao login -method=oidc role=admi
 - OpenBao, full: `./scripts/dr.sh root` needs an authenticated sudo token in 2.6 and is
   therefore only a path while some login still works; a true lockout is a snapshot restore
   (`dr.sh restore`).
-- No Tailscale: Hetzner console for the nodes, netcup SCP console for the VPS boxes.
+- No Tailscale: a temporary Hetzner firewall rule for port 50000 from your IP and `talosctl -e <public ip>`, or the Hetzner console (Talos shows its dashboard, there is no login); netcup SCP console for the VPS boxes.
 - Offline (VeraCrypt volume plus Bitwarden): unseal keys, tailnet lock disablement secrets,
   break-glass sops age key, the Hetzner operator SSH key. Nothing of this is in OpenBao, so a
   sealed or destroyed vault stays recoverable.
