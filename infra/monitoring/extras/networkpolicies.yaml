@@ -1,6 +1,6 @@
 # Pod isolation for monitoring. Default-deny for every pod; the allows below are the scrape
 # map plus the alert delivery paths. Facts that shape the rules: Prometheus scrapes node
-# ports (kubelet 10250, etcd 2381, node-exporter 9100, cilium 9962/9963, API 6443) and the
+# ports (kubelet 10250, etcd 2381, node-exporter 9100, cilium 9962/9963, hubble 9965, API 6443) and the
 # local node shows up as the host entity while the other two control-plane nodes show up as
 # kube-apiserver (and remote-node), so those three entities travel together; the API server
 # calls the kps-operator admission webhook on 10250 from the same identities; kubelet probes
@@ -91,6 +91,7 @@ spec:
         - ports:
             - { port: "9962", protocol: TCP }
             - { port: "9963", protocol: TCP }
+            - { port: "9965", protocol: TCP }
     # Node ports: kubelet, etcd, node-exporter (hostNetwork), cilium agent and operator
     # (hostNetwork), and the API server for service discovery.
     - toEntities: [host, remote-node, kube-apiserver]
@@ -102,6 +103,7 @@ spec:
             - { port: "9100", protocol: TCP }
             - { port: "9962", protocol: TCP }
             - { port: "9963", protocol: TCP }
+            - { port: "9965", protocol: TCP }
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

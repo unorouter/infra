@@ -1,0 +1,40 @@
+# The two egress rules every isolated namespace used to repeat in its own policies. Both
+# select by namespace list on purpose: kube-system, local-path-storage, cilium-secrets and
+# default carry no policies and must not start enforcing. A new isolated namespace goes into
+# both lists. The API server rule selects pods with their own ServiceAccount (the ones with
+# RBAC); a pod that has an SA but must not reach the API server goes into the NotIn.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: dns-egress
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: io.kubernetes.pod.namespace
+        operator: In
+        values: [argocd, cert-manager, cloudflared, cnpg-system, databases, dex, external-secrets, monitoring, openbao, s3-gateway, services, teleport, teleport-agent, uno-import, velero]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: apiserver-egress
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: io.kubernetes.pod.namespace
+        operator: In
+        values: [argocd, cert-manager, cloudflared, cnpg-system, databases, dex, external-secrets, monitoring, openbao, s3-gateway, services, teleport, teleport-agent, uno-import, velero]
+      - key: io.cilium.k8s.policy.serviceaccount
+        operator: NotIn
+        values: [default, argocd-repo-server, cloudflared, kps-alertmanager]
+  egress:
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
