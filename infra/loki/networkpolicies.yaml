@@ -22,12 +22,6 @@ spec:
       toPorts:
         - ports: [{ port: "3100", protocol: TCP }]
   egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
     # chunks and index through the encrypting gateway (Service 443, container 8443)
     - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
@@ -38,10 +32,6 @@ spec:
         - matchLabels: { app.kubernetes.io/name: alertmanager }
       toPorts:
         - ports: [{ port: "9093", protocol: TCP }]
-    # the rules sidecar watches ConfigMaps
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -61,12 +51,6 @@ spec:
         - ports: [{ port: "9090", protocol: TCP }]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: loki }
       toPorts:
         - ports: [{ port: "3100", protocol: TCP }]
@@ -75,10 +59,6 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
       toPorts:
         - ports: [{ port: "8443", protocol: TCP }]
-    # pod discovery
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
