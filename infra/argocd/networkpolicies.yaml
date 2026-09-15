@@ -31,12 +31,6 @@ spec:
         - ports: [{ port: "8082", protocol: TCP }]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: argocd-repo-server }
       toPorts:
         - ports: [{ port: "8081", protocol: TCP }]
@@ -44,9 +38,6 @@ spec:
         - matchLabels: { app.kubernetes.io/name: argocd-redis }
       toPorts:
         - ports: [{ port: "6379", protocol: TCP }]
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -73,12 +64,6 @@ spec:
             - { port: "8081", protocol: TCP }
             - { port: "8084", protocol: TCP }
   egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
     - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: argocd-redis }
       toPorts:
@@ -111,12 +96,6 @@ spec:
             - { port: "8083", protocol: TCP }
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: argocd-redis }
       toPorts:
         - ports: [{ port: "6379", protocol: TCP }]
@@ -130,9 +109,6 @@ spec:
         - ports:
             - { port: "5556", protocol: TCP }
             - { port: "5557", protocol: TCP }
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
@@ -157,10 +133,6 @@ spec:
         - ports: [{ port: "6379", protocol: TCP }]
   # the chart's secret-init container reads and creates the auth Secret through the
   # apiserver at every pod start (found 2026-09-13: a restarted redis pod hung in Init)
-  egress:
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -183,15 +155,6 @@ spec:
             - { port: "5556", protocol: TCP }
             - { port: "5558", protocol: TCP }
   egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
@@ -218,18 +181,9 @@ spec:
             - { port: "9001", protocol: TCP }
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: argocd-repo-server }
       toPorts:
         - ports: [{ port: "8081", protocol: TCP }]
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
