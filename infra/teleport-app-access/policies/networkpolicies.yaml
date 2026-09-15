@@ -25,12 +25,6 @@ spec:
         - ports: [{ port: "3000", protocol: TCP }]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: teleport, app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: proxy }
       toPorts:
         - ports: [{ port: "3080", protocol: TCP }]
@@ -60,6 +54,3 @@ spec:
         - matchLabels: { app: jwt-echo }
       toPorts:
         - ports: [{ port: "8080", protocol: TCP }]
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
