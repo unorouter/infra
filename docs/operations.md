@@ -33,6 +33,15 @@ Images are the only reclaimable chunk; the rest is live local-path data on the u
 `talosctl -n <node> get volumestatus` shows partitions, `image ls` the images.
 `NodeDiskFillingUp` at 75 % means GC already ran and the growth is real data.
 
+local-path creates `local` PVs (StorageClass annotation `defaultVolumeType`, 2026-09-16):
+Velero's node-agent refuses hostPath-backed claims in every mode and reports the backup
+Completed anyway, so a hostPath claim is silently never backed up. Claims from before that
+date are hostPath until recreated. A chart-owned claim must never be swapped by pointing
+the chart at another claim: ArgoCD prunes the chart's claim the moment it leaves the
+rendered manifests and the Delete reclaim policy takes the data with it (Teleport auth,
+2026-09-16). Set the PV to Retain first, or keep the claim outside the chart from the start
+(`grafana-data`, `teleport`).
+
 ## Gotchas
 
 - All nodes are control planes. etcd, kubelet and Cilium's VXLAN run on the WireGuard mesh

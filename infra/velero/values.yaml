@@ -38,11 +38,13 @@ nodeAgent:
   resources: { requests: { cpu: 10m, memory: 64Mi } }
 
 # Daily backup of the resource state, keep 14 days. PV data is opt in: only volumes carrying
-# backup.velero.io/backup-volumes are read by Kopia (Teleport auth data, Grafana storage, the
-# services PVCs). The old opt out mode uploaded every emptyDir on the cluster daily (request
-# logs, ArgoCD caches, OpenBao raft that the snapshots already cover) and raced with short
-# lived pods into PartiallyFailed. Secrets are not backed up: ESO, cert-manager and CNPG
-# recreate them, the canaries have a sops copy in secrets/k8s.sops.yaml.
+# backup.velero.io/backup-volumes are read by Kopia (Teleport auth data, Grafana storage). The
+# claim must be a local-type PV: a hostPath one is skipped with a warning and the backup still
+# says Completed (2026-09-14 to 16, nothing was backed up). The old opt out mode uploaded every
+# emptyDir on the cluster daily (request logs, ArgoCD caches, OpenBao raft that the snapshots
+# already cover) and raced with short lived pods into PartiallyFailed. Secrets are not backed
+# up: ESO, cert-manager and CNPG recreate them, the canaries have a sops copy in
+# secrets/k8s.sops.yaml.
 schedules:
   daily:
     schedule: "0 2 * * *"
