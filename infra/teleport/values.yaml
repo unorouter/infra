@@ -23,7 +23,7 @@ resources: { requests: { cpu: 20m, memory: 128Mi } }
 
 persistence:
   enabled: true
-  existingClaimName: teleport-data   # resources/pvc.yaml, a local-type PV Velero can read
+  existingClaimName: teleport   # local-type PV (Velero can read it), restored 2026-09-16, not in git: never let the chart own it again
 
 # session recordings -> S3 (node-independent, survives node loss). Audit events stay on SQLite.
 # static app-join token (file-based) lets the in-cluster teleport-kube-agent (App Access) join
