@@ -106,16 +106,20 @@ Images are the only reclaimable chunk; the rest is live local-path data on the u
 
 Every workload namespace is default-deny (plain `NetworkPolicy`, empty selector, Ingress and
 Egress) plus one `CiliumNetworkPolicy` per workload in `infra/<ns>/networkpolicies.yaml`. A pod
-reaches only its dependencies, and the internet only on the ports its code dials.
+reaches only its dependencies, and the internet only on the ports its code dials. DNS and the
+API server are not in those files: `infra/services/cluster-egress.yaml` grants kube-dns to
+every pod of the listed namespaces and 6443 to pods with their own ServiceAccount (three SAs
+excluded). A new isolated namespace goes into both lists; a workload that only needs DNS and
+the API server needs no policy of its own (Cilium rejects a rule-less spec).
 
 - **Never `toFQDNs` or a DNS L7 rule here**: with socket-LB, vxlan and legacy host routing the
   DNS proxy drops every redirected query (cilium/cilium#46284). Internet egress is `toCIDR` where
   documented, else `toEntities: [world]` on named ports.
 - Ports in rules are container ports. The API server is `[host, remote-node, kube-apiserver]`
   (admission webhooks arrive from those). Kubelet probes arrive as `host`.
-- Stage with `cilium-dbg endpoint config <id> PolicyAuditMode=Enabled` on every endpoint of the
-  namespace before the policy lands, watch `hubble observe --verdict AUDIT --verdict DROPPED`,
-  then disable audit and watch drops again.
+- A policy regression is a number: `hubble_drop_total{reason="POLICY_DENIED"}` by `source`
+  and `destination` namespace (agent port 9965), zero in steady state. Check it after every
+  policy change instead of watching pods fail.
 - Helm and ArgoCD hook Jobs run under their own ServiceAccount and are enforced from birth: put
   them in a selector first or the sync wedges on `hook-finalizer`.
 - Run `hubble observe --verdict DROPPED --since 60m` an hour after any policy change. Clients
