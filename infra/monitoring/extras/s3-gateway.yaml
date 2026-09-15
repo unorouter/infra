@@ -302,10 +302,6 @@ spec:
       toPorts:
         - ports: [{port: "5572", protocol: TCP}]
   egress:
-    - toEndpoints:
-        - matchLabels: {io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
-      toPorts:
-        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
     # Match the existing writer policies: the transparent DNS proxy drops queries on this
     # cluster, so FQDN/L7 policies cannot be used here.
     - toEntities: [world]
@@ -321,10 +317,6 @@ spec:
   endpointSelector:
     matchLabels: {app: s3-gateway-restarter}
   egress:
-    - toEndpoints:
-        - matchLabels: {io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
-      toPorts:
-        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
     - toEntities: [host, remote-node, kube-apiserver]
       toPorts:
         - ports: [{port: "6443", protocol: TCP}, {port: "443", protocol: TCP}]

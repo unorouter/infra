@@ -130,12 +130,6 @@ spec:
             - { port: "8080", protocol: TCP }
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app: ntfy-bridge }
         - matchLabels: { app: edge-mode }
       toPorts:
@@ -162,12 +156,6 @@ spec:
       toPorts:
         - ports: [{ port: "3000", protocol: TCP }]
   egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
     # Teleport JWT auth: Grafana fetches the proxy's JWKS at teleport.unorouter.com, which the
     # CoreDNS rewrite resolves to the proxy Service in-cluster (container port 3080).
     - toEndpoints:
@@ -192,9 +180,6 @@ spec:
             cnpg.io/podRole: instance
       toPorts:
         - ports: [{ port: "5432", protocol: TCP }]
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
@@ -215,16 +200,6 @@ spec:
         - matchLabels: { app.kubernetes.io/name: prometheus }
       toPorts:
         - ports: [{ port: "10250", protocol: TCP }]
-  egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -246,10 +221,6 @@ spec:
         - ports:
             - { port: "8080", protocol: TCP }
             - { port: "8081", protocol: TCP }
-  egress:
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
 ---
 # Everything under the default ServiceAccount: blackbox, ntfy-bridge, edge-mode and the
 # poller CronJobs without their own account.
@@ -276,12 +247,6 @@ spec:
             - { port: "8080", protocol: TCP }
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: alertmanager }
       toPorts:
         - ports: [{ port: "9093", protocol: TCP }]
@@ -289,9 +254,6 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: openbao, app.kubernetes.io/name: openbao, component: server }
       toPorts:
         - ports: [{ port: "8200", protocol: TCP }]
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
@@ -311,18 +273,9 @@ spec:
         values: [image-secret-scan]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: alertmanager }
       toPorts:
         - ports: [{ port: "9093", protocol: TCP }]
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
@@ -337,13 +290,3 @@ metadata:
 spec:
   endpointSelector:
     matchLabels: { io.cilium.k8s.policy.serviceaccount: kps-admission }
-  egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
