@@ -22,6 +22,8 @@ spec:
   podMetricsEndpoints:
     - port: prometheus
       interval: 30s
+    - port: hubble-metrics
+      interval: 30s
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor

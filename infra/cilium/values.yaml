@@ -35,6 +35,12 @@ envoy:
   enabled: false
 
 hubble:
+  # drop and policy verdict counters by namespace (port 9965, scraped by the cilium-agent
+  # PodMonitor): the only place a network policy regression shows as a number
+  metrics:
+    enabled:
+      - "drop:sourceContext=namespace;destinationContext=namespace"
+      - "policy:sourceContext=namespace"
   export:
     static:
       enabled: true

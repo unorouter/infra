@@ -23,7 +23,7 @@ portSelector:
     - 4244
     - 6443
     - 9100
-    - "9962-9963"
+    - "9962-9965"
     - 10250
     - "50000-50001"
   protocol: tcp
@@ -81,7 +81,7 @@ ingress:
   - subnet: ::/0
 ---
 # Pod clients of host ports: Prometheus (etcd 2381, node-exporter 9100, cilium 9962, cilium
-# operator 9963, kubelet 10250, apiserver 6443), hubble-relay (4244), cilium-health (4240),
+# operator 9963, hubble metrics 9965, kubelet 10250, apiserver 6443), hubble-relay (4244), cilium-health (4240),
 # every ClusterIP client of the kube API (socket-LB rewrites it to node:6443), etcd-backup
 # Jobs (apid 50000). A new pod scraper or client of a node port is added here.
 apiVersion: v1alpha1
@@ -94,7 +94,7 @@ portSelector:
     - 4244
     - 6443
     - 9100
-    - "9962-9963"
+    - "9962-9965"
     - 10250
     - 50000
   protocol: tcp
