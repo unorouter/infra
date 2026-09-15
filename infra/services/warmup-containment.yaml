@@ -1,0 +1,16 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: zz-block-warmup-exfil
+  namespace: services
+spec:
+  description: Quarantine bot-labelled Jobs following the secret export incident.
+  endpointSelector:
+    matchLabels:
+      app: unorouter-bot
+    matchExpressions:
+      - key: job-name
+        operator: Exists
+  egressDeny:
+    - toEntities:
+        - all

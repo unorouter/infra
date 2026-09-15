@@ -1,0 +1,190 @@
+# Alertmanager routing. Lives in the CRD (not the chart's inline `config:`) because
+# discordConfigs.apiURL accepts a Secret reference -- the webhook URL never enters git.
+# The chart's alertmanagerConfiguration.name points here.
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: unorouter-alerts
+  namespace: monitoring
+spec:
+  route:
+    # DEFAULT IS DROP. Only warning/critical opt in below. Making discord the default
+    # receiver spammed the channel with severity=none plumbing alerts (Watchdog,
+    # InfoInhibitor) whose own descriptions say they belong in a null receiver.
+    receiver: "null"
+    groupBy: [alertname, namespace]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    routes:
+      # DEAD-MAN SWITCH. Watchdog always fires while Prometheus+Alertmanager are alive, so
+      # re-notifying it every 5m is a heartbeat to healthchecks.io. If the cluster, Prometheus
+      # or Alertmanager dies the pings stop and healthchecks emails after its grace period --
+      # the one failure mode in-cluster alerting can never report itself.
+      - receiver: healthchecks
+        matchers:
+          - name: alertname
+            value: Watchdog
+        groupWait: 0s
+        groupInterval: 5m
+        repeatInterval: 5m
+      # InfoInhibitor exists only to suppress info alerts; it must never notify.
+      - receiver: "null"
+        matchers:
+          - name: alertname
+            value: InfoInhibitor
+      # Edge attack mode: the stream-flood alert flips the Cloudflare zone into attack mode
+      # (edge-mode Deployment); resolved flips it back after a hold. continue: true so the
+      # same alert still reaches discord and the phone below.
+      - receiver: edge-mode
+        matchers:
+          - name: alertname
+            value: CloudflaredStreamFlood
+        groupWait: 0s
+        groupInterval: 1m
+        repeatInterval: 10m
+        continue: true
+      # Responder: every pod create in services (Loki rule K8sCanaryWorkload, severity none)
+      # goes to canary-quarantine, which checks the pod for the canary Secret itself and
+      # posts its own critical alert only when it finds one. Nothing else sees this trigger.
+      - receiver: canary-quarantine
+        matchers:
+          - name: alertname
+            value: K8sCanaryWorkload
+          - name: source
+            value: loki-trigger
+        groupBy: [objectRef_uid, objectRef_name]
+        groupWait: 0s
+        groupInterval: 1m
+        repeatInterval: 2m
+      # Pollers speak only to Alertmanager (extras/pollers/watch-lib.yaml), so this is the single
+      # Discord path for them. Digests are severity info: Discord only, never [RESOLVED],
+      # one alert per distinct text so an unchanged window is not reposted. The Loki k8s-audit
+      # rules keep the source label of the retired DaemonSet, so secret reads and execs page
+      # first and the rest takes the same digest receiver.
+      - receiver: discord-digest
+        matchers:
+          - name: severity
+            value: info
+        groupWait: 10s
+        groupInterval: 1m
+        repeatInterval: 1h
+      - receiver: ntfy-evidence
+        matchers:
+          - name: source
+            value: k8s-audit-watch
+          - name: alertname
+            matchType: "=~"
+            value: "^(K8sSecretRead|K8sPodExec)$"
+        groupWait: 10s
+        repeatInterval: 1h
+        continue: true
+      - receiver: discord-digest
+        matchers:
+          - name: source
+            value: k8s-audit-watch
+        groupWait: 10s
+        repeatInterval: 1h
+      # critical fans out to BOTH discord (continue: true falls through) and ntfy, which
+      # makes the phone ring. Discord alone failed 2026-08-12: the API degraded for 2h
+      # during Korea business hours (= our night) before anyone saw the channel.
+      - receiver: discord
+        matchers:
+          - name: severity
+            value: critical
+        groupWait: 10s
+        repeatInterval: 1h
+        continue: true
+      # Phone pages are an explicit API-path allowlist (owner decision 2026-08-13 after a
+      # node-pressure page): only alerts that mean api.unorouter.com is failing or its
+      # database is dying ring the phone. Everything else critical stays Discord-only.
+      # The pod/deployment/instance excludes keep frontend/bot/site instances of the
+      # shared alertnames (OOMKilled, PublicEndpointDown, ...) off the phone.
+      #
+      # The security alerts page too. They are not availability alerts, but somebody
+      # holding a working credential is time-critical in the same way a dead API is,
+      # and a Discord channel is not read at night. They stay narrow (key reveals, mass
+      # account edits, hardening flapping, 2FA churn) so the phone never rings for
+      # normal admin work.
+      - receiver: ntfy
+        matchers:
+          - name: severity
+            value: critical
+          - name: alertname
+            matchType: "=~"
+            value: "^(CatalogModelsBelowFloor|CatalogHiddenByOptions|CatalogOptionMapShrunk|PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork|ImageSecretLeak|PublicPackageExposed|K8sSecretRead|K8sPodExec|K8sCanaryWorkload|QuarantineApplied|VectorArchiveDiscarded|VectorArchiveErrors|TeleportPrivilegeChange|TeleportSSOBroken|OpenBaoRootUsed|PVCTerminating)$"
+          - name: pod
+            matchType: "!~"
+            value: "unorouter.*"
+          - name: deployment
+            matchType: "!~"
+            value: "unorouter.*"
+          - name: instance
+            matchType: "!~"
+            value: "https://(www\\.)?unorouter\\.com.*"
+        groupWait: 10s
+        repeatInterval: 1h
+      - receiver: discord
+        matchers:
+          - name: severity
+            value: warning
+        groupWait: 5m
+        repeatInterval: 12h
+  receivers:
+    - name: "null"
+    # heartbeat target: any POST marks the check alive. sendResolved is off -- a resolved
+    # Watchdog would ping too and defeat the point.
+    - name: healthchecks
+      webhookConfigs:
+        - urlSecret:
+            name: alertmanager-discord
+            key: healthchecks
+          sendResolved: false
+    - name: canary-quarantine
+      webhookConfigs:
+        - url: http://canary-quarantine.monitoring.svc:8080/alert
+          sendResolved: false
+    - name: edge-mode
+      webhookConfigs:
+        - url: http://edge-mode.monitoring.svc:8080/alert
+          sendResolved: true
+    # phone paging via the ntfy-bridge Deployment (reformats webhook JSON for ntfy.sh)
+    - name: ntfy
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/alert
+          sendResolved: true
+    # evidence alerts expire on their own 10 minutes after the last operation; that
+    # expiry is not news.
+    - name: ntfy-evidence
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/alert
+          sendResolved: false
+    # Both Discord receivers go through the bridge (alerting/ntfy-bridge.yaml, /discord): the
+    # native discordConfigs notifier paints every firing alert red, the bridge colours by
+    # severity. `discord` prints [RESOLVED]; `discord-digest` never does, its alerts (watcher
+    # digests, evidence) expire on their own and that expiry is not news.
+    - name: discord
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/discord
+          sendResolved: true
+    - name: discord-digest
+      webhookConfigs:
+        - url: http://ntfy-bridge.monitoring.svc:8080/discord
+          sendResolved: false
+  inhibitRules:
+    # one root cause must not become an alert storm: a down node explains its pods, and
+    # etcd degradation explains the NodeNotReady it causes (incident 2026-07-24).
+    - sourceMatch:
+        - name: alertname
+          value: NodeNotReady
+      targetMatch:
+        - name: severity
+          value: warning
+      equal: [node]
+    - sourceMatch:
+        - name: severity
+          value: critical
+      targetMatch:
+        - name: severity
+          value: warning
+      equal: [alertname, namespace]

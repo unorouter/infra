@@ -1,0 +1,87 @@
+# Cilium owns CNI + kube-proxy replacement. Public ingress is the cloudflared tunnel
+# (outbound-only), no Envoy edge, no Gateway API, no host :80/:443 listeners.
+# Installed and upgraded by hand: scripts/dr.sh bootstrap at cluster creation, afterwards
+# `helm upgrade cilium cilium/cilium --version <dr.sh cil> -n kube-system -f infra/cilium/values.yaml`.
+kubeProxyReplacement: true
+
+# pods send inside VXLAN (50 bytes) inside KubeSpan WireGuard (80 bytes) on a 1500 byte
+# link; auto detection sees only the link and would hand pods 1450
+MTU: 1370
+
+# KubePrism: Talos runs a local apiserver load balancer on every node (machine.yaml), so the
+# agent never depends on one control plane address being up
+k8sServiceHost: localhost
+k8sServicePort: 7445
+
+# Talos mounts the cgroup2 root itself; the agent must not try, and it runs without the
+# privileged flag, so the capability lists from the Talos Cilium guide are spelled out
+cgroup:
+  autoMount:
+    enabled: false
+  hostRoot: /sys/fs/cgroup
+securityContext:
+  capabilities:
+    ciliumAgent: [CHOWN, KILL, NET_ADMIN, NET_RAW, IPC_LOCK, SYS_ADMIN, SYS_RESOURCE, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    cleanCiliumState: [NET_ADMIN, SYS_ADMIN, SYS_RESOURCE]
+
+ipam:
+  operator:
+    # podCIDR shared with the machine config (patches/cluster.yaml) and TRUSTED_NETWORKS
+    clusterPoolIPv4PodCIDRList:
+      - 10.42.0.0/16
+
+# no L7 policies / no Gateway -> the dedicated Envoy DaemonSet is idle weight
+envoy:
+  enabled: false
+
+hubble:
+  export:
+    static:
+      enabled: true
+      filePath: /var/run/cilium/hubble/evidence.log
+      fileMaxSizeMb: 10
+      fileMaxBackups: 10
+      allowList:
+        - '{"source_pod":["services/"],"destination_port":["443"]}'
+      fieldMask:
+        - time
+        - verdict
+        - IP
+        - l4
+        - source.namespace
+        - source.pod_name
+        - source.identity
+        - destination.namespace
+        - destination.pod_name
+        - destination.identity
+        - node_name
+        - traffic_direction
+        - drop_reason_desc
+  # relay kept for cluster-wide `hubble observe` (CLI). UI removed 2026-07-23: rarely opened,
+  # flows are reachable via `kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe`.
+  relay:
+    resources: { requests: { cpu: 10m, memory: 32Mi } }
+    enabled: true
+  ui:
+    enabled: false
+
+operator:
+  replicas: 1
+  resources: { requests: { cpu: 10m, memory: 64Mi } }
+  prometheus:
+    enabled: true
+
+# agent + operator metrics for the CiliumAgentMissing / network alerts. serviceMonitor stays
+# off: it needs the Prometheus CRDs at Cilium install time, which do not exist on a DR
+# rebuild (Cilium comes up before ArgoCD). A PodMonitor in monitoring/extras covers it.
+prometheus:
+  enabled: true
+
+# a restart must touch ONE node at a time: eBPF programs live in the kernel and keep
+# forwarding while an agent is down (bpffs is mounted), but pod creation and policy updates
+# stall on that node meanwhile. Default maxUnavailable=2 would take 2 of 3 at once.
+updateStrategy:
+  rollingUpdate:
+    maxUnavailable: 1
+# requests only (7 day median), no limits; lands with the next hand helm upgrade
+resources: { requests: { cpu: 100m, memory: 256Mi } }

@@ -1,0 +1,555 @@
+# LogQL alert rules for Loki's ruler (the sidecar copies ConfigMaps labelled loki_rule=1 into
+# /rules/<tenant>; the tenant is "fake" because auth is off). Alerts go to the same
+# Alertmanager as Prometheus and follow its routes: severity info is the Discord digest.
+# Each group here replaced a log-tailing Python watcher; the pollers left in
+# monitoring/extras/pollers read HTTP APIs and SQL, not logs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-rules
+  namespace: monitoring
+  labels: { loki_rule: "1" }
+  annotations: { k8s-sidecar-target-directory: /rules/fake }
+data:
+  security.yaml: |
+    groups:
+      - name: pgaudit
+        interval: 1m
+        rules:
+          # Replaces pgaudit-watch. CNPG writes pgaudit records to the postgres pods' stdout;
+          # Alloy ships them with the JSON intact. Exempt: the app role, the metrics exporter
+          # reading over the instance socket, the archiver reading its one table from the pod
+          # network, and the reader role from the pod network (the Teleport database agent is
+          # the only pod the databases network policy lets reach 5432 with that role; Teleport's
+          # own db.session events name the person). Parallel workers repeat their leader's row.
+          - alert: PgauditNonAppRole
+            expr: >-
+              sum by (pod, record_user_name, src, record_audit_class, record_audit_object_name) (
+                count_over_time(
+                  {namespace="databases", container="postgres"}
+                    | json
+                    | logger="pgaudit"
+                    | record_user_name!="newapi"
+                    | record_backend_type!="parallel worker"
+                    | (record_user_name!="cnpg_metrics_exporter" or record_audit_class!="READ" or record_connection_from!="[local]")
+                    | (record_user_name!="reader" or record_connection_from!~"10\\.42\\..*")
+                    | (record_user_name!="evidence_archiver" or record_audit_class!="READ" or record_audit_object_name!="public.pat_change_audit" or record_connection_from!~"10\\.42\\..*")
+                    | label_format src=`{{ regexReplaceAll ":[0-9]+$" .record_connection_from "" }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: loki }
+            annotations:
+              summary: "pgaudit: {{ $labels.record_user_name }} on {{ $labels.pod }} from {{ $labels.src }} {{ $labels.record_audit_class }} {{ $labels.record_audit_object_name }} x{{ $value }} (5m)"
+
+      # Replaces openbao-audit-watch. The audit device writes to stdout. Silent: UI plumbing,
+      # logins, and read/list by the two identities whose purpose is reading (ESO for the
+      # committed key inventory, the snapshot job for the raft snapshot). Anything on a sensitive
+      # path posts regardless. No standing root token exists since 2026-09-08 (dr.sh mints one
+      # from the unseal keys for DR), so root policy in use is break-glass or a breach.
+      - name: openbao
+        interval: 1m
+        rules:
+          - alert: OpenBaoRootUsed
+            expr: >-
+              sum by (auth_display_name, src) (
+                count_over_time(
+                  {namespace="openbao", container="openbao"}
+                    |= `"type":"response"`
+                    |~ `"policies":\[[^\]]*"root"`
+                    | json
+                    | label_format src=`{{ regexReplaceAll ":[0-9]+$" .request_remote_address "" }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: loki }
+            annotations:
+              summary: "openbao root policy used by {{ $labels.auth_display_name }} from {{ $labels.src }}: {{ $value }} requests in 5m"
+          - alert: OpenBaoNonRoutineActivity
+            expr: >-
+              sum by (auth_display_name, request_operation, src) (
+                count_over_time(
+                  {namespace="openbao", container="openbao"}
+                    |= `"type":"response"`
+                    | json
+                    | (request_path=~"(sys/(policies|policy|auth|mounts|audit|seal|unseal|rekey|generate-root|raft|rotate|internal/counters)|auth/token/(create|revoke-accessor|roles)|auth/[^/]+/(config|role|roles)|identity/).*|auth/token/revoke"
+                       or (request_path!~"(sys/internal/ui/|sys/health|sys/seal-status|sys/capabilities-self|auth/token/lookup-self|auth/token/revoke-self).*"
+                           and request_path!~".*/(login|auth_url)"
+                           and (auth_display_name!="kubernetes-external-secrets-external-secrets" or request_operation!~"read|list" or request_path!~"secret/data/(alertmanager|argocd-scm|backup-encryption|bot-env|cloudflare-edge|cloudflared|dex-sso|evidence-pg|ghcr-pull|grafana|newapi-env|newapi-pg-ca|newapi-pg-client-ca|newapi-pg-grafana-reader|newapi-pg-ip-retention|newapi-pg-reader|ntfy|pg-s3|s3gw|sync-env|teleport-app-join|uno-import-env|uno-import-pull|unorouter-env|velero)")
+                           and (auth_display_name!="kubernetes-openbao-openbao-snapshot" or request_operation!="read" or request_path!="sys/storage/raft/snapshot")))
+                    | label_format src=`{{ regexReplaceAll ":[0-9]+$" .request_remote_address "" }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: loki }
+            annotations:
+              summary: "openbao: {{ $labels.auth_display_name }} from {{ $labels.src }}: {{ $value }} {{ $labels.request_operation }} in 5m"
+
+      # Replaces teleport-login-watch. The auth pods print every audit event as JSON. A role,
+      # connector or user change is how a stolen editor session escalates, always paged; a GitHub
+      # refusal of the connector's own credentials means every SSO login is dead.
+      - name: teleport
+        interval: 1m
+        rules:
+          - alert: TeleportPrivilegeChange
+            expr: >-
+              sum by (user, event, name, addr_remote) (
+                count_over_time(
+                  {namespace="teleport", container="teleport", pod=~"teleport-auth.*"}
+                    |= `"event":`
+                    | json
+                    | event=~"role\\.(created|updated|deleted)|(github|saml|oidc)\\.(created|updated|deleted)|user\\.(create|update|delete)|trusted_cluster\\.(create|delete)"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: loki }
+            annotations:
+              summary: "teleport privilege change by {{ $labels.user }} from {{ $labels.addr_remote }}: {{ $labels.event }} {{ $labels.name }}"
+          - alert: TeleportSSOBroken
+            expr: >-
+              sum by (method, addr_remote) (
+                count_over_time(
+                  {namespace="teleport", container="teleport", pod=~"teleport-auth.*"}
+                    |= `"event":"user.login"`
+                    |= "incorrect_client_credentials"
+                    | json
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: loki }
+            annotations:
+              summary: "GitHub rejects the Teleport connector credentials ({{ $labels.method }} login from {{ $labels.addr_remote }}); rebuild the connector from infra/teleport/resources/github-connector.yaml plus OpenBao secret/teleport-github"
+          - alert: TeleportLogins
+            expr: >-
+              sum by (user, method, src) (
+                count_over_time(
+                  {namespace="teleport", container="teleport", pod=~"teleport-auth.*"}
+                    |= `"event":"user.login"`
+                    | json
+                    | success="true"
+                    | label_format src=`{{ regexReplaceAll ":[0-9]+$" .addr_remote "" }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: loki }
+            annotations:
+              summary: "teleport login ok {{ $labels.user }} via {{ $labels.method }} from {{ $labels.src }}"
+          - alert: TeleportLoginFailed
+            expr: >-
+              sum by (who, method, src, reason) (
+                count_over_time(
+                  {namespace="teleport", container="teleport", pod=~"teleport-auth.*"}
+                    |= `"event":"user.login"`
+                    | json
+                    | success="false"
+                    | label_format who=`{{ or .user .login .attributes_login .attributes_username }}`, src=`{{ regexReplaceAll ":[0-9]+$" .addr_remote "" }}`, reason=`{{ .error | trunc 100 }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: loki }
+            annotations:
+              summary: "teleport login FAILED {{ $labels.who }} via {{ $labels.method }} from {{ $labels.src }}: {{ $labels.reason }} x{{ $value }}"
+          # pgaudit sees only the role; this line names the person behind a write-capable session
+          - alert: TeleportDbAdminSession
+            expr: >-
+              sum by (user, db_user, db_service, db_name) (
+                count_over_time(
+                  {namespace="teleport", container="teleport", pod=~"teleport-auth.*"}
+                    |= `"event":"db.session.start"`
+                    | json
+                    | db_user=~"dbadmin|postgres"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: loki }
+            annotations:
+              summary: "db admin session {{ $labels.user }} as {{ $labels.db_user }} on {{ $labels.db_service }}/{{ $labels.db_name }} x{{ $value }}"
+
+      # Dex fronts ArgoCD, OpenBao and Grafana with the same GitHub org gate and, unlike
+      # Teleport, names the refused user.
+      - name: dex
+        interval: 1m
+        rules:
+          - alert: DexLoginRefused
+            expr: >-
+              sum by (who) (
+                count_over_time(
+                  {namespace="dex"}
+                    |= "not in required orgs"
+                    | regexp `user "(?P<who>[^"]+)" not in required orgs`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: loki }
+            annotations:
+              summary: "dex REFUSED https://github.com/{{ $labels.who }} (not in the org) x{{ $value }}"
+          - alert: DexLogin
+            expr: >-
+              sum by (who, groups) (
+                count_over_time(
+                  {namespace="dex"}
+                    |= `msg="login successful"`
+                    | regexp `preferred_username=(?P<who>\S+).*groups=\[(?P<groups>[^\]]*)\]`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: loki }
+            annotations:
+              summary: "dex login ok https://github.com/{{ $labels.who }} groups [{{ $labels.groups }}]"
+
+      # All k8s audit alerting. Human and unknown actors first, then system identities: a
+      # kubelet is bounded by the apiserver's NodeRestriction (only Secrets of pods on its node),
+      # so the signal is a workload identity reading a Secret outside its own namespace, or a
+      # token minted by something that is not a node or a controller. Same names and the same
+      # source label as the retired DaemonSet, so the routes are unchanged: exec and secret reads
+      # by anyone but the owner's own Teleport identity page the phone. The archive is Vector's,
+      # canary containment is alerting/canary-quarantine.yaml, fed by K8sCanaryWorkload below.
+      - name: k8s-audit
+        interval: 1m
+        rules:
+          - alert: K8sPodExec
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb!~"watch|list"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:.*"
+                    | actor="0-don"
+                    | objectRef_subresource=~"exec|attach|portforward"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.objectRef_subresource }} into {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sPodExec
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb!~"watch|list"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:.*"
+                    | actor!="0-don"
+                    | objectRef_subresource=~"exec|attach|portforward"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.objectRef_subresource }} into {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sSecretRead
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb!~"watch|list"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:.*"
+                    | actor="0-don"
+                    | objectRef_resource="secrets"
+                    | objectRef_namespace=~"|services|openbao|databases"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.verb }} secret {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sSecretRead
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb!~"watch|list"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:.*"
+                    | actor!="0-don"
+                    | objectRef_resource="secrets"
+                    | objectRef_namespace=~"|services|openbao|databases"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.verb }} secret {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sSecurityConfigurationChanged
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb!~"watch|list"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:.*"
+                    | actor="0-don"
+                    | objectRef_resource=~"externalsecrets|secretstores|clustersecretstores|roles|rolebindings|clusterroles|clusterrolebindings"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.verb }} {{ $labels.objectRef_resource }} {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sSecurityConfigurationChanged
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb!~"watch|list"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:.*"
+                    | actor!="0-don"
+                    | objectRef_resource=~"externalsecrets|secretstores|clustersecretstores|roles|rolebindings|clusterroles|clusterrolebindings"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.verb }} {{ $labels.objectRef_resource }} {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sUnexpectedAccess
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb!~"watch|list"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:.*"
+                    | actor="0-don"
+                    | objectRef_subresource!~"exec|attach|portforward"
+                    | (objectRef_resource!="secrets" or objectRef_namespace!~"|services|openbao|databases")
+                    | objectRef_resource!~"externalsecrets|secretstores|clustersecretstores|roles|rolebindings|clusterroles|clusterrolebindings"
+                    | (objectRef_resource=~"secrets|serviceaccounts" or verb=~"create|patch|update|delete|deletecollection")
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.verb }} {{ $labels.objectRef_resource }}{{ if $labels.objectRef_subresource }}/{{ $labels.objectRef_subresource }}{{ end }} {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sUnexpectedAccess
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb!~"watch|list"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:.*"
+                    | actor!="0-don"
+                    | objectRef_subresource!~"exec|attach|portforward"
+                    | (objectRef_resource!="secrets" or objectRef_namespace!~"|services|openbao|databases")
+                    | objectRef_resource!~"externalsecrets|secretstores|clustersecretstores|roles|rolebindings|clusterroles|clusterrolebindings"
+                    | (objectRef_resource=~"secrets|serviceaccounts" or verb=~"create|patch|update|delete|deletecollection")
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: warning, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.verb }} {{ $labels.objectRef_resource }}{{ if $labels.objectRef_subresource }}/{{ $labels.objectRef_subresource }}{{ end }} {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          # A service account reading a Secret in another namespace. Platform controllers and the
+          # ESO reader that mirrors the CNPG CA into teleport-agent are the routine.
+          - alert: K8sSecretRead
+            expr: >-
+              sum by (actor, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb="get"
+                    | objectRef_resource="secrets"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor=~"system:serviceaccount:.*"
+                    | actor!~"system:serviceaccount:(external-secrets|argocd|cnpg-system|cert-manager|kube-system|velero):.*"
+                    | actor!="system:serviceaccount:monitoring:kps-operator"
+                    | actor!="system:serviceaccount:teleport-agent:eso-db-ca-reader"
+                    | label_format actor_ns=`{{ regexReplaceAll "^system:serviceaccount:([^:]+):.*$" .actor "${1}" }}`
+                    | label_format own=`{{ if eq .actor_ns .objectRef_namespace }}1{{ else }}0{{ end }}`
+                    | own="0"
+                    | objectRef_namespace=~"services|openbao|databases"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} read secret {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} outside its namespace from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sSecretRead
+            expr: >-
+              sum by (actor, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | verb="get"
+                    | objectRef_resource="secrets"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor=~"system:serviceaccount:.*"
+                    | actor!~"system:serviceaccount:(external-secrets|argocd|cnpg-system|cert-manager|kube-system|velero):.*"
+                    | actor!="system:serviceaccount:monitoring:kps-operator"
+                    | actor!="system:serviceaccount:teleport-agent:eso-db-ca-reader"
+                    | label_format actor_ns=`{{ regexReplaceAll "^system:serviceaccount:([^:]+):.*$" .actor "${1}" }}`
+                    | label_format own=`{{ if eq .actor_ns .objectRef_namespace }}1{{ else }}0{{ end }}`
+                    | own="0"
+                    | objectRef_namespace!~"services|openbao|databases"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: warning, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} read secret {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} outside its namespace from {{ $labels.src }} x{{ $value }}"
+          # A token minted for a service account by something other than a kubelet or the
+          # controllers (ESO mints one for eso-db-ca-reader).
+          - alert: K8sTokenMinted
+            expr: >-
+              sum by (actor, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage="ResponseComplete"
+                    | verb="create"
+                    | objectRef_resource="serviceaccounts"
+                    | objectRef_subresource="token"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor!~"system:node:.*"
+                    | actor!~"system:serviceaccount:(kube-system|external-secrets):.*"
+                    | actor!="system:kube-controller-manager" or objectRef_namespace!="kube-system"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: warning, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} minted a token for {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          # A Job in services created by anything but the CronJob controller. Pods are
+          # useless for this: the job-controller creates them by generateName, so the
+          # metadata-level audit event carries no name to tell cron pods from others.
+          - alert: K8sUnexpectedJob
+            expr: >-
+              sum by (objectRef_name, actor) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage="ResponseComplete"
+                    | verb="create"
+                    | objectRef_resource="jobs"
+                    | objectRef_subresource=""
+                    | objectRef_namespace="services"
+                    | user_username!="system:serviceaccount:kube-system:cronjob-controller"
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch }
+            annotations:
+              summary: "Job {{ $labels.objectRef_name }} created in services by {{ $labels.actor }}"
+          # Trigger for alerting/canary-quarantine.yaml. Metadata audit: the body is not in the
+          # log, so the responder lists services pods and checks the canary reference itself.
+          # severity none and source loki-trigger match only the responder route.
+          - alert: K8sCanaryWorkload
+            expr: >-
+              sum by (objectRef_name, objectRef_uid, user_username) (
+                count_over_time(
+                  {job="k8s-audit"}
+                    | json
+                    | stage="ResponseComplete"
+                    | verb="create"
+                    | objectRef_resource="pods"
+                    | objectRef_subresource=""
+                    | objectRef_namespace="services"
+                    | responseStatus_code="201"
+                  [2m]
+                )
+              ) > 0
+            labels: { severity: none, source: loki-trigger }
+            annotations:
+              summary: "pod created in services: {{ $labels.objectRef_name }} by {{ $labels.user_username }}"
+
+      # Application security events the bot and the responder log as JSON lines.
+      - name: apps
+        interval: 1m
+        rules:
+          # A review lead, not proof: any send whose response carries no message id
+          # lands here too. warning, because the responder has to go look rather
+          # than act. The bot asks Discord for with_response on interaction
+          # callbacks so the ordinary reply path no longer trips this.
+          - alert: DiscordMessageNeedsReview
+            expr: >-
+              sum by (pod, message_id) (
+                count_over_time(
+                  {namespace="services", app="unorouter-bot"}
+                    |= "security.discord_correlation"
+                    |= "unmatched_in_this_process"
+                    | json
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "Discord message {{ $labels.message_id }} has no matching request in {{ $labels.pod }}; confirm the bot account sent it"
+          - alert: QuarantineApplied
+            expr: >-
+              sum by (pod_name, outcome) (
+                count_over_time(
+                  {namespace="monitoring", app="canary-quarantine"}
+                    |= "security.canary_workload"
+                    | regexp "SECURITY_EVIDENCE (?P<payload>.*)"
+                    | line_format "{{.payload}}"
+                    | json
+                    | outcome!=""
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: loki }
+            annotations:
+              summary: "canary pod {{ $labels.pod_name }} in services: containment={{ $labels.outcome }}"
+          # The gateway auto-disabled lanes 1,300 times an hour during the Sep 3 to 10
+          # churn; with cooldowns in place anything near that is a regression.
+          - alert: GatewayDisableStorm
+            expr: >-
+              sum(
+                count_over_time(
+                  {namespace="services", app="new-api"}
+                    |= "preparing to disable"
+                  [1h]
+                )
+              ) > 300
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "gateway auto-disabled {{ $value }} lanes in the last hour"
+          # Share of relay attempts that ended in an upstream channel error over 15
+          # minutes, gateway-wide (the log carries the channel id, not the provider).
+          - alert: GatewayChannelErrorRate
+            expr: >-
+              (
+                sum(count_over_time({namespace="services", app="new-api"} |= "channel error (channel #" [15m]))
+                /
+                (
+                  sum(count_over_time({namespace="services", app="new-api"} |= "channel error (channel #" [15m]))
+                  + sum(count_over_time({namespace="services", app="new-api"} |= "record consume log" [15m]))
+                )
+              ) > 0.2
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "{{ $value | humanizePercentage }} of relay attempts hit an upstream channel error in the last 15 minutes"

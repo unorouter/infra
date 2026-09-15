@@ -1,0 +1,81 @@
+# teleport-kube-agent -- App + DB + Kube access. Enrolls the internal web UIs, the newapi-pg
+# DB, AND the cluster itself for kubectl (tsh kube login) behind Teleport SSO. Reaches the
+# proxy at its public ACME address (multiplex/ALPN). Joins with the static app token from
+# OpenBao (via ESO secret teleport-app-join, key auth-token).
+roles: app,db,kube
+# requests only (7 day median), no limits
+resources: { requests: { cpu: 20m, memory: 128Mi } }
+proxyAddr: teleport.unorouter.com:443
+# registers THIS cluster as a Teleport kube_cluster; `tsh kube login unorouter` targets it.
+# The agent's ServiceAccount reaches the in-cluster kube API; the chart binds it cluster-admin
+# so the user's kubernetes_groups (system:masters, from the kube-admin role) are honored via
+# impersonation. Requires the join token to also permit `kube` (auth_service tokens = app,db,kube).
+kubeClusterName: unorouter
+# join token comes from an EXTERNAL secret (ESO -> OpenBao); chart reads key `auth-token`.
+joinTokenSecret:
+  create: false
+  name: teleport-kube-agent-join-token
+
+# DB access: tsh db connect newapi-pg --db-user=reader (RLS-masked role). Teleport signs a
+# per-session client cert (CN=reader); postgres trusts it via the client-CA bundle on the
+# cluster. verify-full against CNPG's server CA (synced from databases ns by ESO).
+databases:
+  - name: newapi-pg
+    uri: newapi-pg-rw.databases.svc.cluster.local:5432
+    protocol: postgres
+    static_labels:
+      env: prod
+    tls:
+      mode: verify-full
+      ca_cert_file: /etc/teleport-tls-db/newapi-pg/ca.crt
+
+extraVolumes:
+  - name: newapi-pg-server-ca
+    secret:
+      secretName: newapi-pg-server-ca
+      items: [{ key: ca.crt, path: ca.crt }]
+extraVolumeMounts:
+  - name: newapi-pg-server-ca
+    mountPath: /etc/teleport-tls-db/newapi-pg
+    readOnly: true
+
+# routing is by Host header: browser hits <public_addr>, proxy matches it to the app, forwards
+# to uri. TLS terminates at Cloudflare's edge; the cloudflared->proxy hop rides the WebSocket
+# upgrade so the proxy needs NO per-app/wildcard cert (only its own teleport.unorouter.com cert).
+apps:
+  - name: argocd
+    uri: https://argocd-server.argocd.svc.cluster.local:443  # https to stop the 80->443 self-redirect loop
+    public_addr: argocd.unorouter.com
+    insecure_skip_verify: true   # argocd-server self-signed TLS
+    labels: { env: internal }
+    rewrite:
+      redirect:
+        - argocd-server.argocd.svc.cluster.local
+  - name: openbao
+    uri: http://openbao.openbao.svc.cluster.local:8200   # tls_disable in this deploy
+    public_addr: openbao.unorouter.com
+    labels: { env: internal }
+    rewrite:
+      redirect:
+        - openbao.openbao.svc.cluster.local
+  - name: grafana
+    uri: http://monitoring-grafana.monitoring.svc.cluster.local:80
+    public_addr: grafana.unorouter.com
+    # tier=observability is what the grafana-viewer role matches on. env=internal
+    # cannot be used for that: argocd and openbao carry it too, so scoping a role to
+    # it would hand out the deploy console and the secret store as well.
+    labels: { env: internal, tier: observability }
+    rewrite:
+      redirect:
+        - monitoring-grafana.monitoring.svc.cluster.local
+  # Header echo: `tsh proxy app openbao-jwt` returns the Teleport-signed JWT the proxy adds
+  # to every app request, which scripts/bao.sh login trades for an OpenBao token
+  # (auth/jwt-teleport, bound to aud openbao-jwt.unorouter.com). No DNS record on purpose.
+  - name: openbao-jwt
+    uri: http://jwt-echo.teleport-agent.svc.cluster.local:80
+    public_addr: openbao-jwt.unorouter.com
+    labels: { env: internal }
+
+# single node, no HA yet
+highAvailability:
+  replicaCount: 0  # 2026-09-03: parked with the Teleport entry; restore to 1 with it

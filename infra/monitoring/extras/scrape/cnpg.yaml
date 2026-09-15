@@ -1,0 +1,37 @@
+# CNPG instance metrics (:9187 on every pg pod; CNPG exposes no metrics Service, so this is a
+# PodMonitor). Feeds the backup + replication alerts.
+#
+# WHY THIS EXISTS: on 2026-07-22 base backups were 0 bytes and had NEVER run while WAL
+# archiving looked perfectly healthy -- PITR was silently impossible. barman also hangs in
+# "BackupStarted" forever with no error and no completion (CNPG #5420). Backup freshness is
+# not observable from `kubectl get cluster`; it needs these metrics (see rules group D).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cnpg-instances
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [databases]
+  selector:
+    matchLabels:
+      cnpg.io/podRole: instance
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+---
+# CNPG operator metrics (backup/cluster reconcile state).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cnpg-operator
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [cnpg-system]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudnative-pg
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 60s

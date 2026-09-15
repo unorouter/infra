@@ -1,0 +1,40 @@
+# Pod isolation for Dex. It is reached only through the tunnel (dex.unorouter.com) and by the
+# kubelet probe; it stores state in CRDs through the API server and talks to GitHub on 443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: dex
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  endpointSelector:
+    matchLabels: { app: dex }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+      toPorts:
+        - ports: [{ port: "5556", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "5556", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]

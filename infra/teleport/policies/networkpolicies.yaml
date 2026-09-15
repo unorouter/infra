@@ -1,0 +1,136 @@
+# Pod isolation for the Teleport cluster. The proxy is reached by the tunnel, by the app-access
+# agent (reverse tunnel) and by in-cluster clients that resolve teleport.unorouter.com through
+# the CoreDNS rewrite (only the agent does that today); it talks to auth on 3025/3026 and to the
+# API server for kube access. Auth serves the proxy and the agent, talks to the API server, and
+# reaches the s3-gateway (session recordings) and GitHub on 443. Kubelet probes arrive as host on the diag port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: teleport
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: proxy
+  namespace: teleport
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: proxy }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+        - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app: blackbox-exporter }
+        # Grafana verifies Teleport JWTs against the proxy's JWKS through the CoreDNS rewrite
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: grafana }
+        # OpenBao's auth/jwt-teleport fetches the same JWKS
+        - matchLabels: { io.kubernetes.pod.namespace: openbao, app.kubernetes.io/name: openbao, component: server }
+      toPorts:
+        - ports: [{ port: "3080", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - { port: "3000", protocol: TCP }
+            - { port: "3080", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: auth }
+      toPorts:
+        - ports:
+            - { port: "3025", protocol: TCP }
+            - { port: "3026", protocol: TCP }
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: auth
+  namespace: teleport
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: auth }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: proxy }
+        - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
+        # the operator joins as a bot and reconciles the connector and roles over the auth API
+        - matchLabels: { app.kubernetes.io/name: operator, app.kubernetes.io/component: operator }
+      toPorts:
+        - ports:
+            - { port: "3025", protocol: TCP }
+            - { port: "3026", protocol: TCP }
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: proxy }
+      toPorts:
+        - ports: [{ port: "3080", protocol: TCP }]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
+      toPorts:
+        - ports: [{ port: "8443", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+---
+# The chart's operator (a separate Deployment): joins auth as a bot with the kubernetes join
+# method, watches the CRs in infra/teleport/resources through the API server, falls back to
+# the proxy for the join. Health probes arrive as host on 8081.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: operator
+  namespace: teleport
+spec:
+  endpointSelector:
+    matchLabels: { app.kubernetes.io/name: operator, app.kubernetes.io/component: operator }
+  ingress:
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8081", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: auth }
+      toPorts:
+        - ports:
+            - { port: "3025", protocol: TCP }
+            - { port: "3026", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: proxy }
+      toPorts:
+        - ports: [{ port: "3080", protocol: TCP }]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]

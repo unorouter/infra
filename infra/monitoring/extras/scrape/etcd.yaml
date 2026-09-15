@@ -1,0 +1,31 @@
+# etcd metrics on :2381 of every control plane node (Talos: etcd listen-metrics-urls in
+# talos/patches/cluster.yaml). Targets come from Kubernetes node discovery on the
+# node's InternalIP (the WireGuard mesh address since 2026-09-14), so a node swap needs no
+# edit here. A ScrapeConfig rather than a Service/Endpoints pair: there is no selectable
+# Service for a host process, and ArgoCD excludes the Endpoints kind by default.
+#
+# WHY THIS EXISTS: the 2026-07-24 incident was memory pressure -> etcd fsync stall -> lease
+# renewal timeout -> NodeNotReady flaps -> pod evictions that looked like app crashes. 1000+
+# slow-apply warnings in 2h were invisible. These metrics make that cascade alertable (group B).
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
+  name: etcd
+  namespace: monitoring
+spec:
+  jobName: etcd
+  scrapeInterval: 30s
+  kubernetesSDConfigs:
+    - role: Node
+  relabelings:
+    - action: replace
+      sourceLabels: [__meta_kubernetes_node_address_InternalIP]
+      regex: (.+)
+      replacement: $1:2381
+      targetLabel: __address__
+    - action: replace
+      sourceLabels: [__address__]
+      targetLabel: instance
+    - action: replace
+      sourceLabels: [__meta_kubernetes_node_name]
+      targetLabel: node

@@ -1,0 +1,185 @@
+# Daily retention for newapi-pg logs.ip.
+#
+# logs.ip is personal data (CJEU C-582/14 Breyer) and was kept for the life of the row:
+# 8 months and 4.3M rows when this was written. Its only consumer is
+# monitoring/extras/alerting/rules-security.yaml, whose nine queries look back 15 minutes
+# (eight) or one hour (one). 30 days is the forensic buffer on top of that and the period
+# declared in the Datenschutzerklärung. Art. 5(1)(e) GDPR: no longer than the purpose needs.
+#
+# It blanks one column and never deletes a row. logs also holds quota, prompt_tokens,
+# completion_tokens and model_name, the usage records behind every invoice, kept for the
+# § 147 AO period. The role it runs as (ip-retention-least-privilege.sql, hand-applied) has
+# UPDATE on ip only and no DELETE anywhere, so a bug here cannot lose a row. The built-in
+# new-api cleanup (DeleteOldLogBatch) deletes rows: never enable it.
+#
+# First rollout, dependency before caller:
+#   1. OpenBao secret/newapi-pg-ip-retention {username: ip_retention, password: ...}, and the
+#      path in loki/logql-rules.yaml's ESO allowlist (or the first sync raises an alert)
+#   2. this file: ESO materialises Secret newapi-pg-ip-retention in databases
+#   3. new-api/k8s/pg.yaml managed.roles ip_retention: CNPG creates the login
+#   4. as dbadmin: infra/databases/ip-retention-least-privilege.sql
+#   5. kubectl -n databases create job --from=cronjob/ip-retention ip-retention-manual,
+#      then read its privacy.ip_retention line: remaining must be 0
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-ip-retention
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}
+  target: {name: newapi-pg-ip-retention, creationPolicy: Owner}
+  dataFrom:
+    - extract: {key: newapi-pg-ip-retention}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ip-retention
+  namespace: databases
+data:
+  retention.ts: |
+    import { SQL } from "bun";
+    import { readFileSync } from "node:fs";
+
+    const RETENTION_DAYS = 30;
+    const BATCH = 10_000;
+    const MAX_BATCHES = 300; // 3M rows; a day is ~140k. A ceiling that surfaces as remaining > 0.
+
+    const cutoff = Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86_400;
+    // Normal case: rows that crossed the cutoff since the last run. The read-back over the
+    // full range catches whatever a missed run left behind.
+    const recent = cutoff - 7 * 86_400;
+
+    const db = new SQL({
+      hostname: "newapi-pg-rw.databases.svc",
+      port: 5432,
+      database: "newapi",
+      username: "ip_retention",
+      password: process.env.PGPASSWORD!,
+      tls: { ca: readFileSync("/pg-ca/ca.crt", "utf8") },
+      max: 1,
+      connectionTimeout: 10,
+    });
+
+    async function blank(lowerBound: number | null): Promise<number> {
+      let total = 0;
+      for (let i = 0; i < MAX_BATCHES; i++) {
+        const r = lowerBound === null
+          ? await db`UPDATE public.logs SET ip = '' WHERE id IN (
+               SELECT id FROM public.logs
+               WHERE ip <> '' AND created_at < ${cutoff}
+               ORDER BY id LIMIT ${BATCH})`
+          : await db`UPDATE public.logs SET ip = '' WHERE id IN (
+               SELECT id FROM public.logs
+               WHERE ip <> '' AND created_at < ${cutoff} AND created_at >= ${lowerBound}
+               ORDER BY id LIMIT ${BATCH})`;
+        total += r.count;
+        if (r.count < BATCH) break;
+      }
+      return total;
+    }
+
+    try {
+      const cleared = await blank(recent);
+      const [{ n: left }] = await db`SELECT count(*)::int AS n FROM public.logs
+                                     WHERE ip <> '' AND created_at < ${cutoff}`;
+      const stragglers = left > 0 ? await blank(null) : 0;
+      const [{ n: remaining }] = await db`SELECT count(*)::int AS n FROM public.logs
+                                          WHERE ip <> '' AND created_at < ${cutoff}`;
+      console.log(JSON.stringify({ event: "privacy.ip_retention", cutoff, cleared, stragglers, remaining }));
+      if (remaining > 0) process.exitCode = 1;
+    } catch (err) {
+      console.error("ip retention failed; no rows deleted, nothing touched beyond ip=''", err);
+      process.exitCode = 1;
+    } finally {
+      await db.close();
+    }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ip-retention
+  namespace: databases
+spec:
+  schedule: "15 3 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 1800
+      backoffLimit: 0
+      template:
+        metadata:
+          labels: {app: ip-retention}
+        spec:
+          priorityClassName: batch
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: retention
+              image: oven/bun:1.4.2-alpine
+              command: [bun, /app/retention.ts]
+              env:
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: newapi-pg-ip-retention, key: password}}
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              resources:
+                requests: {cpu: 10m, memory: 32Mi}
+                limits: {memory: 128Mi}
+              volumeMounts:
+                - {name: app, mountPath: /app, readOnly: true}
+                - {name: pg-ca, mountPath: /pg-ca, readOnly: true}
+          volumes:
+            - name: app
+              configMap: {name: ip-retention}
+            # ca.crt only: the secret also carries ca.key, which the job must never see
+            - name: pg-ca
+              secret:
+                secretName: newapi-pg-ca
+                items: [{key: ca.crt, path: ca.crt}]
+---
+# job -> DNS and the newapi-pg instances, nothing else
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ip-retention
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: {app: ip-retention}
+  egress:
+    - toEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+    - toEndpoints:
+        - matchLabels: {cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance}
+      toPorts:
+        - ports: [{port: "5432", protocol: TCP}]
+---
+# newapi-pg instances <- the job. Its own object, like pat-audit-archive, so the main
+# newapi-pg policy in networkpolicies.yaml stays untouched.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ip-retention-ingress
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: {cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {app: ip-retention}
+      toPorts:
+        - ports: [{port: "5432", protocol: TCP}]

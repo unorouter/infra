@@ -1,0 +1,20 @@
+# Eviction and scheduling order under pressure. The kubelet evicts by usage over request
+# first, then by priority, so a request is still the first line; these classes decide
+# between pods that are all over or all within. Serving: the revenue path (cloudflared,
+# unorouter, new-api, its Postgres). Batch: jobs that can wait (uno-import, new-api-sync,
+# dr-drill), below the default 0 so they go first. System pods keep their system-* classes.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: serving
+value: 100000
+preemptionPolicy: PreemptLowerPriority
+description: revenue path, evicted last, may preempt batch
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: batch
+value: -1000
+preemptionPolicy: Never
+description: deferrable jobs, evicted first, never preempt

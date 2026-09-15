@@ -1,0 +1,16 @@
+# Two age keys. DAILY (age13wz...) lives in OpenBao secret/sops-age (`. scripts/bao.sh sops`).
+# BREAK-GLASS (age100x...) is on the VeraCrypt volume and in Bitwarden only, never in OpenBao;
+# it alone opens what can mint cluster or vault root (secrets/break-glass: unseal keys, tailnet
+# lock, backup crypt pair; talos/talsecret) and secrets/k8s (data|stringData only, kubectl
+# apply restores the canaries and pg-s3 pairs); it is also listed on the daily files so it
+# opens everything. Everything else is whole-file encrypted.
+creation_rules:
+  - path_regex: (secrets/break-glass|talos/talsecret)\.sops\.ya?ml$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
+  - path_regex: (infra/cloudflare/.*|talos/talenv)\.sops\.ya?ml$
+    age: >-
+      age13wzs2a2ef2ma0ajwqwylpnu796vjvypwxef4uhndkf90gzq4zepq0lqjav,
+      age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9
+  - path_regex: secrets/k8s\.sops\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    age: age100xmmxguy974wt7hfud8l5efqe6ve6decfkkuynmasuny48pvajsk39pv9

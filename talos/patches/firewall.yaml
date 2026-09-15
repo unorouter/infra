@@ -1,0 +1,114 @@
+# Node firewall (nftables input chain, applied live). Default block; Talos itself always
+# accepts lo, established/related conntrack, ICMP at 5 pps, pod and service CIDR to host
+# DNS, and pod or service CIDR to pod or service CIDR. Everything else that reaches a node
+# address needs a rule here. The Hetzner firewall in tofu/nodes.tf stays as a second layer
+# in front of the NIC; a node outside Hetzner relies on this file alone. Cilium answers
+# NodePort and LoadBalancer traffic in BPF before this chain, so those cannot be filtered
+# here (the cluster has none). Port ranges are quoted strings.
+apiVersion: v1alpha1
+kind: NetworkDefaultActionConfig
+ingress: block
+---
+# etcd peers and clients, cilium health, kube API, kubelet, apid and trustd from the mesh.
+# Also every port a pod scrapes on another node: pod traffic to a node address is not
+# encapsulated, Cilium masquerades it to the sending node's mesh address, so it lands
+# here, not in the pods rule (which only sees pods on the same node).
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: mesh-tcp
+portSelector:
+  ports:
+    - "2379-2381"
+    - 4240
+    - 4244
+    - 6443
+    - 9100
+    - "9962-9963"
+    - 10250
+    - "50000-50001"
+  protocol: tcp
+ingress:
+  - subnet: 10.200.0.0/24
+---
+# Cilium VXLAN between the nodes rides the mesh.
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: mesh-vxlan
+portSelector:
+  ports:
+    - 8472
+  protocol: udp
+ingress:
+  - subnet: 10.200.0.0/24
+---
+# WireGuard handshakes from the peer endpoints. A new node's endpoint goes here on every
+# existing node, next to its peer entry in talconfig.yaml.
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: wireguard
+portSelector:
+  ports:
+    - 51820
+  protocol: udp
+ingress:
+  - subnet: ${WG_NODE11_ENDPOINT}/32
+  - subnet: ${WG_NODE12_ENDPOINT}/32
+  - subnet: ${WG_NODE13_ENDPOINT}/32
+---
+# talosctl and the break-glass kubeconfig from the tailnet.
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: tailnet
+portSelector:
+  ports:
+    - 6443
+    - 50000
+  protocol: tcp
+ingress:
+  - subnet: 100.64.0.0/10
+---
+# Tailscale direct connections once tailscaled is pinned to this port (it picks a random
+# port today and only answers flows it opened, so this rule matches nothing until then).
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: tailscale
+portSelector:
+  ports:
+    - 41641
+  protocol: udp
+ingress:
+  - subnet: 0.0.0.0/0
+  - subnet: ::/0
+---
+# Pod clients of host ports: Prometheus (etcd 2381, node-exporter 9100, cilium 9962, cilium
+# operator 9963, kubelet 10250, apiserver 6443), hubble-relay (4244), cilium-health (4240),
+# every ClusterIP client of the kube API (socket-LB rewrites it to node:6443), etcd-backup
+# Jobs (apid 50000). A new pod scraper or client of a node port is added here.
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: pods
+portSelector:
+  ports:
+    - 2381
+    - 4240
+    - 4244
+    - 6443
+    - 9100
+    - "9962-9963"
+    - 10250
+    - 50000
+  protocol: tcp
+ingress:
+  - subnet: 10.42.0.0/16
+---
+# DHCP renewals. The client uses a raw socket that bypasses this chain; kept so the lease
+# path does not depend on that detail.
+apiVersion: v1alpha1
+kind: NetworkRuleConfig
+name: dhcp
+portSelector:
+  ports:
+    - 68
+  protocol: udp
+ingress:
+  - subnet: 0.0.0.0/0

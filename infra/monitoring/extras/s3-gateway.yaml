@@ -1,0 +1,389 @@
+# s3-gateway: an in-cluster S3 endpoint (rclone serve s3) in front of Hetzner Object Storage.
+# Hetzner has no at-rest encryption. The gateway serves an rclone crypt remote layered over the
+# Hetzner remote: object content is encrypted here (XSalsa20-Poly1305, key from OpenBao
+# secret/backup-encryption), Hetzner never sees the key, and the ciphertext can be copied to any
+# provider as is. Every writer that needs encryption talks plain S3 to this gateway: barman
+# (CNPG), Teleport recordings, the log archivers. Velero (Kopia encrypts itself), the OpenBao
+# snapshot (barrier sealed) and Tofu state (client side) go to Hetzner directly.
+#
+# Names are not encrypted (filename_encryption off, suffix none), so bucket names and prefixes
+# are byte identical to what the writers send and the lifecycle prefix rules keep working.
+#
+# --vfs-cache-mode writes is load bearing: in streaming mode serve s3 completes a multipart
+# upload by writing a temporary object and renaming it, which on S3 is a server side copy plus a
+# delete. The backup buckets are Object Locked, so the delete is refused and the temp copy would
+# sit for 30 days; Hetzner also documents that CopyObject may fail for large objects. With the
+# write cache the upload is staged on the pod's own volume and sent straight to its final key.
+# The cache is per pod, so every part of one upload must land on the same replica:
+# sessionAffinity on the Service.
+#
+# Auth: one --auth-key pair shared by the in-cluster writers (OpenBao secret/s3gw). serve s3 has
+# no per bucket authorization anyway; the network policies below are the boundary and the locked
+# buckets refuse deletes regardless of the pair.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-gateway
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+---
+# Default deny like every other namespace; the Cilium policies below open exactly what is needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: s3-gateway
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Hetzner credential, the crypt pair and the writer auth pair. Both rclone remotes ("hz" and the
+# crypt "cr" over it) are configured through RCLONE_CONFIG_* environment variables, no config file.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: s3-gateway
+  namespace: s3-gateway
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: s3-gateway
+    creationPolicy: Owner
+    template:
+      data:
+        RCLONE_CONFIG_HZ_ACCESS_KEY_ID: "{{ .hz_ak }}"
+        RCLONE_CONFIG_HZ_SECRET_ACCESS_KEY: "{{ .hz_sk }}"
+        CRYPT_PASSWORD: "{{ .crypt_password }}"
+        CRYPT_SALT: "{{ .crypt_salt }}"
+        AUTH_KEY: "{{ .gw_id }},{{ .gw_secret }}"
+  data:
+    - secretKey: hz_ak
+      remoteRef: { key: pg-s3, property: ACCESS_KEY_ID }
+    - secretKey: hz_sk
+      remoteRef: { key: pg-s3, property: ACCESS_SECRET_KEY }
+    - secretKey: crypt_password
+      remoteRef: { key: backup-encryption, property: crypt_password }
+    - secretKey: crypt_salt
+      remoteRef: { key: backup-encryption, property: crypt_salt }
+    - secretKey: gw_id
+      remoteRef: { key: s3gw, property: ACCESS_KEY_ID }
+    - secretKey: gw_secret
+      remoteRef: { key: s3gw, property: ACCESS_SECRET_KEY }
+---
+# In-cluster TLS: the nodes span three locations and Cilium runs without WireGuard, so base
+# backups must not cross the node network in the clear. Resolved to the Service by CoreDNS
+# (coredns-custom.yaml); no public record. rclone reads the certificate at start, the monthly
+# restart below picks up the renewal.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: s3-gateway-origin
+  namespace: s3-gateway
+spec:
+  secretName: s3-gateway-tls
+  issuerRef:
+    name: letsencrypt-dns
+    kind: ClusterIssuer
+  dnsNames:
+    - s3.unorouter.com
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3-gateway
+  namespace: s3-gateway
+spec:
+  selector: {app: s3-gateway}
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 21600
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: s3-gateway
+  namespace: s3-gateway
+spec:
+  serviceName: s3-gateway
+  replicas: 2
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels: {app: s3-gateway}
+  template:
+    metadata:
+      labels: {app: s3-gateway}
+      # The write cache is staging space, not data: Velero must not upload it.
+      annotations: {backup.velero.io/backup-volumes-excludes: "cache,tmp"}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, runAsNonRoot: true}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: s3-gateway}
+      containers:
+        - name: rclone
+          image: rclone/rclone:1.75.1
+          command:
+            - sh
+            - -c
+            - >-
+              export RCLONE_CONFIG_CR_PASSWORD="$(rclone obscure "$CRYPT_PASSWORD")"
+              RCLONE_CONFIG_CR_PASSWORD2="$(rclone obscure "$CRYPT_SALT")";
+              unset CRYPT_PASSWORD CRYPT_SALT;
+              exec rclone serve s3 cr:
+              --addr :8443 --cert /tls/tls.crt --key /tls/tls.key --min-tls-version tls1.2
+              --auth-key "$AUTH_KEY"
+              --vfs-cache-mode writes --cache-dir /cache --vfs-cache-max-size 30G
+              --vfs-write-back 5s
+              --s3-chunk-size 16M --s3-upload-concurrency 2 --multi-thread-streams 1
+              --rc --rc-addr :5572 --rc-enable-metrics --rc-no-auth
+              -v
+          env:
+            - {name: RCLONE_CONFIG_HZ_TYPE, value: s3}
+            - {name: RCLONE_CONFIG_HZ_PROVIDER, value: Ceph}
+            - {name: RCLONE_CONFIG_HZ_ENDPOINT, value: https://fsn1.your-objectstorage.com}
+            - {name: RCLONE_CONFIG_HZ_REGION, value: fsn1}
+            - {name: RCLONE_CONFIG_HZ_NO_CHECK_BUCKET, value: "true"}
+            - {name: RCLONE_CONFIG_CR_TYPE, value: crypt}
+            - {name: RCLONE_CONFIG_CR_REMOTE, value: "hz:"}
+            - {name: RCLONE_CONFIG_CR_FILENAME_ENCRYPTION, value: "off"}
+            - {name: RCLONE_CONFIG_CR_DIRECTORY_NAME_ENCRYPTION, value: "false"}
+            - {name: RCLONE_CONFIG_CR_SUFFIX, value: none}
+            - {name: HOME, value: /tmp}
+          envFrom:
+            - secretRef: {name: s3-gateway}
+          ports:
+            - {name: s3, containerPort: 8443}
+            - {name: rc, containerPort: 5572}
+          readinessProbe:
+            tcpSocket: {port: 8443}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: 8443}
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            # 1Gi was OOM killed on 2026-09-09 while newapi's 23 GB base backup streamed in:
+            # rclone before 1.75 held every multipart part in memory until CompleteMultipartUpload.
+            # 1.75 streams parts into the write cache; the limit stays generous for the upload buffers.
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 4Gi}
+          volumeMounts:
+            - {name: tls, mountPath: /tls, readOnly: true}
+            - {name: cache, mountPath: /cache}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tls
+          secret: {secretName: s3-gateway-tls}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: cache
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests: {storage: 40Gi}
+---
+# Certificate renewal: rclone loads the PEM once at start, so the pods restart monthly.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s3-gateway-restarter
+  namespace: s3-gateway
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: s3-gateway-restarter
+  namespace: s3-gateway
+rules:
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    resourceNames: [s3-gateway]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: s3-gateway-restarter
+  namespace: s3-gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: s3-gateway-restarter
+subjects:
+  - kind: ServiceAccount
+    name: s3-gateway-restarter
+    namespace: s3-gateway
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restart-s3-gateway
+  namespace: s3-gateway
+spec:
+  schedule: "0 5 1 * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels: {app: s3-gateway-restarter}
+        spec:
+          serviceAccountName: s3-gateway-restarter
+          restartPolicy: Never
+          containers:
+            - name: restart
+              image: rancher/kubectl:v1.36.2
+              command:
+                - kubectl
+                - -n
+                - s3-gateway
+                - rollout
+                - restart
+                - statefulset/s3-gateway
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 64Mi }
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: s3-gateway
+  namespace: s3-gateway
+spec:
+  endpointSelector:
+    matchLabels: {app: s3-gateway}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg}
+        - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: bot-pg}
+        - matchLabels: {io.kubernetes.pod.namespace: databases, cnpg.io/cluster: dr-bot-pg}
+        - matchLabels: {io.kubernetes.pod.namespace: teleport, app.kubernetes.io/component: auth}
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: pat-audit-archive}
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: loki}
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: vector}
+        - matchLabels: {io.kubernetes.pod.namespace: services, app: new-api-sync}
+        - matchLabels: {io.kubernetes.pod.namespace: services, app: new-api-sync-full}
+        - matchLabels: {io.kubernetes.pod.namespace: kube-system, app: talos-etcd-backup}
+      toPorts:
+        - ports: [{port: "8443", protocol: TCP}]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{port: "8443", protocol: TCP}]
+    - fromEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus}
+      toPorts:
+        - ports: [{port: "5572", protocol: TCP}]
+  egress:
+    - toEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+    # Match the existing writer policies: the transparent DNS proxy drops queries on this
+    # cluster, so FQDN/L7 policies cannot be used here.
+    - toEntities: [world]
+      toPorts:
+        - ports: [{port: "443", protocol: TCP}]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: s3-gateway-restarter
+  namespace: s3-gateway
+spec:
+  endpointSelector:
+    matchLabels: {app: s3-gateway-restarter}
+  egress:
+    - toEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{port: "6443", protocol: TCP}, {port: "443", protocol: TCP}]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: prometheus-s3-gateway-scrape
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: {app.kubernetes.io/name: prometheus}
+  egress:
+    - toEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway}
+      toPorts:
+        - ports: [{port: "5572", protocol: TCP}]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: s3-gateway
+  namespace: monitoring
+  labels: {release: kps}
+spec:
+  namespaceSelector:
+    matchNames: [s3-gateway]
+  selector:
+    matchLabels: {app: s3-gateway}
+  podMetricsEndpoints:
+    - port: rc
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: s3-gateway
+  namespace: monitoring
+  labels: {release: kps}
+spec:
+  groups:
+    - name: unorouter.s3gateway
+      rules:
+        - alert: S3GatewayDown
+          expr: kube_statefulset_status_replicas_available{namespace="s3-gateway",statefulset="s3-gateway"} < 1 or absent(kube_statefulset_status_replicas_available{namespace="s3-gateway",statefulset="s3-gateway"})
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: "s3-gateway has no available replica: postgres WAL archiving, Teleport recordings and the log archivers are failing"
+        - alert: S3GatewayDegraded
+          expr: kube_statefulset_status_replicas_available{namespace="s3-gateway",statefulset="s3-gateway"} < 2
+          for: 30m
+          labels: {severity: warning}
+          annotations:
+            summary: "s3-gateway is running on one replica"
+        - alert: S3GatewayBackendErrors
+          expr: sum(rate(rclone_http_status_code{namespace="s3-gateway",code=~"5..|403|400"}[15m])) > 0
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "s3-gateway is getting errors from Hetzner Object Storage"

@@ -1,0 +1,106 @@
+# teleport-cluster Helm chart (CE, self-hosted). Access plane: kubectl + Postgres behind
+# GitHub SSO, short-lived certs, session recording + audit.
+#
+# DR posture: re-login acceptable at 1-2 users -> standalone SQLite on a PVC. On full node
+# loss the PVC dies -> fresh CA -> everyone `tsh login` again. Session recordings survive in
+# S3. Avoids the Teleport-needs-Postgres-while-Postgres-restores cycle.
+chartMode: standalone
+clusterName: teleport.unorouter.com
+
+# The proxy is reached through the Cloudflare tunnel, so no public port 443 exists on any
+# node and an ACME http/tls challenge can never complete. Cloudflare terminates the real
+# TLS; this in-cluster hop uses a long-lived self-signed cert that cloudflared accepts with
+# noTLSVerify (see infra/cloudflared, originServerName teleport.unorouter.com).
+acme: false
+tls:
+  existingSecretName: teleport-origin-tls
+
+# ALPN multiplexing on one port. tsh rides Teleport's WebSocket connection upgrade through
+# the tunnel, which is what makes a layer-7 proxy in front of it work at all.
+proxyListenerMode: multiplex
+# requests only (7 day median), no limits; the chart applies this to auth and proxy
+resources: { requests: { cpu: 20m, memory: 128Mi } }
+
+persistence:
+  enabled: true
+  volumeSize: 5Gi
+  storageClassName: local-path
+
+# session recordings -> S3 (node-independent, survives node loss). Audit events stay on SQLite.
+# static app-join token (file-based) lets the in-cluster teleport-kube-agent (App Access) join
+# without a short-lived tctl step -- reproducible on every DR. Secret value from OpenBao via ESO,
+# mounted into the auth pod; same value reaches the agent as its authToken (single source).
+auth:
+  # Velero reads the auth backend volume (users, roles, tokens, the recording index); it is the
+  # one Teleport state worth restoring.
+  annotations:
+    pod: {backup.velero.io/backup-volumes: data}
+  teleportConfig:
+    teleport:
+      storage:
+        # Hetzner Object Storage through the in-cluster s3-gateway (s3.unorouter.com, resolved
+        # by CoreDNS, Let's Encrypt certificate), which encrypts client side (rclone crypt) on
+        # the way to the Object Locked logs bucket. disablesse stays: Teleport would otherwise ask for SSE-KMS, which Hetzner
+        # answers with 400 (every recording after the 2026-09-05 rebuild was lost that way).
+        # Interactive `tsh play <session>` does NOT work here and never worked on R2 either: Teleport
+        # reads the OLDEST object version as an anti-tamper step and neither R2 nor the gateway
+        # serve ListObjectVersions (501). Recordings are evidence, not a replay feature: download
+        # the tar through the crypt drill and run `tsh play --format=json <file>` (docs/dr.md).
+        audit_sessions_uri: "s3://unorouter-logs/teleport-recordings?endpoint=s3.unorouter.com&region=fsn1&disablesse=true"
+        # events stay in the default dir backend (first entry, what the web UI queries) and are
+        # mirrored to stdout so the audit watcher in monitoring can post failed logins, with
+        # the GitHub username and source address, to Discord within five minutes.
+        audit_events_uri: ["file:///var/lib/teleport/log", "stdout://"]
+    auth_service:
+      tokens:
+        - "app,db,kube:/etc/teleport-join/token"
+      # GitHub SSO only: hide local username/password/passkey from the login UI. Everyone
+      # signs in via the org-gated GitHub connector. Break-glass = tctl on the auth pod
+      # (kubectl exec), which bypasses UI auth entirely, so no local user is needed.
+      authentication:
+        type: github
+        connector_name: github
+        local_auth: false
+  extraVolumes:
+    - name: app-join-token
+      secret:
+        secretName: teleport-app-join
+  extraVolumeMounts:
+    - name: app-join-token
+      mountPath: /etc/teleport-join
+      readOnly: true
+  # S3 creds for session-recording uploads (ESO secret teleport-s3)
+  extraEnv:
+    - name: AWS_ACCESS_KEY_ID
+      valueFrom: { secretKeyRef: { name: teleport-s3, key: AWS_ACCESS_KEY_ID } }
+    - name: AWS_SECRET_ACCESS_KEY
+      valueFrom: { secretKeyRef: { name: teleport-s3, key: AWS_SECRET_ACCESS_KEY } }
+
+# expose the proxy on the host network (needs the public IP for ACME + ALPN passthrough)
+service:
+  type: ClusterIP
+  spec:
+    # Empty on purpose: the proxy is reached through the Cloudflare tunnel (see
+    # infra/cloudflared), so no node IP is published anywhere. If a direct entry is ever
+    # needed again it must be a node without DB primaries or OpenBao, and the DNS record
+    # and this list must stay in sync (Cilium only answers an externalIP on its owner).
+    externalIPs: []
+proxy:
+  # hostNetwork so :443 binds the node public IP directly (grey-cloud DNS points here)
+  annotations: {}
+  # trust_x_forwarded_for was tried on 2026-09-06 to get real client addresses into the audit
+  # log (behind the tunnel every login shows a cloudflared pod IP). It breaks tsh for IPv6
+  # clients: the proxy rejects the ALPN WebSocket upgrade with "client source and destination
+  # addresses should be valid same TCP version" because the forwarded v6 address is paired with
+  # the v4 pod address. Client addresses come from the Cloudflare request log instead.
+
+# The GitHub SSO connector and every role are TeleportGithubConnector / TeleportRoleV7
+# objects in infra/teleport/resources, reconciled by the chart's operator (a sidecar of the
+# auth pod) so a fresh cluster gets SSO from git with no tctl step. The client secret is read
+# from the ESO Secret teleport-github-connector by the operator's secret:// lookup.
+# Client ID (not secret): Ov23li6rNPrZg3tJr1v5
+operator:
+  enabled: true
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 256Mi }

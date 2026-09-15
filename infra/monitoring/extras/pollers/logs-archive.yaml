@@ -1,0 +1,26 @@
+# The gateway credential for the write once archive in unorouter-logs: Vector's archive sink
+# (infra/loki/values-vector.yaml) and pat-audit-archive read it as env.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: logs-archive
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}
+  target:
+    name: logs-archive
+    creationPolicy: Owner
+    template:
+      data:
+        # Through the s3-gateway, which encrypts client side (rclone crypt) on the way to the
+        # Object Locked logs bucket (COMPLIANCE 30d, lifecycle expiry). Plain SigV4 to the gateway.
+        ARCHIVE_ENDPOINT: https://s3.unorouter.com
+        ARCHIVE_BUCKET: unorouter-logs
+        ARCHIVE_ACCESS_KEY: "{{ .ak }}"
+        ARCHIVE_SECRET_KEY: "{{ .sk }}"
+  data:
+    - secretKey: ak
+      remoteRef: { key: s3gw, property: ACCESS_KEY_ID }
+    - secretKey: sk
+      remoteRef: { key: s3gw, property: ACCESS_SECRET_KEY }

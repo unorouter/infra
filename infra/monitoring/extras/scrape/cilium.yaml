@@ -1,0 +1,39 @@
+# Cilium agent metrics. Enabled 2026-07-25 via `prometheus.enabled` in the cilium values;
+# before that Cilium exported nothing and every cilium_* alert was a rule with no series.
+#
+# PodMonitor, not ServiceMonitor: the chart's `cilium-agent` Service only fronts the ENVOY
+# metrics port (9964, name `envoy-metrics`). The agent's own metrics are on the pod port
+# `prometheus` (9962) with no Service in front of it.
+#
+# The agent restart this needed was ZERO DOWNTIME: eBPF programs and maps live in the kernel
+# and keep forwarding while the agent is down (bpffs is mounted on every node), and
+# updateStrategy.maxUnavailable is pinned to 1 so it rolls one node at a time.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cilium-agent
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [kube-system]
+  selector:
+    matchLabels:
+      k8s-app: cilium
+  podMetricsEndpoints:
+    - port: prometheus
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cilium-operator
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [kube-system]
+  selector:
+    matchLabels:
+      io.cilium/app: operator
+  podMetricsEndpoints:
+    - port: prometheus
+      interval: 60s

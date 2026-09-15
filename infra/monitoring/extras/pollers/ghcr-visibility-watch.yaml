@@ -1,0 +1,140 @@
+# Every 15 minutes: list every container package of the GitHub org and try an ANONYMOUS
+# pull token against ghcr.io for each. A package outside ALLOW_PUBLIC that answers an
+# anonymous tags/list pages. The API visibility field is only the
+# cross-check; the anonymous probe is what an attacker sees. Background: from July to
+# 2026-09-06 the unorouter and unorouter-bot packages were public while their images
+# carried the full .env, which is how the admin PAT, the guest key and the Creem key leaked.
+# GitHub makes a package of a public repo PUBLIC by default when Actions publishes it,
+# so a new image workflow can reopen this without anyone touching settings. New packages
+# are covered automatically: anything not in the allowlist that answers anonymously fires.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: ghcr-visibility-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: ghcr-visibility-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: GITHUB_TOKEN
+      remoteRef: { key: ghcr-pull, property: token }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ghcr-visibility-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, urllib.request, urllib.error
+    import notify
+
+    ORG = os.environ.get("GITHUB_ORG", "unorouter")
+    ALLOW = set(x for x in os.environ.get("ALLOW_PUBLIC", "").split(",") if x)
+    GH = os.environ["GITHUB_TOKEN"]
+    UA = {"user-agent": "ghcr-visibility-watch/1"}
+
+    def get(url, headers=None):
+        req = urllib.request.Request(url, headers={**UA, **(headers or {})})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, ""
+
+    status, body = get(f"https://api.github.com/orgs/{ORG}/packages?package_type=container&per_page=100",
+                       {"authorization": "Bearer " + GH, "accept": "application/vnd.github+json"})
+    if status != 200:
+        notify.alert("PublicPackageExposed", f"ghcr visibility watch is BLIND: cannot list packages (HTTP {status}); the GITHUB_TOKEN in secret/ghcr-pull may be dead")
+        raise SystemExit(1)
+    packages = json.loads(body)
+    # The org listing silently omits packages the token's user only reaches through
+    # repository-inherited access (unorouter-bot on 2026-09-07), so every name in
+    # EXPECT_PACKAGES is fetched directly and merged in; a name the API cannot find at
+    # all is reported too, so a renamed or deleted package does not fall out of view.
+    seen = {p["name"] for p in packages}
+    missing = []
+    for name in [x for x in os.environ.get("EXPECT_PACKAGES", "").split(",") if x and x not in seen]:
+        st, b = get(f"https://api.github.com/orgs/{ORG}/packages/container/{name}",
+                    {"authorization": "Bearer " + GH, "accept": "application/vnd.github+json"})
+        if st == 200:
+            packages.append(json.loads(b))
+        else:
+            missing.append(f"{name} (HTTP {st})")
+
+    findings = []
+    for p in packages:
+        name = p["name"]
+        st, tok = get(f"https://ghcr.io/token?scope=repository:{ORG}/{name}:pull")
+        anon = "?"
+        if st == 200:
+            t = json.loads(tok).get("token", "")
+            st2, _ = get(f"https://ghcr.io/v2/{ORG}/{name}/tags/list", {"authorization": "Bearer " + t})
+            anon = st2 == 200
+        api_public = p.get("visibility") == "public"
+        if (anon is True or api_public) and name not in ALLOW:
+            findings.append(f"`{ORG}/{name}`: anonymous pull {'WORKS' if anon is True else 'blocked'}, API says {p.get('visibility')}, updated {p.get('updated_at', '')[:10]}")
+        elif anon is False and api_public:
+            findings.append(f"`{ORG}/{name}`: API says public but anonymous pull is blocked (inconsistent, check)")
+
+    if missing:
+        findings.append("expected packages the API cannot find: " + ", ".join(missing) + " (deleted or renamed? update EXPECT_PACKAGES)")
+    if findings:
+        notify.alert("PublicPackageExposed", "\n".join(["a container package that must be private is PUBLIC"] + findings
+                     + ["Fix: github.com/orgs/" + ORG + "/packages/container/<name>/settings, Danger Zone, change visibility. Then rotate whatever the image carried."]))
+    print(f"packages={len(packages)} allowed_public={sorted(ALLOW)} findings={len(findings)}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ghcr-visibility-watch
+  namespace: monitoring
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 180
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.14-alpine
+              command: ["python3", "-u", "/app/watch.py"]
+              env:
+                - name: WATCH_NAME
+                  value: ghcr-visibility-watch
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
+                - name: GITHUB_ORG
+                  value: unorouter
+                # images proven secret-free by image-secret-scan (every layer, live values
+                # included); private packages count against the org's 500 MB / 1 GB per
+                # month GitHub Packages quota and pulls are BLOCKED once it is used up
+                - name: ALLOW_PUBLIC
+                  value: unorouter,unorouter-bot,new-api,new-api-sync,uno-import,uno-cards
+                # every package that must exist; merged with the API listing, which drops
+                # packages reachable only through repository-inherited access
+                - name: EXPECT_PACKAGES
+                  value: unorouter,unorouter-bot,new-api,new-api-sync,uno-cards,uno-import
+              envFrom: [{ secretRef: { name: ghcr-visibility-watch } }]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
+          volumes:
+            - name: app
+              configMap: { name: ghcr-visibility-watch }
+            - name: lib
+              configMap: { name: watch-lib }

@@ -1,0 +1,143 @@
+# Nightly etcd snapshot of the Talos control plane into the backup bucket, through the
+# s3-gateway (client side crypt, Object Locked). The talosconfig in Secret talos-etcd-backup
+# is minted with `talosctl config new --roles os:etcd:backup`, a role that can call
+# EtcdSnapshot and nothing else, so a compromised job cannot read or change machine config.
+# Restore: docs/dr.md (talosctl bootstrap --recover-from). One snapshot suffices,
+# every member holds the same data; three are taken so a dead node never leaves a gap.
+# Nodes are addressed on the WireGuard mesh (talos/talconfig.yaml, 10.200.0.0/24);
+# apid listens there like everywhere else, and the job's egress policy admits remote nodes.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: talos-etcd-backup-s3
+  namespace: kube-system
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: talos-etcd-backup-s3
+    creationPolicy: Owner
+  data:
+    - secretKey: RCLONE_CONFIG_GW_ACCESS_KEY_ID
+      remoteRef: { key: s3gw, property: ACCESS_KEY_ID }
+    - secretKey: RCLONE_CONFIG_GW_SECRET_ACCESS_KEY
+      remoteRef: { key: s3gw, property: ACCESS_SECRET_KEY }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: talos-etcd-backup
+  namespace: kube-system
+spec:
+  schedule: "30 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels: { app: talos-etcd-backup }
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext: { runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true }
+          initContainers:
+            - name: snapshot-10-200-0-11
+              image: ghcr.io/siderolabs/talosctl:v1.13.10
+              args:
+                - --talosconfig=/talos/talosconfig
+                - --endpoints=10.200.0.11
+                - --nodes=10.200.0.11
+                - etcd
+                - snapshot
+                - /out/etcd.snapshot-10.200.0.11
+              volumeMounts:
+                - { name: talosconfig, mountPath: /talos, readOnly: true }
+                - { name: out, mountPath: /out }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { memory: 256Mi }
+            - name: snapshot-10-200-0-12
+              image: ghcr.io/siderolabs/talosctl:v1.13.10
+              args:
+                - --talosconfig=/talos/talosconfig
+                - --endpoints=10.200.0.12
+                - --nodes=10.200.0.12
+                - etcd
+                - snapshot
+                - /out/etcd.snapshot-10.200.0.12
+              volumeMounts:
+                - { name: talosconfig, mountPath: /talos, readOnly: true }
+                - { name: out, mountPath: /out }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { memory: 256Mi }
+            - name: snapshot-10-200-0-13
+              image: ghcr.io/siderolabs/talosctl:v1.13.10
+              args:
+                - --talosconfig=/talos/talosconfig
+                - --endpoints=10.200.0.13
+                - --nodes=10.200.0.13
+                - etcd
+                - snapshot
+                - /out/etcd.snapshot-10.200.0.13
+              volumeMounts:
+                - { name: talosconfig, mountPath: /talos, readOnly: true }
+                - { name: out, mountPath: /out }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          containers:
+            - name: upload
+              image: rclone/rclone:1.75.1
+              command: [sh, -c]
+              # one file per member, etcd.snapshot-<mesh ip> (talosctl takes one node per call)
+              args:
+                - >-
+                  set -e; d=$(date -u +%F);
+                  for f in /out/*; do rclone copyto --s3-no-check-bucket "$f" "gw:unorouter-backups/etcd/$(basename "$f" | sed 's/^etcd.snapshot-//')/$d.snapshot"; done;
+                  rclone lsl gw:unorouter-backups/etcd/ | tail -3
+              env:
+                - { name: RCLONE_CONFIG_GW_TYPE, value: s3 }
+                - { name: RCLONE_CONFIG_GW_PROVIDER, value: Other }
+                - { name: RCLONE_CONFIG_GW_ENDPOINT, value: https://s3.unorouter.com }
+                - { name: RCLONE_CONFIG_GW_REGION, value: fsn1 }
+                - { name: AWS_REQUEST_CHECKSUM_CALCULATION, value: when_required }
+                - { name: AWS_RESPONSE_CHECKSUM_VALIDATION, value: when_required }
+                - { name: HOME, value: /tmp }
+              envFrom:
+                - secretRef: { name: talos-etcd-backup-s3 }
+              volumeMounts:
+                - { name: out, mountPath: /out, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: talosconfig
+              secret: { secretName: talos-etcd-backup }
+            - name: out
+              emptyDir: {}
+            - name: tmp
+              emptyDir: {}

@@ -1,0 +1,53 @@
+# Let's Encrypt via Cloudflare DNS-01. Needed for anything that must present a publicly
+# trusted certificate at the ORIGIN, behind the tunnel where HTTP-01 can never reach us:
+# the Teleport proxy, because Teleport agents verify the proxy certificate when they dial
+# home (cloudflared and browsers never see it; the agents do).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: cloudflare-dns-token
+  namespace: cert-manager
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: cloudflare-dns-token
+    creationPolicy: Owner
+  data:
+    - secretKey: api-token
+      remoteRef: { key: cloudflare-edge, property: token }
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-dns
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: don.cryptus@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-dns-account
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-dns-token
+              key: api-token
+---
+# The Teleport proxy's origin certificate (values.yaml tls.existingSecretName). Renewed by
+# cert-manager; the proxy pods must be restarted to pick up a renewed secret.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: teleport-origin
+  namespace: teleport
+spec:
+  secretName: teleport-origin-tls
+  issuerRef:
+    name: letsencrypt-dns
+    kind: ClusterIssuer
+  dnsNames:
+    - teleport.unorouter.com
+    - "*.teleport.unorouter.com"
