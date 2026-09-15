@@ -279,14 +279,6 @@ spec:
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
----
-# The kube-prometheus-stack admission hook Jobs (kps-admission-create/patch) run on every
-# ArgoCD sync under their own ServiceAccount and only talk to the API server.
-apiVersion: cilium.io/v2
-kind: CiliumNetworkPolicy
-metadata:
-  name: kps-admission
-  namespace: monitoring
-spec:
-  endpointSelector:
-    matchLabels: { io.cilium.k8s.policy.serviceaccount: kps-admission }
+# The kube-prometheus-stack admission hook Jobs (kps-admission-create/patch) run under their
+# own ServiceAccount and need only DNS and the API server, both granted by the clusterwide
+# policies; the namespace default-deny closes everything else, so they carry no policy.
