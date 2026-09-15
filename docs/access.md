@@ -43,8 +43,7 @@ sole recipient of `secrets/break-glass.sops.yaml` and
 **Tailnet** `2-don.github` (a different GitHub account than the org's `0-don`, on purpose).
 Tailnet Lock on: a device added by a hijacked login is inert until signed from this laptop or
 netcup. Manual device approval. The ACL lives in the console only (Access controls): the
-operator reaches `tag:node` on 6443 and 50000 and `tag:ops` on 22, SSH identity re-checked
-every 12h, nothing else. No host has an `authorized_keys` entry.
+operator reaches `tag:node` on 6443 and 50000 and `tag:ops` on 22, nothing else. No host has an `authorized_keys` entry.
 
 ## Teleport
 
