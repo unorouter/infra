@@ -1,4 +1,4 @@
-# Daily retention for newapi-pg logs.ip.
+# Daily retention for newapi-pg: logs.ip and users.register_ip.
 #
 # logs.ip is personal data (CJEU C-582/14 Breyer) and was kept for the life of the row:
 # 8 months and 4.3M rows when this was written. Its only consumer is
@@ -20,6 +20,11 @@
 #   4. as dbadmin: infra/databases/ip-retention-least-privilege.sql
 #   5. kubectl -n databases create job --from=cronjob/ip-retention ip-retention-manual,
 #      then read its privacy.ip_retention line: remaining must be 0
+#
+# users.register_ip was added later, same 30 days, same reasoning. It is guarded on
+# register_ip_hash being present (new-api writes both, common/register_ip_hash.go), so an
+# address is never cleared before the marker the abuse caps compare on exists. Deploy
+# order there was: HMAC key into OpenBao, new-api backfills every row, only then this.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -80,6 +85,28 @@ data:
       return total;
     }
 
+    // users.register_ip is the same rule on a different table: the per-IP registration
+    // cap and the Discord reward check compare register_ip_hash, so the address itself
+    // is no longer needed once it is past the window.
+    //
+    // The hash guard is the safety interlock, not a filter. A row whose marker is not
+    // written yet keeps its address, so a half-finished backfill can never cost the
+    // caps their history. It also means this is safe to deploy before the backfill has
+    // caught every row: those rows simply wait for the next run.
+    async function blankRegisterIps(): Promise<number> {
+      let total = 0;
+      for (let i = 0; i < MAX_BATCHES; i++) {
+        const r = await db`UPDATE public.users SET register_ip = '' WHERE id IN (
+             SELECT id FROM public.users
+             WHERE register_ip <> '' AND COALESCE(register_ip_hash, '') <> ''
+               AND created_at < ${cutoff}
+             ORDER BY id LIMIT ${BATCH})`;
+        total += r.count;
+        if (r.count < BATCH) break;
+      }
+      return total;
+    }
+
     try {
       const cleared = await blank(recent);
       const [{ n: left }] = await db`SELECT count(*)::int AS n FROM public.logs
@@ -87,10 +114,21 @@ data:
       const stragglers = left > 0 ? await blank(null) : 0;
       const [{ n: remaining }] = await db`SELECT count(*)::int AS n FROM public.logs
                                           WHERE ip <> '' AND created_at < ${cutoff}`;
-      console.log(JSON.stringify({ event: "privacy.ip_retention", cutoff, cleared, stragglers, remaining }));
-      if (remaining > 0) process.exitCode = 1;
+      const users = await blankRegisterIps();
+      // Counted separately: rows waiting on a marker are not a failure, they are the
+      // interlock doing its job, and they should not make the job exit non-zero.
+      const [{ n: usersRemaining }] = await db`SELECT count(*)::int AS n FROM public.users
+                                               WHERE register_ip <> '' AND COALESCE(register_ip_hash, '') <> ''
+                                                 AND created_at < ${cutoff}`;
+      const [{ n: usersAwaitingHash }] = await db`SELECT count(*)::int AS n FROM public.users
+                                                  WHERE register_ip <> '' AND COALESCE(register_ip_hash, '') = ''`;
+      console.log(JSON.stringify({
+        event: "privacy.ip_retention", cutoff, cleared, stragglers, remaining,
+        users, usersRemaining, usersAwaitingHash,
+      }));
+      if (remaining > 0 || usersRemaining > 0) process.exitCode = 1;
     } catch (err) {
-      console.error("ip retention failed; no rows deleted, nothing touched beyond ip=''", err);
+      console.error("ip retention failed; no rows deleted, nothing touched beyond logs.ip and users.register_ip", err);
       process.exitCode = 1;
     } finally {
       await db.close();

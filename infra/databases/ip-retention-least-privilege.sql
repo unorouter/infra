@@ -17,11 +17,17 @@ BEGIN;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ip_retention;
 GRANT USAGE ON SCHEMA public TO ip_retention;
 GRANT SELECT ("id", "created_at", "ip"), UPDATE ("ip") ON public.logs TO ip_retention;
+-- users.register_ip, same rule. register_ip_hash is SELECT only: the job reads it as an
+-- interlock (never blank an address whose marker is missing) and must never be able to
+-- write it, or a bug here could erase what the abuse caps compare on.
+GRANT SELECT ("id", "created_at", "register_ip", "register_ip_hash"), UPDATE ("register_ip") ON public.users TO ip_retention;
 
 COMMIT;
 
--- Verify, expected t | f | f | f:
+-- Verify, expected t | f | f | t | f | f:
 -- SELECT has_column_privilege('ip_retention', 'public.logs', 'ip', 'UPDATE'),
 --        has_table_privilege('ip_retention', 'public.logs', 'DELETE'),
 --        has_column_privilege('ip_retention', 'public.logs', 'username', 'SELECT'),
---        has_table_privilege('ip_retention', 'public.users', 'SELECT');
+--        has_column_privilege('ip_retention', 'public.users', 'register_ip', 'UPDATE'),
+--        has_column_privilege('ip_retention', 'public.users', 'register_ip_hash', 'UPDATE'),
+--        has_column_privilege('ip_retention', 'public.users', 'email', 'SELECT');
