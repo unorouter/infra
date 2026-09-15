@@ -50,8 +50,7 @@ grafana:
     limits: { cpu: 500m, memory: 640Mi }
   persistence:
     enabled: true
-    storageClassName: local-path
-    size: 2Gi
+    existingClaim: grafana-data   # extras/grafana-pvc.yaml, a local-type PV Velero can read
   admin:
     existingSecret: grafana-admin
     userKey: adminUser

@@ -23,8 +23,7 @@ resources: { requests: { cpu: 20m, memory: 128Mi } }
 
 persistence:
   enabled: true
-  volumeSize: 5Gi
-  storageClassName: local-path
+  existingClaimName: teleport-data   # resources/pvc.yaml, a local-type PV Velero can read
 
 # session recordings -> S3 (node-independent, survives node loss). Audit events stay on SQLite.
 # static app-join token (file-based) lets the in-cluster teleport-kube-agent (App Access) join
