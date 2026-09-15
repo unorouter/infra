@@ -50,12 +50,6 @@ spec:
         - ports: [{ port: "9187", protocol: TCP }]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
       toPorts:
         - ports:
@@ -99,12 +93,6 @@ spec:
         - ports: [{ port: "9187", protocol: TCP }]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
       toPorts:
         - ports:
@@ -132,12 +120,6 @@ spec:
     matchExpressions:
       - { key: cnpg.io/jobRole, operator: Exists }
   egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
     - toEntities: [kube-apiserver, host]
       toPorts:
         - ports: [{ port: "6443", protocol: TCP }]
