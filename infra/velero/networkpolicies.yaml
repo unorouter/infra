@@ -33,15 +33,6 @@ spec:
       toPorts:
         - ports: [{ port: "8085", protocol: TCP }]
   egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEntities: [host, remote-node, kube-apiserver]
-      toPorts:
-        - ports: [{ port: "6443", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
