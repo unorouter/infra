@@ -38,12 +38,6 @@ spec:
         - ports: [{ port: "3000", protocol: TCP }]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app: newapi-redis }
       toPorts:
         - ports: [{ port: "6379", protocol: TCP }]
@@ -82,12 +76,6 @@ spec:
         - ports: [{ port: "3000", protocol: TCP }]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app: new-api }
       toPorts:
         - ports: [{ port: "3000", protocol: TCP }]
@@ -123,12 +111,6 @@ spec:
         - ports: [{ port: "4000", protocol: TCP }]
   egress:
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
-    - toEndpoints:
         - matchLabels: { app: new-api }
       toPorts:
         - ports: [{ port: "3000", protocol: TCP }]
@@ -160,12 +142,6 @@ spec:
       toPorts:
         - ports: [{ port: "3000", protocol: TCP }]
   egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
@@ -184,12 +160,6 @@ spec:
         operator: In
         values: [new-api-sync, new-api-sync-full]
   egress:
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
     - toEndpoints:
         - matchLabels: { app: new-api }
       toPorts:
