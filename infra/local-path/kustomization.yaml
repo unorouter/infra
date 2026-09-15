@@ -21,3 +21,6 @@ patches:
         path: /metadata/annotations
         value:
           storageclass.kubernetes.io/is-default-class: "true"
+          # local, not hostPath: Velero's file-level backup refuses hostPath-backed PVs
+          # (2026-09-14, silent skip). Only PVCs created after this are local.
+          defaultVolumeType: local

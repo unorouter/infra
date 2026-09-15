@@ -1,0 +1,14 @@
+# Auth backend as a local-type PV so Velero's node-agent can read it (persistence.existingClaimName).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teleport-data
+  namespace: teleport
+  annotations:
+    volumeType: local
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
