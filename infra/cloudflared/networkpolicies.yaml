@@ -38,14 +38,6 @@ spec:
       toPorts:
         - ports: [{ port: "2000", protocol: TCP }]
   egress:
-    - toEndpoints:
-        - matchLabels:
-            io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
     # Every origin named in cloudflared-config ingress rules.
     - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api }
@@ -89,14 +81,6 @@ spec:
     matchLabels:
       io.cilium.k8s.policy.serviceaccount: cloudflared-restarter
   egress:
-    - toEndpoints:
-        - matchLabels:
-            io.kubernetes.pod.namespace: kube-system
-            k8s-app: kube-dns
-      toPorts:
-        - ports:
-            - { port: "53", protocol: UDP }
-            - { port: "53", protocol: TCP }
     - toEntities: [kube-apiserver]
       toPorts:
         - ports:
