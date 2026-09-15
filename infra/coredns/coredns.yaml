@@ -1,7 +1,6 @@
-# CoreDNS, taken over from k3s's bundled manifest (identical content, k3s v1.36.2): with the
-# default single replica every upstream lookup in the cluster depended on one node's health.
-# k3s is told to leave it alone by /var/lib/rancher/k3s/server/manifests/coredns.yaml.skip
-# on every server (cloud-init creates it). Three replicas, spread, kept off node1, PDB 2 of 3.
+# CoreDNS, git-owned because Talos's own manifest has a fixed Corefile and would be reapplied
+# on every upgrade-k8s; the rewrites live in coredns-custom.yaml. Three replicas, spread, PDB
+# 2 of 3, so no upstream lookup depends on one node.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -166,8 +165,8 @@ spec:
       - name: config-volume
         configMap:
           name: coredns
-          # optional: k3s injected a NodeHosts key at runtime, Talos does not; the hosts block in
-          # the Corefile falls through when the file is absent
+          # optional: no NodeHosts key on Talos; the hosts block in the Corefile falls through
+          # when the file is absent
           optional: true
           items:
           - key: Corefile

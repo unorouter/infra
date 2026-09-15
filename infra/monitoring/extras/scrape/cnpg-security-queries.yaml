@@ -162,25 +162,6 @@ data:
             usage: "GAUGE"
             description: "Root admin logins in 5m. Always emits, including zero, so an absent series means the collector is broken rather than quiet."
 
-    newapi_admin_logins:
-      query: |
-        SELECT coalesce(nullif(ip,''),'unknown') AS ip,
-               count(*)::float8 AS count
-        FROM logs
-        WHERE type = 7
-          AND user_id = 1
-          AND created_at > extract(epoch from now())::bigint - 300
-        GROUP BY 1
-      primary: true
-      target_databases:
-        - newapi
-      metrics:
-        - ip:
-            usage: "LABEL"
-            description: "Source IP of the root admin login"
-        - count:
-            usage: "GAUGE"
-            description: "Root-admin (user 1) logins in the last 5 minutes, by IP"
 
     # A refused attempt to read an upstream channel key. The successful reads are
     # already covered by newapi_channel_key_reads; this is the attempt that BOUNCES,
@@ -606,38 +587,6 @@ data:
             usage: "GAUGE"
             description: "Distinct external IPs refused in 5m."
 
-    newapi_security_denials:
-      query: |
-        SELECT coalesce(nullif(ip,''),'unknown') AS ip,
-               count(*)::float8 AS count
-        FROM logs
-        WHERE type = 3
-          AND created_at > extract(epoch from now())::bigint - 300
-          AND content LIKE 'Security check refused%'
-          -- Loopback and in-cluster pod IPs are our own frontend and bots hitting
-          -- endpoints with an expired session (mostly /api/data/self from stale
-          -- browser tabs). That is continuous background noise, not probing, and it
-          -- buried the signal the moment this metric went live. Only refusals from a
-          -- real external client are interesting: an attacker reaches us through
-          -- Cloudflare and lands with a public address.
-          --
-          -- That holds only while the unorouter BFF forwards CF-Connecting-IP; if it
-          -- ever sends X-Forwarded-For instead (which the gateway discards), every
-          -- dashboard-originated request lands as a pod address and this exclusion
-          -- silently hides them along with the noise.
-          AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
-          AND ip NOT LIKE '10.42.%'
-        GROUP BY 1
-      primary: true
-      target_databases:
-        - newapi
-      metrics:
-        - ip:
-            usage: "LABEL"
-            description: "Source IP of the refused attempt"
-        - count:
-            usage: "GAUGE"
-            description: "Refused auth / proof / permission checks in 5m, recorded durably because edge logs expire."
 
     newapi_quota_grants:
       query: |
@@ -664,24 +613,6 @@ data:
             usage: "GAUGE"
             description: "Largest single quota grant in USD in the last 5 minutes."
 
-    newapi_password_changes:
-      query: |
-        SELECT count(*)::float8 AS count,
-               count(DISTINCT substring(content from 'ID: [0-9]+'))::float8 AS distinct_targets
-        FROM logs
-        WHERE type = 3
-          AND created_at > extract(epoch from now())::bigint - 300
-          AND content LIKE 'Updated user%'
-      primary: true
-      target_databases:
-        - newapi
-      metrics:
-        - count:
-            usage: "GAUGE"
-            description: "Admin edits to user records in 5m. new-api does not record WHICH field changed, so a password reset is indistinguishable from a role or status edit -- treat any burst as potential account takeover."
-        - distinct_targets:
-            usage: "GAUGE"
-            description: "Distinct accounts edited via the admin API in 5m."
 
 
     # 2026-08-31: $142 across 27 crypto top-ups sat uncredited for 10 days. The money
@@ -938,33 +869,6 @@ data:
             usage: "GAUGE"
             description: "Of those, how many bound a third-party identity (github, discord, oidc, telegram, linuxdo, wechat, google)."
 
-    # Free-tier volume, kept as a gauge and deliberately NOT alerted on: the error
-    # share is driven as much by upstream free-lane saturation as by abuse, and sat
-    # at 64.5% on 2026-09-10 with nothing wrong on our side. newapi_abuse below is
-    # the signal worth paging on.
-    #
-    # ':free' is the NAMING CONVENTION (notify.IsFreeModel, notify/types.go:103), not
-    # the pricing truth: the gateway decides free from modelPrice == 0
-    # (relay/helper/price.go:164), so a zero-priced model without the suffix is
-    # invisible here while still counted by every Go abuse signal.
-    newapi_free_tier:
-      query: |
-        SELECT count(*) FILTER (WHERE type = 5)::float8 AS errors_5m,
-               count(*) FILTER (WHERE type = 2)::float8 AS ok_5m
-        FROM logs
-        WHERE created_at > extract(epoch from now())::bigint - 300
-          AND type IN (2, 5)
-          AND lower(model_name) LIKE '%:free'
-      primary: true
-      target_databases:
-        - newapi
-      metrics:
-        - errors_5m:
-            usage: "GAUGE"
-            description: "Failed free-model requests in the last 5 minutes."
-        - ok_5m:
-            usage: "GAUGE"
-            description: "Successful free-model requests in the last 5 minutes."
 
     # Accounts behaving like the farm right now: no identity, no balance, and almost
     # every request failing. Over 72h on 2026-09-10 this shape covered 2,015 accounts

@@ -138,13 +138,6 @@
       "groupName": "cilium"
     },
     {
-      "description": "ArgoCD: the k3s HelmChart CR pin, retired with the k3s cluster",
-      "matchPackageNames": [
-        "argo-cd"
-      ],
-      "groupName": "argo-cd chart"
-    },
-    {
       "description": "tofu providers: bump the constraint and the lock together, then tofu init -upgrade and plan",
       "matchManagers": [
         "terraform"
