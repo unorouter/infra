@@ -38,6 +38,9 @@ HCLOUD_TOKEN=... hcloud-upload-image upload \
 ## A new node
 
 Created with its rendered config as user data, nothing else.
+A new server can also encrypt `STATE`: add a `VolumeConfig` named `STATE` with the same
+`encryption` block as the other volumes in `patches/volumes.yaml` to its config before the
+first boot (install time only, the three existing nodes cannot).
 
 1. `openssl genpkey -algorithm X25519` key pair into `talenv.sops.yaml` (`WG_NODE14_PRIVATE`,
    `WG_NODE14_PUBLIC`; no endpoint yet).

@@ -166,6 +166,15 @@ ArgoCD, monitoring), every pod.
    CNPG clusters are healthy with WAL replay, services answer 200 through the tunnel, blackbox
    probes pass, SSO works.
 
+## Encrypted volumes
+
+`EPHEMERAL`, swap and the local-path volume are LUKS2 with a key derived from the VM UUID
+(`docs/operations.md` "Encryption at rest"). A Hetzner snapshot booted on another server, a
+rescue-mode copy or a pulled disk is refused with `encryption key rejected` and the node
+stays in maintenance; that is the intended outcome, not a fault. Recovery of such a node is
+the normal path: fresh server, config as user data, etcd from the snapshot bucket, CNPG from
+WAL. A Hetzner rebuild or resize of the same server keeps the UUID and unlocks.
+
 ## Node swap (zero downtime)
 
 Drive it from `./scripts/dr.sh kubeconfig`: the Teleport context routes through the in-cluster

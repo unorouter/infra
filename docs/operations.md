@@ -42,6 +42,40 @@ rendered manifests and the Delete reclaim policy takes the data with it (Telepor
 2026-09-16). Set the PV to Retain first, or keep the claim outside the chart from the start
 (`grafana-data`, `teleport`).
 
+## Encryption at rest
+
+`EPHEMERAL` (etcd, images, logs), `s-swap` and `u-local-path-provisioner` (every PVC) carry
+LUKS2 with a key derived from the VM UUID (`nodeID`, `talos/patches/volumes.yaml`,
+2026-09-17). That covers a disk read away from the VM: a decommissioned drive, a leaked
+snapshot, a rescue-mode copy. It does not cover the provider holding the VM (the UUID is
+theirs) or the running system. `STATE` (machine config, cluster secrets) stays plain: it can
+only be encrypted with a fresh install and Hetzner user data is immutable, so it comes with
+the next node swap (`talos/README.md` "A new node"). `talosctl -n <node> get volumestatus`
+shows `luks2` in the encryption column; a volume without it has not been re-provisioned yet.
+
+The block is inert on a provisioned volume. Rolling one node (about an hour, one node per
+window, rehearsed on a spare 2026-09-17):
+
+1. Preflight as for a node swap (`docs/dr.md`): ArgoCD green, CNPG healthy, WAL archiving,
+   primaries known, etcd and OpenBao snapshots fresh, a Velero backup that lists the
+   node-pinned local claims to keep (`uno-import-profile`, `data-openbao-0`, anything else
+   not rebuildable; hostPath claims must first be recreated as `local`, see Node disk).
+2. Cordon, `kubectl cnpg promote` any primary away, evict the singletons one by one, drain,
+   delete the node-pinned PVCs (replicas reclone, caches refill, Velero-covered ones come
+   back by restore).
+3. node11 only: apply a node patch `cluster.controlPlane.endpoint: https://10.200.0.12:6443`
+   so its rejoin does not dial itself; undo at the end.
+4. Apply the rendered config minus the `UserVolumeConfig` and `SwapVolumeConfig` documents,
+   wait until both leave `volumestatus`, then `talosctl wipe disk sda6 --drop-partition`
+   and `sda7` (check the partition numbers in `get discoveredvolumes` first).
+5. `talosctl apply-config --mode=staged -f <rendered config>` then
+   `talosctl reset --graceful --system-labels-to-wipe EPHEMERAL --reboot`. Graceful leaves
+   etcd, the other two keep quorum. The node is back with three `luks2` volumes in under a
+   minute and rejoins etcd on its own; images re-pull for about ten minutes.
+6. Uncordon, watch CNPG reclone, restore the preserved claims, `dr.sh unseal` on node13's
+   turn (`dr.sh restore` if the raft data did not come back), `tsh login` on node11's turn.
+   Never `--wipe-mode all` or a `STATE` wipe on a Hetzner node: it boots the old user data.
+
 ## Gotchas
 
 - All nodes are control planes. etcd, kubelet and Cilium's VXLAN run on the WireGuard mesh
