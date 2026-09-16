@@ -76,6 +76,14 @@ window, rehearsed on a spare 2026-09-17):
    turn (`dr.sh restore` if the raft data did not come back), `tsh login` on node11's turn.
    Never `--wipe-mode all` or a `STATE` wipe on a Hetzner node: it boots the old user data.
 
+Seen on node11 (2026-09-17): the user volume partition reports `mounted or in use` before
+the reboot even with the kubelet stopped, so the drop happens after the reboot instead: the
+volume comes up `failed: block dev type mismatch: xfs != luks` (harmless), then apply the
+config without the `UserVolumeConfig`, wipe, apply the full config, and it provisions
+encrypted in seconds. EPHEMERAL also holds the Tailscale state: the node rejoins the
+tailnet as a new device with a new address (`talconfig.yaml` `ipAddress`, the rendered
+talosconfig, `~/.claude/CLAUDE.md`, and the old device to delete in the console).
+
 ## Gotchas
 
 - All nodes are control planes. etcd, kubelet and Cilium's VXLAN run on the WireGuard mesh

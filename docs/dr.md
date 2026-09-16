@@ -51,8 +51,12 @@ break-glass copy in `secrets/break-glass.sops.yaml` (`backup_encryption`). Lose 
   the restored claim within seconds (it carries the tracking annotation); include
   `persistentvolumes` in `includedResources` or the claim keeps its dead `volumeName`; never
   pre-create the claim, Velero then skips the data. Strip the tracking annotation from the
-  restored claim before sync resumes. An identity change on the auth server needs a fresh
-  `tsh login` and the agent state Secret deleted.
+  restored claim before sync resumes. Delete the Deployment first (ArgoCD paused): the
+  restored pod carries the ReplicaSet owner reference, the ReplicaSet counts it as surplus
+  and kills it before the data lands, while the Deployment's own pod grabs the empty claim
+  and mints a fresh cluster identity (2026-09-17, twice). Velero runs one restore at a time;
+  a stuck InProgress one needs its finalizer removed before the next starts. An identity
+  change on the auth server needs a fresh `tsh login` and the agent state Secret deleted.
 - `unorouter-logs` is written by Vector under `vector/<source>/node=<node>/date=<day>/`, gzip
   ndjson, never overwritten.
 
