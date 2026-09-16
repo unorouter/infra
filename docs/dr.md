@@ -57,6 +57,9 @@ break-glass copy in `secrets/break-glass.sops.yaml` (`backup_encryption`). Lose 
   and mints a fresh cluster identity (2026-09-17, twice). Velero runs one restore at a time;
   a stuck InProgress one needs its finalizer removed before the next starts. An identity
   change on the auth server needs a fresh `tsh login` and the agent state Secret deleted.
+  After the restore the operator may log `unowned Resource '<role>' already exists` for the
+  git-managed roles: label them `teleport.dev/origin: kubernetes` (`tctl get roles/<r>`, add
+  the label, `tctl create -f --force`) and the reconciler goes quiet.
 - `unorouter-logs` is written by Vector under `vector/<source>/node=<node>/date=<day>/`, gzip
   ndjson, never overwritten.
 
