@@ -1,3 +1,7 @@
+# Encrypted at rest (LUKS2, key derived from the VM UUID, 2026-09-17): covers a disk copied
+# away from the VM, not the provider holding the VM. Inert on a provisioned volume, it takes
+# effect when the volume is re-provisioned (docs/operations.md "Encryption"). STATE stays
+# plain until a node is replaced: Hetzner user data cannot change on a live server.
 # Partitions on the install disk next to Talos's own: the local-path volume for every PVC on
 # the node, and 4 GiB of host swap.
 apiVersion: v1alpha1
@@ -10,6 +14,12 @@ provisioning:
   grow: true
 filesystem:
   type: xfs
+encryption:
+  provider: luks2
+  keys:
+    - slot: 0
+      nodeID: {}
+
 ---
 apiVersion: v1alpha1
 kind: SwapVolumeConfig
@@ -19,6 +29,12 @@ provisioning:
     match: system_disk
   minSize: 4GiB
   maxSize: 4GiB
+encryption:
+  provider: luks2
+  keys:
+    - slot: 0
+      nodeID: {}
+
 ---
 # Without a cap EPHEMERAL grows over the whole disk at install and the two volumes above never
 # get a partition (seen on the proof: "not enough space"). Install time only. EPHEMERAL holds
@@ -34,3 +50,8 @@ provisioning:
   minSize: 40GiB
   maxSize: 60GiB
   grow: false
+encryption:
+  provider: luks2
+  keys:
+    - slot: 0
+      nodeID: {}
