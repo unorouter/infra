@@ -59,7 +59,7 @@ nodes:
           - TS_EXTRA_ARGS=--accept-dns=false
           - TS_TAILSCALED_EXTRA_ARGS=--port=41641
   - hostname: unorouter-node12
-    ipAddress: 100.90.244.49
+    ipAddress: 100.72.240.97
     controlPlane: true
     installDisk: /dev/sda
     networkInterfaces:
