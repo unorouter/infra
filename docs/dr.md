@@ -46,7 +46,7 @@ break-glass copy in `secrets/break-glass.sops.yaml` (`backup_encryption`). Lose 
 - `unorouter-velero`: unlocked (Kopia must delete and rewrite, velero-io/velero#8686), versioning
   is its protection. Velero backs up no Secrets (ESO, cert-manager and CNPG recreate them, the
   canaries and pg-s3 pairs have `secrets/k8s.sops.yaml`) and only PVs annotated
-  `backup.velero.io/backup-volumes` (Teleport auth data, Grafana storage). Restoring one
+  `backup.velero.io/backup-volumes` (Teleport auth data, Grafana storage, the uno-import browser profile). Restoring one
   claim (2026-09-16): pause `automated` on `root` and the owning app first, or ArgoCD prunes
   the restored claim within seconds (it carries the tracking annotation); include
   `persistentvolumes` in `includedResources` or the claim keeps its dead `volumeName`; never
