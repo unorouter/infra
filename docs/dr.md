@@ -34,6 +34,14 @@ encrypts client side with rclone crypt: content only, names in clear, the cipher
 any provider as is. Key: OpenBao `secret/backup-encryption` (`crypt_password`, `crypt_salt`),
 break-glass copy in `secrets/break-glass.sops.yaml` (`backup_encryption`). Lose the pair, lose every object.
 
+API keys in `tokens` are sealed by new-api itself (`model/token_crypto.go`, 2026-09-17):
+`key_hash` (HMAC with `TOKEN_KEY_PEPPER`) is what a request authenticates against, `key_enc`
+(AES-256-GCM with `TOKEN_KEY_ENC_KEY`) is what the dashboard reveal and the chat BFF open. Both
+values live in OpenBao `secret/newapi-env`, break-glass copy in `secrets/break-glass.sops.yaml`
+(`token_key_crypto`). They are part of a database restore: a restored `newapi-pg` with a
+different pepper authenticates nobody, with a different enc key it reveals nothing. new-api
+refuses to start without them.
+
 ### Buckets (`tofu/buckets.tf`)
 
 - `unorouter-backups`: Object Lock COMPLIANCE 30 d. `unorouter-logs`: COMPLIANCE 90 d. Nothing
