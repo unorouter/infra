@@ -85,8 +85,11 @@ tailnet as a new device with a new address (`talconfig.yaml` `ipAddress`, the re
 talosconfig, `~/.claude/CLAUDE.md`, and the old device to delete in the console).
 node12 went the same way on 2026-09-17 (Grafana restored from Velero with the Deployment
 deleted for the restore, Prometheus history dropped, Loki and Alertmanager re-provisioned).
-node13 holds OpenBao: its roll needs the unseal keys at hand, so the VeraCrypt volume with
-the break-glass age key must be mounted before the drain, not after.
+node13 (2026-09-17): OpenBao's PodDisruptionBudget blocks the kubectl drain, the graceful
+reset evicts it anyway after the timeout; the fresh claim came back with `dr.sh restore`
+(snapshot taken minutes before) and `dr.sh unseal`, both need the VeraCrypt volume with the
+break-glass age key mounted before the drain, not after. All three nodes are encrypted;
+every PV on the cluster is now local-type.
 
 ## Gotchas
 
