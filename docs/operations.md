@@ -52,7 +52,7 @@ theirs) or the running system. `STATE` (machine config, cluster secrets) can onl
 at install time, so on an existing node it lands with a reinstall in place: Hetzner's
 `rebuild` action takes `image` plus `user_data`, the server keeps its id, address, WireGuard
 peer and VM UUID (rehearsed on a spare 2026-09-17, steps under "STATE through a rebuild").
-node11 done 2026-09-17, node12 and node13 pending. `talosctl -n <node> get volumestatus`
+node11 and node12 done 2026-09-17, node13 pending. `talosctl -n <node> get volumestatus`
 shows `luks2` in the encryption column; a volume without it has not been re-provisioned yet.
 
 The block is inert on a provisioned volume. Rolling one node (about an hour, one node per
@@ -122,10 +122,14 @@ Same evacuation as above, then a reinstall instead of the EPHEMERAL reset (node1
    token (`invalid bearer token`, Velero restore `asked for the client to provide
    credentials`) until the normal config is applied again. Do that the moment the node shows
    up in `etcd members`, not at the end.
-6. Uncordon BEFORE deleting the node-pinned claims (CNPG replicas, caches), otherwise the
-   new instances land on the other nodes and two instances of one cluster share a node.
-   A Retain PV (`teleport`) stays `Released` after its claim is deleted: delete the PV too
-   or the Velero restore fails.
+6. Uncordon before deleting the node-pinned claims (CNPG replicas, caches). That is not
+   enough for CNPG: `podAntiAffinityType: preferred` still put the new `newapi-pg` replica
+   next to another instance twice. Check `kubectl get pods -n databases -o wide`; if two
+   instances share a node, cordon the other two nodes for a minute, delete the replica's
+   claim, join job and pod, uncordon once it is scheduled. A PV left `Released` (Retain, or
+   Delete with its node gone) blocks a Velero restore of the same claim: delete it first.
+   Singletons cost a few seconds each when they move (`newapi-redis`: 12 s of redis
+   connect errors, about 45 requests); move each one once, onto a node that is already done.
 7. Restore the Velero claims (`docs/dr.md`), restart the Teleport proxies and
    `teleport-app-access-0`, resume ArgoCD automation, new tailnet address as in the notes above.
 
