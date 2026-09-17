@@ -98,9 +98,11 @@ every PV on the cluster is now local-type.
 Same evacuation as above, then a reinstall instead of the EPHEMERAL reset (node11,
 2026-09-17, about 25 minutes from power off to four `luks2` volumes and Teleport back):
 
-1. `kubectl cnpg promote` the primaries away FIRST, cordon after. Cordoning a node that
-   holds a primary makes CNPG fail over at once, both clusters in the same second: ten
-   seconds of `failed to connect` and about 225 requests answered 500 (17:44:38 to 17:44:47).
+1. A `newapi-pg` switchover is never free: about ten seconds of `failed to connect` in
+   new-api and 130 to 230 requests answered 500 by day (17:44:38 and 17:09:17 on
+   2026-09-17, promote before or after the cordon makes no difference; by night it hides
+   inside a 5xx share gate). Spend it once: park the primary on a node that is already done
+   and leave it there for the remaining rolls. `bot-pg` only affects the bot.
 2. Evict the serving pods one by one behind the gate, drain, delete the Teleport auth
    Deployment with ArgoCD automation paused on `root` and `teleport` (node11).
    With Teleport down the Grafana tunnels are gone: gate on
