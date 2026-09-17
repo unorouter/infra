@@ -175,12 +175,13 @@ ArgoCD, monitoring), every pod.
 
 ## Encrypted volumes
 
-`EPHEMERAL`, swap and the local-path volume are LUKS2 with a key derived from the VM UUID
+`STATE` (after the node's rebuild), `EPHEMERAL`, swap and the local-path volume are LUKS2 with a key derived from the VM UUID
 (`docs/operations.md` "Encryption at rest"). A Hetzner snapshot booted on another server, a
 rescue-mode copy or a pulled disk is refused with `encryption key rejected` and the node
 stays in maintenance; that is the intended outcome, not a fault. Recovery of such a node is
 the normal path: fresh server, config as user data, etcd from the snapshot bucket, CNPG from
-WAL. A Hetzner rebuild or resize of the same server keeps the UUID and unlocks.
+WAL. A resize of the same server keeps the UUID and unlocks; a rebuild keeps the UUID too
+(checked 2026-09-17) but overwrites the disk, so it is a reinstall with the same key.
 
 ## Node swap (zero downtime)
 

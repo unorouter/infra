@@ -48,13 +48,11 @@ rendered manifests and the Delete reclaim policy takes the data with it (Telepor
 LUKS2 with a key derived from the VM UUID (`nodeID`, `talos/patches/volumes.yaml`,
 2026-09-17). That covers a disk read away from the VM: a decommissioned drive, a leaked
 snapshot, a rescue-mode copy. It does not cover the provider holding the VM (the UUID is
-theirs) or the running system. `STATE` (machine config, cluster secrets) is still plain: it can
-only be encrypted at install time. Hetzner cannot change user data on a running server, but
-its `rebuild` action takes `image` plus `user_data`, so a node can be reinstalled in place
-(same server, same address, same WireGuard peer) with a config that adds `VolumeConfig
-STATE` and the same `encryption` block. That is the full per node roll below once more,
-with a rebuild instead of the EPHEMERAL reset, and needs a rehearsal on a spare first (the
-VM UUID must survive the rebuild for `nodeID`). Not done yet. `talosctl -n <node> get volumestatus`
+theirs) or the running system. `STATE` (machine config, cluster secrets) can only be encrypted
+at install time, so on an existing node it lands with a reinstall in place: Hetzner's
+`rebuild` action takes `image` plus `user_data`, the server keeps its id, address, WireGuard
+peer and VM UUID (rehearsed on a spare 2026-09-17, steps under "STATE through a rebuild").
+node11 done 2026-09-17, node12 and node13 pending. `talosctl -n <node> get volumestatus`
 shows `luks2` in the encryption column; a volume without it has not been re-provisioned yet.
 
 The block is inert on a provisioned volume. Rolling one node (about an hour, one node per
@@ -94,6 +92,40 @@ reset evicts it anyway after the timeout; the fresh claim came back with `dr.sh 
 (snapshot taken minutes before) and `dr.sh unseal`, both need the VeraCrypt volume with the
 break-glass age key mounted before the drain, not after. All three nodes are encrypted;
 every PV on the cluster is now local-type.
+
+### STATE through a rebuild
+
+Same evacuation as above, then a reinstall instead of the EPHEMERAL reset (node11,
+2026-09-17, about 25 minutes from power off to four `luks2` volumes and Teleport back):
+
+1. `kubectl cnpg promote` the primaries away FIRST, cordon after. Cordoning a node that
+   holds a primary makes CNPG fail over at once, both clusters in the same second: ten
+   seconds of `failed to connect` and about 225 requests answered 500 (17:44:38 to 17:44:47).
+2. Evict the serving pods one by one behind the gate, drain, delete the Teleport auth
+   Deployment with ArgoCD automation paused on `root` and `teleport` (node11).
+   With Teleport down the Grafana tunnels are gone: gate on
+   `curl https://api.unorouter.com/api/status` plus `kubectl logs` of the new-api pods.
+   By day the 503 share is upstream channel noise (5 to 15 %): gate on 500/502/504 and on
+   `failed to connect|SQLSTATE` lines instead.
+3. `talosctl reset --graceful --reboot=false` (leaves etcd, powers off), wait for `off`.
+4. `POST /servers/<id>/actions/rebuild` with `{"image": "<os=talos snapshot id>",
+   "user_data": "<rendered config>"}` on stdin. Send the config WITHOUT the
+   `UserVolumeConfig` document: on a fresh disk the growing user volume takes all free
+   space before swap gets its partition (`s-swap failed: not enough space`), and a mounted
+   user volume cannot be dropped without a reboot. Once `s-swap` is ready, apply the full
+   config and the user volume provisions behind it.
+5. node11 only: the rebuild config carries `cluster.controlPlane.endpoint:
+   https://10.200.0.12:6443` so the fresh install does not dial itself. Talos derives
+   `--service-account-issuer` from the endpoint, so that apiserver rejects every cluster
+   token (`invalid bearer token`, Velero restore `asked for the client to provide
+   credentials`) until the normal config is applied again. Do that the moment the node shows
+   up in `etcd members`, not at the end.
+6. Uncordon BEFORE deleting the node-pinned claims (CNPG replicas, caches), otherwise the
+   new instances land on the other nodes and two instances of one cluster share a node.
+   A Retain PV (`teleport`) stays `Released` after its claim is deleted: delete the PV too
+   or the Velero restore fails.
+7. Restore the Velero claims (`docs/dr.md`), restart the Teleport proxies and
+   `teleport-app-access-0`, resume ArgoCD automation, new tailnet address as in the notes above.
 
 ## Gotchas
 
