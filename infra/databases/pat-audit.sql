@@ -76,7 +76,9 @@ CREATE TRIGGER evidence_pat_insert AFTER INSERT ON public.users
 -- Add object audit for credential reads and changes; statement and parameter
 -- logging remain disabled in the cluster parameters.
 GRANT SELECT (access_token), UPDATE (access_token) ON public.users TO auditor;
-GRANT SELECT ("key") ON public.tokens TO auditor;
+-- tokens.key is gone (2026-09-17): API keys are stored sealed, key_enc is the column that
+-- still opens to a usable key, so that is the read worth an audit line.
+GRANT SELECT (key_enc) ON public.tokens TO auditor;
 GRANT SELECT ON public.pat_change_audit TO auditor;
 -- The app owns users for migrations. Prevent it disabling/removing these two
 -- triggers while allowing ordinary column/index migrations. Superuser access
