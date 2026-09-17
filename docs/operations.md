@@ -83,6 +83,10 @@ config without the `UserVolumeConfig`, wipe, apply the full config, and it provi
 encrypted in seconds. EPHEMERAL also holds the Tailscale state: the node rejoins the
 tailnet as a new device with a new address (`talconfig.yaml` `ipAddress`, the rendered
 talosconfig, `~/.claude/CLAUDE.md`, and the old device to delete in the console).
+node12 went the same way on 2026-09-17 (Grafana restored from Velero with the Deployment
+deleted for the restore, Prometheus history dropped, Loki and Alertmanager re-provisioned).
+node13 holds OpenBao: its roll needs the unseal keys at hand, so the VeraCrypt volume with
+the break-glass age key must be mounted before the drain, not after.
 
 ## Gotchas
 
