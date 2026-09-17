@@ -1,7 +1,7 @@
 # Encrypted at rest (LUKS2, key derived from the VM UUID, 2026-09-17): covers a disk copied
 # away from the VM, not the provider holding the VM. Inert on a provisioned volume, it takes
 # effect when the volume is re-provisioned (docs/operations.md "Encryption"). STATE stays
-# plain until a node is replaced: Hetzner user data cannot change on a live server.
+# plain: install time only, so it needs a Hetzner rebuild with new user data (docs/operations.md).
 # Partitions on the install disk next to Talos's own: the local-path volume for every PVC on
 # the node, and 4 GiB of host swap.
 apiVersion: v1alpha1

@@ -48,9 +48,13 @@ rendered manifests and the Delete reclaim policy takes the data with it (Telepor
 LUKS2 with a key derived from the VM UUID (`nodeID`, `talos/patches/volumes.yaml`,
 2026-09-17). That covers a disk read away from the VM: a decommissioned drive, a leaked
 snapshot, a rescue-mode copy. It does not cover the provider holding the VM (the UUID is
-theirs) or the running system. `STATE` (machine config, cluster secrets) stays plain: it can
-only be encrypted with a fresh install and Hetzner user data is immutable, so it comes with
-the next node swap (`talos/README.md` "A new node"). `talosctl -n <node> get volumestatus`
+theirs) or the running system. `STATE` (machine config, cluster secrets) is still plain: it can
+only be encrypted at install time. Hetzner cannot change user data on a running server, but
+its `rebuild` action takes `image` plus `user_data`, so a node can be reinstalled in place
+(same server, same address, same WireGuard peer) with a config that adds `VolumeConfig
+STATE` and the same `encryption` block. That is the full per node roll below once more,
+with a rebuild instead of the EPHEMERAL reset, and needs a rehearsal on a spare first (the
+VM UUID must survive the rebuild for `nodeID`). Not done yet. `talosctl -n <node> get volumestatus`
 shows `luks2` in the encryption column; a volume without it has not been re-provisioned yet.
 
 The block is inert on a provisioned volume. Rolling one node (about an hour, one node per
