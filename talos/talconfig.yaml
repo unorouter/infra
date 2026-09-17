@@ -28,7 +28,7 @@ patches:
   - "@./patches/firewall.yaml"
 nodes:
   - hostname: unorouter-node11
-    ipAddress: 100.122.24.22
+    ipAddress: 100.64.134.123
     controlPlane: true
     installDisk: /dev/sda
     networkInterfaces:
