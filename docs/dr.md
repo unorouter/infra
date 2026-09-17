@@ -40,7 +40,10 @@ API keys in `tokens` are sealed by new-api itself (`model/token_crypto.go`, 2026
 values live in OpenBao `secret/newapi-env`, break-glass copy in `secrets/break-glass.sops.yaml`
 (`token_key_crypto`). They are part of a database restore: a restored `newapi-pg` with a
 different pepper authenticates nobody, with a different enc key it reveals nothing. new-api
-refuses to start without them.
+refuses to start without them. The plaintext column `tokens.key` was dropped on 2026-09-17: never
+deploy a new-api image older than `1dc9f84ea`, the ones before `94a307223` authenticate by
+that column and would reject every key. Backups from before that day still hold the
+plaintext until the bucket lifecycle removes them (31 d).
 
 ### Buckets (`tofu/buckets.tf`)
 
