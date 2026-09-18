@@ -457,7 +457,16 @@ spec:
     - name: unorouter.sync
       rules:
         - alert: NewApiSyncJobFailed
-          expr: max by (job_name) (kube_job_status_failed{namespace="services", job_name=~"new-api-sync.*"}) > 0
+          # Bounded to jobs started in the last 8h. A failed Job only leaves
+          # failedJobsHistoryLimit when a NEWER failure displaces it, never on a
+          # success, so the bare metric kept firing on runs two days old and every
+          # page listed six "failures" of which one was current.
+          expr: >-
+            max by (job_name) (
+              (kube_job_status_failed{namespace="services", job_name=~"new-api-sync.*"} > 0)
+              and on (namespace, job_name)
+              ((time() - kube_job_status_start_time{namespace="services"}) < 8 * 3600)
+            )
           for: 1m
           labels: { severity: warning }
           annotations:
@@ -465,8 +474,8 @@ spec:
             description: >-
               `kubectl -n services logs job/{{ $labels.job_name }}` and read the
               `[pricing-audit]` block at the end: healed entries, dropped entries, and
-              models on enabled channels that carry no price. Clears when the
-              failed Job ages out of failedJobsHistoryLimit.
+              models on enabled channels that carry no price. Clears 8h after the
+              failed Job started, or sooner once the Job object is deleted.
 
     # 2026-09-07: option maps rewritten from an empty base while the gateway rolled.
     # Channels and abilities stayed intact, so the site showed 30 models and 0 free
