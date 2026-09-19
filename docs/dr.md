@@ -45,6 +45,13 @@ deploy a new-api image older than `1dc9f84ea`, the ones before `94a307223` authe
 that column and would reject every key. Backups from before that day still hold the
 plaintext until the bucket lifecycle removes them (31 d).
 
+Provider keys in `channels` are sealed the same way since 2026-09-20 (`model/channel_crypto.go`):
+`key_enc` is AES-256-GCM of the key text with `CHANNEL_KEY_ENC_KEY` (OpenBao `secret/newapi-env`,
+break-glass copy `channel_key_crypto`). No hash: nothing looks a channel up by its key. A restored
+database with a different enc key has channels that open nothing, and every provider key must
+be re-entered. The plaintext column `channels.key` was dropped the same day: never deploy a new-api
+image older than `c7cb25598`, it maps that column.
+
 ### Buckets (`tofu/buckets.tf`)
 
 - `unorouter-backups`: Object Lock COMPLIANCE 30 d. `unorouter-logs`: COMPLIANCE 90 d. Nothing
