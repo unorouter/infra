@@ -21,11 +21,8 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
   `pat-audit-archive`) speak only to Alertmanager through `pollers/watch-lib.yaml`
   (`notify.digest` info, `notify.alert` critical). No poller holds the Discord webhook.
 - **Responders** are Alertmanager webhook receivers, one Deployment each: `edge-mode` flips the
-  Cloudflare zone into attack mode on `CloudflaredStreamFlood` and back 30 min after resolve;
-  `canary-quarantine` checks every pod create in `services` for the honeytoken Secret
-  `credential-canary-v1`, logs `SECURITY_EVIDENCE`, posts a critical alert and with
-  `AUTO_QUARANTINE=true` isolates the pod. Detect in a rule, route in Alertmanager, act in a
-  responder; never a log tailer.
+  Cloudflare zone into attack mode on `CloudflaredStreamFlood` and back 30 min after resolve.
+  Detect in a rule, route in Alertmanager, act in a responder; never a log tailer.
 - **Routing is drop-by-default**: root receiver `null`; critical and warning reach Discord
   through `alerting/ntfy-bridge.yaml` (severity-coloured embeds, one log line per delivery),
   critical also pages the phone via ntfy. Test with `amtool alert add` in the alertmanager pod.
@@ -39,8 +36,8 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
   verb="create"`. Vector health is `infra/loki/rules.yaml`.
 - etcd targets come from node discovery (`scrape/etcd.yaml`, port 2381 on the mesh address).
   Backup freshness reads the `Backup` CRs via kube-state-metrics (the plugin's own metric is 0).
-- dex clients, blackbox config and the ConfigMap code of ntfy-bridge, edge-mode and
-  canary-quarantine are read at boot: `rollout restart` after a change, ArgoCD only updates the
+- dex clients, blackbox config and the ConfigMap code of ntfy-bridge and edge-mode are read
+  at boot: `rollout restart` after a change, ArgoCD only updates the
   ConfigMap.
 
 ## Cloudflare edge

@@ -94,10 +94,9 @@ customConfig:
           else if starts_with(key, "services_unorouter-bot-") { "bot" }
           else if starts_with(key, "databases_newapi-pg-") { "postgres" }
           else if starts_with(key, "teleport_teleport-") { "teleport" }
-          else if starts_with(key, "monitoring_canary-quarantine-") { "responder" }
           else { abort }
         msg = string(.message) ?? ""
-        app_family = family == "gateway" || family == "bot" || family == "responder"
+        app_family = family == "gateway" || family == "bot"
         # the gateway writes hundreds of lines a second, a substring test beats parsing each one
         if app_family && !contains(msg, "security.") { abort }
         if family == "postgres" && !contains(msg, "\"audit\"") { abort }

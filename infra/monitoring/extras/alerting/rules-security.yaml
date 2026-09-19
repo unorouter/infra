@@ -200,26 +200,6 @@ spec:
             description: >-
               Ten or more rejections of one credential from one outside address in 5m. Below that
               it is almost always a user with an expired session and is not worth a page.
-    - name: newapi.security.honeytoken
-      rules:
-        - alert: HoneytokenUsed
-          expr: cnpg_newapi_honeytoken_hits_count > 0
-          for: 0m
-          # Warning, not critical: the bait does not work, so a use is intelligence
-          # about who is harvesting, not damage in progress. Discord only.
-          labels: { severity: warning }
-          annotations:
-            summary: "A bait systemAccessToken was used ({{ $value }} request(s) in 5m)"
-            description: >-
-              A credential that was never issued to anyone was just presented to the
-              gateway. Somebody harvested it and is testing whether it works. It does
-              not, but they only learn they are being watched if you tell them. Get the
-              address with
-              `SELECT to_timestamp(created_at), ip, other::jsonb->'op'->'params'->>'path'
-              FROM logs WHERE type=3 AND other LIKE '%%"credential_fingerprint"%%'
-              AND created_at > extract(epoch from now())::bigint - 900`
-              and correlate it against every other row from that ip before deciding
-              whether to block or keep watching.
 
     # Customer API keys read by a credential that does not own them. The discriminator
     # is OWNERSHIP, not the credential type: a user reading back their own keys with a
@@ -574,7 +554,7 @@ spec:
         # legitimately vanish while idle, because a GROUP BY over zero rows produces no
         # series at all -- using one of those here would page every quiet night.
         - alert: SecurityMetricsMissing
-          expr: absent(cnpg_newapi_channel_key_reads_count) or absent(cnpg_newapi_admin_logins_total_count) or absent(cnpg_newapi_security_denials_total_count) or absent(cnpg_newapi_denials_from_new_ip_offending_ips) or absent(cnpg_newapi_privilege_probes_pat_route_count) or absent(cnpg_newapi_honeytoken_hits_count) or absent(cnpg_newapi_root_pat_from_new_network_count) or absent(cnpg_newapi_registrations_total_5m) or absent(cnpg_newapi_abuse_accounts_5m)
+          expr: absent(cnpg_newapi_channel_key_reads_count) or absent(cnpg_newapi_admin_logins_total_count) or absent(cnpg_newapi_security_denials_total_count) or absent(cnpg_newapi_denials_from_new_ip_offending_ips) or absent(cnpg_newapi_privilege_probes_pat_route_count) or absent(cnpg_newapi_root_pat_from_new_network_count) or absent(cnpg_newapi_registrations_total_5m) or absent(cnpg_newapi_abuse_accounts_5m)
           for: 1h
           labels: { severity: warning }
           annotations:

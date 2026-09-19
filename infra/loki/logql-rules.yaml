@@ -202,8 +202,7 @@ data:
       # so the signal is a workload identity reading a Secret outside its own namespace, or a
       # token minted by something that is not a node or a controller. Same names and the same
       # source label as the retired DaemonSet, so the routes are unchanged: exec and secret reads
-      # by anyone but the owner's own Teleport identity page the phone. The archive is Vector's,
-      # canary containment is alerting/canary-quarantine.yaml, fed by K8sCanaryWorkload below.
+      # by anyone but the owner's own Teleport identity page the phone. The archive is Vector's.
       - name: k8s-audit
         interval: 1m
         rules:
@@ -464,27 +463,6 @@ data:
             labels: { severity: critical, source: k8s-audit-watch }
             annotations:
               summary: "Job {{ $labels.objectRef_name }} created in services by {{ $labels.actor }}"
-          # Trigger for alerting/canary-quarantine.yaml. Metadata audit: the body is not in the
-          # log, so the responder lists services pods and checks the canary reference itself.
-          # severity none and source loki-trigger match only the responder route.
-          - alert: K8sCanaryWorkload
-            expr: >-
-              sum by (objectRef_name, objectRef_uid, user_username) (
-                count_over_time(
-                  {job="k8s-audit"}
-                    | json
-                    | stage="ResponseComplete"
-                    | verb="create"
-                    | objectRef_resource="pods"
-                    | objectRef_subresource=""
-                    | objectRef_namespace="services"
-                    | responseStatus_code="201"
-                  [2m]
-                )
-              ) > 0
-            labels: { severity: none, source: loki-trigger }
-            annotations:
-              summary: "pod created in services: {{ $labels.objectRef_name }} by {{ $labels.user_username }}"
 
       # Application security events the bot and the responder log as JSON lines.
       - name: apps
@@ -508,22 +486,6 @@ data:
             labels: { severity: warning, source: loki }
             annotations:
               summary: "Discord message {{ $labels.message_id }} has no matching request in {{ $labels.pod }}; confirm the bot account sent it"
-          - alert: QuarantineApplied
-            expr: >-
-              sum by (pod_name, outcome) (
-                count_over_time(
-                  {namespace="monitoring", app="canary-quarantine"}
-                    |= "security.canary_workload"
-                    | regexp "SECURITY_EVIDENCE (?P<payload>.*)"
-                    | line_format "{{.payload}}"
-                    | json
-                    | outcome!=""
-                  [5m]
-                )
-              ) > 0
-            labels: { severity: critical, source: loki }
-            annotations:
-              summary: "canary pod {{ $labels.pod_name }} in services: containment={{ $labels.outcome }}"
           # The gateway auto-disabled lanes 1,300 times an hour during the Sep 3 to 10
           # churn; with cooldowns in place anything near that is a regression.
           - alert: GatewayDisableStorm
