@@ -28,36 +28,6 @@ REVOKE pg_read_all_data FROM reader;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM reader;
 
 GRANT SELECT ON public._bak_attacker_sessions_20260827 TO reader;
-GRANT SELECT ON public._bak_blank_group_20260827 TO reader;
--- public._bak_chi_channels_20260827: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public._bak_chi_channels_20260827 TO reader;
--- public._bak_duck_channels_20260827: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public._bak_duck_channels_20260827 TO reader;
--- public._bak_duck_channels_20260827b: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public._bak_duck_channels_20260827b TO reader;
--- public._bak_easy_channels_20260827: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public._bak_easy_channels_20260827 TO reader;
--- public._bak_fish_channels_20260827: withholding key
-GRANT SELECT ("id", "name", "tag", "status", "models", "group", "base_url") ON public._bak_fish_channels_20260827 TO reader;
--- public._bak_gg_channels_20260827: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public._bak_gg_channels_20260827 TO reader;
--- public._bak_held_tokens_20260827: withholding key
-GRANT SELECT ("id", "user_id", "status", "name", "created_time", "accessed_time", "expired_time", "remain_quota", "unlimited_quota", "model_limits_enabled", "model_limits", "allow_ips", "used_quota", "group", "cross_group_retry", "deleted_at", "group_mapping", "auto_groups") ON public._bak_held_tokens_20260827 TO reader;
--- public._bak_noncrit_tokens_20260827: withholding key
-GRANT SELECT ("id", "user_id", "status", "name", "created_time", "accessed_time", "expired_time", "remain_quota", "unlimited_quota", "model_limits_enabled", "model_limits", "allow_ips", "used_quota", "group", "cross_group_retry", "deleted_at", "group_mapping", "auto_groups") ON public._bak_noncrit_tokens_20260827 TO reader;
--- public._bak_open1_keys_20260827: withholding key
-GRANT SELECT ("id", "name", "status") ON public._bak_open1_keys_20260827 TO reader;
--- public._bak_pol_channels_20260827: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public._bak_pol_channels_20260827 TO reader;
--- public._bak_pw_20260827: withholding password
-GRANT SELECT ("id", "username", "auth_version") ON public._bak_pw_20260827 TO reader;
--- public._bak_root_pat_20260827: withholding access_token
-GRANT SELECT ("id", "username", "backed_up_at") ON public._bak_root_pat_20260827 TO reader;
--- public._bak_stolen_tokens_20260827: withholding key
-GRANT SELECT ("id", "user_id", "status", "name", "created_time", "accessed_time", "expired_time", "remain_quota", "unlimited_quota", "model_limits_enabled", "model_limits", "allow_ips", "used_quota", "group", "cross_group_retry", "deleted_at", "group_mapping", "auto_groups") ON public._bak_stolen_tokens_20260827 TO reader;
--- public._bak_tokens_4167_20260827: withholding key
-GRANT SELECT ("id", "user_id", "status", "name", "created_time", "accessed_time", "expired_time", "remain_quota", "unlimited_quota", "model_limits_enabled", "model_limits", "allow_ips", "used_quota", "group", "cross_group_retry", "deleted_at", "group_mapping", "auto_groups") ON public._bak_tokens_4167_20260827 TO reader;
-GRANT SELECT ON public._bak_user_setting_20260826 TO reader;
 GRANT SELECT ON public._incident_20260827_noface2003 TO reader;
 GRANT SELECT ON public.abil_grp_backup TO reader;
 GRANT SELECT ON public.abilities TO reader;
@@ -68,27 +38,9 @@ GRANT SELECT ON public.casbin_rule TO reader;
 GRANT SELECT ON public.chan_grp_backup TO reader;
 GRANT SELECT ON public.chan_tag_backup TO reader;
 GRANT SELECT ON public.channel_diagnostics TO reader;
--- public.channels: withholding key
+-- public.channels: withholding key_enc (sealed provider keys, opened only by the gateway)
 GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels TO reader;
--- public.channels_backup_20260814_glmcut: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_backup_20260814_glmcut TO reader;
--- public.channels_backup_20260818_chatdupes: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_backup_20260818_chatdupes TO reader;
--- public.channels_backup_20260818_glmcg_retire: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_backup_20260818_glmcg_retire TO reader;
 GRANT SELECT ON public.channels_backup_20260819_vxinterval TO reader;
--- public.channels_backup_20260820_vxcut: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_backup_20260820_vxcut TO reader;
--- public.channels_backup_duck_20260815: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_backup_duck_20260815 TO reader;
--- public.channels_deleted_backup_20260812: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_deleted_backup_20260812 TO reader;
--- public.channels_deleted_backup_20260813: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_deleted_backup_20260813 TO reader;
--- public.channels_deleted_backup_20260813_dead: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_deleted_backup_20260813_dead TO reader;
--- public.channels_deleted_backup_20260813_exhausted: withholding key
-GRANT SELECT ("id", "type", "open_ai_organization", "test_model", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "other", "balance", "balance_updated_time", "models", "group", "used_quota", "model_mapping", "status_code_mapping", "priority", "auto_ban", "other_info", "tag", "setting", "param_override", "header_override", "remark", "channel_info", "settings", "workflow_templates") ON public.channels_deleted_backup_20260813_exhausted TO reader;
 GRANT SELECT ON public.channels_setting_backup_20260814 TO reader;
 GRANT SELECT ON public.checkins TO reader;
 -- public.custom_oauth_providers: withholding client_secret
