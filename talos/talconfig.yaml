@@ -49,6 +49,8 @@ nodes:
               endpoint: ${WG_NODE13_ENDPOINT}:51820
               persistentKeepaliveInterval: 25s
               allowedIPs: [10.200.0.13/32, 10.42.2.0/24]
+            - publicKey: ${WG_NODE14_PUBLIC}
+              allowedIPs: [10.200.0.14/32, 10.42.3.0/24]
     talosImageURL: factory.talos.dev/installer/4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b
     extensionServices:
       - name: tailscale
@@ -80,6 +82,8 @@ nodes:
               endpoint: ${WG_NODE13_ENDPOINT}:51820
               persistentKeepaliveInterval: 25s
               allowedIPs: [10.200.0.13/32, 10.42.2.0/24]
+            - publicKey: ${WG_NODE14_PUBLIC}
+              allowedIPs: [10.200.0.14/32, 10.42.3.0/24]
     talosImageURL: factory.talos.dev/installer/4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b
     nodeLabels:
       unorouter.com/monitoring: "true"
@@ -113,12 +117,49 @@ nodes:
               endpoint: ${WG_NODE12_ENDPOINT}:51820
               persistentKeepaliveInterval: 25s
               allowedIPs: [10.200.0.12/32, 10.42.1.0/24]
+            - publicKey: ${WG_NODE14_PUBLIC}
+              allowedIPs: [10.200.0.14/32, 10.42.3.0/24]
     talosImageURL: factory.talos.dev/installer/4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b
     extensionServices:
       - name: tailscale
         environment:
           - TS_AUTHKEY=${TS_AUTHKEY}
           - TS_HOSTNAME=unorouter-node13
+          - TS_USERSPACE=false
+          - TS_EXTRA_ARGS=--accept-dns=false
+          - TS_TAILSCALED_EXTRA_ARGS=--port=41641
+  - hostname: unorouter-node14
+    ipAddress: unorouter-node14.taild195fa.ts.net
+    controlPlane: true
+    installDisk: /dev/sda
+    networkInterfaces:
+      - interface: eth0
+        dhcp: true
+      - interface: wg0
+        addresses: [10.200.0.14/24]
+        mtu: 1420
+        wireguard:
+          privateKey: ${WG_NODE14_PRIVATE}
+          listenPort: 51820
+          peers:
+            - publicKey: ${WG_NODE11_PUBLIC}
+              endpoint: ${WG_NODE11_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.11/32, 10.42.0.0/24]
+            - publicKey: ${WG_NODE12_PUBLIC}
+              endpoint: ${WG_NODE12_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.12/32, 10.42.1.0/24]
+            - publicKey: ${WG_NODE13_PUBLIC}
+              endpoint: ${WG_NODE13_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.13/32, 10.42.2.0/24]
+    talosImageURL: factory.talos.dev/installer/4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b
+    extensionServices:
+      - name: tailscale
+        environment:
+          - TS_AUTHKEY=${TS_AUTHKEY}
+          - TS_HOSTNAME=unorouter-node14
           - TS_USERSPACE=false
           - TS_EXTRA_ARGS=--accept-dns=false
           - TS_TAILSCALED_EXTRA_ARGS=--port=41641

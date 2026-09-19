@@ -54,6 +54,9 @@ ingress:
   - subnet: ${WG_NODE11_ENDPOINT}/32
   - subnet: ${WG_NODE12_ENDPOINT}/32
   - subnet: ${WG_NODE13_ENDPOINT}/32
+  # node14 has no known endpoint until the sniper buys it; WireGuard never answers an
+  # unauthenticated packet, so the open rule is inert. Narrow it once the address is known.
+  - subnet: 0.0.0.0/0
 ---
 # talosctl and the break-glass kubeconfig from the tailnet.
 apiVersion: v1alpha1
