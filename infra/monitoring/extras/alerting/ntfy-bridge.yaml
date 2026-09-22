@@ -110,8 +110,8 @@ data:
       return out;
     }
 
-    async function describe(p, alerts) {
-      const firing = p.status === "firing";
+    async function describe(p, alerts, status) {
+      const firing = status === "firing";
       const sev = firing ? (p.commonLabels?.severity ?? "info") : "resolved";
       const name = p.commonLabels?.alertname ?? "alert";
       const title = firing ? `${EMOJI[sev] ?? "🔵"} [${sev.toUpperCase()}] ${name}` : `${EMOJI.resolved} [RESOLVED] ${name}`;
@@ -120,36 +120,51 @@ data:
       return { firing, sev, name, title, plain, count: alerts.length, lines: await summaries(alerts) };
     }
 
+    // A group stays "firing" while any member fires, so a member that just resolved rides in a
+    // firing payload: split by each alert's own status or it posts under the warning title.
+    function byStatus(alerts) {
+      return ["firing", "resolved"]
+        .map((status) => [status, alerts.filter((a) => (a.status ?? "firing") === status)])
+        .filter(([, list]) => list.length > 0);
+    }
+
     async function toNtfy(p, alerts) {
-      const d = await describe(p, alerts);
-      return fetch(ntfyUrl, {
-        method: "POST",
-        headers: {
-          Title: d.plain,
-          // urgent = ntfy max priority: repeated alarm sound, overrides DND in the app
-          Priority: d.firing ? "urgent" : "default",
-          Tags: d.firing ? "rotating_light" : "white_check_mark",
-        },
-        body: d.lines.join("\n") || d.name,
-      });
+      let r;
+      for (const [status, list] of byStatus(alerts)) {
+        const d = await describe(p, list, status);
+        r = await fetch(ntfyUrl, {
+          method: "POST",
+          headers: {
+            Title: d.plain,
+            // urgent = ntfy max priority: repeated alarm sound, overrides DND in the app
+            Priority: d.firing ? "urgent" : "default",
+            Tags: d.firing ? "rotating_light" : "white_check_mark",
+          },
+          body: d.lines.join("\n") || d.name,
+        });
+      }
+      return r;
     }
 
     async function toDiscord(p, alerts) {
-      const d = await describe(p, alerts);
       const labels = p.commonLabels ?? {};
       const footer = [labels.source, labels.node, labels.namespace].filter(Boolean).join(" · ");
-      const body = d.lines.join("\n").slice(0, 3800);
-      const embed = {
-        title: d.title.slice(0, 256),
-        description: body ? "```\n" + body + "\n```" : undefined,
-        color: COLOR[d.sev] ?? COLOR.info,
-        footer: footer ? { text: footer + (d.count > 1 ? ` · ${d.count} alerts` : "") } : undefined,
-        timestamp: new Date().toISOString(),
-      };
+      const embeds = [];
+      for (const [status, list] of byStatus(alerts)) {
+        const d = await describe(p, list, status);
+        const body = d.lines.join("\n").slice(0, 3800);
+        embeds.push({
+          title: d.title.slice(0, 256),
+          description: body ? "```\n" + body + "\n```" : undefined,
+          color: COLOR[d.sev] ?? COLOR.info,
+          footer: footer ? { text: footer + (d.count > 1 ? ` · ${d.count} alerts` : "") } : undefined,
+          timestamp: new Date().toISOString(),
+        });
+      }
       return fetch(discordUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ embeds: [embed], allowed_mentions: { parse: [] } }),
+        body: JSON.stringify({ embeds, allowed_mentions: { parse: [] } }),
       });
     }
 
@@ -190,7 +205,7 @@ spec:
     metadata:
       labels: { app: ntfy-bridge }
       # node reads server.mjs once at start: bump with every ConfigMap change so ArgoCD rolls the pod
-      annotations: { config-rev: "2" }
+      annotations: { config-rev: "3" }
     spec:
       containers:
         - name: bridge
