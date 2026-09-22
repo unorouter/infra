@@ -462,7 +462,7 @@ spec:
           # success, so the bare metric kept firing on runs two days old and every
           # page listed six "failures" of which one was current.
           expr: >-
-            max by (job_name) (
+            max by (job_name, reason) (
               (kube_job_status_failed{namespace="services", job_name=~"new-api-sync.*"} > 0)
               and on (namespace, job_name)
               ((time() - kube_job_status_start_time{namespace="services"}) < 8 * 3600)
@@ -470,11 +470,11 @@ spec:
           for: 1m
           labels: { severity: warning }
           annotations:
-            summary: "sync job {{ $labels.job_name }} failed"
+            summary: "sync job {{ $labels.job_name }} {{ if eq $labels.reason \"DeadlineExceeded\" }}ran past its deadline{{ else }}exited with errors{{ end }}"
             description: >-
-              `kubectl -n services logs job/{{ $labels.job_name }}` and read the
-              `[pricing-audit]` block at the end: healed entries, dropped entries, and
-              models on enabled channels that carry no price. Clears 8h after the
+              The ntfy-bridge quotes the Job's own ERROR lines (or, after a deadline kill,
+              its last lines) under the summary. Full log:
+              `kubectl -n services logs job/{{ $labels.job_name }}`. Clears 8h after the
               failed Job started, or sooner once the Job object is deleted.
 
     # 2026-09-07: option maps rewritten from an empty base while the gateway rolled.

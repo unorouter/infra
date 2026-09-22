@@ -38,6 +38,7 @@ data:
 
     const ntfyUrl = process.env.NTFY_URL;
     const discordUrl = process.env.DISCORD_WEBHOOK;
+    const lokiUrl = process.env.LOKI_URL ?? "http://loki.monitoring.svc.cluster.local:3100";
 
     const COLOR = { critical: 0xe74c3c, warning: 0xf39c12, info: 0x3498db, resolved: 0x2ecc71 };
     const EMOJI = { critical: "🔴", warning: "🟠", info: "🔵", resolved: "✅" };
@@ -58,22 +59,69 @@ data:
       });
     }
 
-    function summaries(alerts) {
-      return alerts.map((a) => a.annotations?.summary || a.labels?.alertname).filter(Boolean);
+    async function lokiLines(query, limit) {
+      const params = new URLSearchParams({ query, limit: String(limit), direction: "backward", start: String((Date.now() - 12 * 3600e3) * 1e6) });
+      try {
+        const r = await fetch(`${lokiUrl}/loki/api/v1/query_range?${params}`, { signal: AbortSignal.timeout(5000) });
+        if (!r.ok) return [];
+        const j = await r.json();
+        return (j.data?.result ?? []).flatMap((s) => s.values ?? []).sort((a, b) => (a[0] < b[0] ? 1 : -1)).map((v) => v[1]);
+      } catch {
+        return [];
+      }
     }
 
-    function describe(p, alerts) {
+    // "healed 94 entries kept at last value: a, b, c, ..." keeps three names and a count
+    function shorten(line) {
+      const text = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/^\s*(ERROR|WARN|ℹ|✔)\s+/, "").trim();
+      const at = text.lastIndexOf(": ");
+      const names = at < 0 ? [] : text.slice(at + 2).split(", ");
+      const kept = names.length > 4 ? `${text.slice(0, at + 2)}${names.slice(0, 3).join(", ")} (+${names.length - 3} more)` : text;
+      return kept.slice(0, 220);
+    }
+
+    // A failed sync Job names only itself, and the why is in its own log: quote its newest
+    // ERROR lines, or when a deadline killed it mid-run, the last thing it printed.
+    async function syncJobDetail(job) {
+      if (!/^[a-z0-9-]+$/.test(job)) return [];
+      const pod = `{namespace="services", pod=~"${job}-.+"}`;
+      let lines = (await lokiLines(`${pod} |= "ERROR "`, 40)).filter((l) => !l.includes("Completed with errors"));
+      const out = [];
+      if (lines.length === 0) {
+        lines = await lokiLines(pod, 3);
+        if (lines.length > 0) out.push("last lines before it stopped:");
+      }
+      for (const l of lines) {
+        const s = shorten(l);
+        if (s && !out.includes(s)) out.push(s);
+        if (out.length === 5) break;
+      }
+      return out;
+    }
+
+    async function summaries(alerts) {
+      const out = [];
+      for (const a of alerts) {
+        const s = a.annotations?.summary || a.labels?.alertname;
+        if (s) out.push(s);
+        if (a.status === "firing" && a.labels?.alertname === "NewApiSyncJobFailed" && a.labels?.job_name)
+          for (const d of await syncJobDetail(a.labels.job_name)) out.push("  " + d);
+      }
+      return out;
+    }
+
+    async function describe(p, alerts) {
       const firing = p.status === "firing";
       const sev = firing ? (p.commonLabels?.severity ?? "info") : "resolved";
       const name = p.commonLabels?.alertname ?? "alert";
       const title = firing ? `${EMOJI[sev] ?? "🔵"} [${sev.toUpperCase()}] ${name}` : `${EMOJI.resolved} [RESOLVED] ${name}`;
       // HTTP header values are Latin-1: the emoji goes to Discord only, ntfy gets the tag
       const plain = firing ? `[${sev.toUpperCase()}] ${name}` : `[RESOLVED] ${name}`;
-      return { firing, sev, name, title, plain, lines: summaries(alerts) };
+      return { firing, sev, name, title, plain, count: alerts.length, lines: await summaries(alerts) };
     }
 
     async function toNtfy(p, alerts) {
-      const d = describe(p, alerts);
+      const d = await describe(p, alerts);
       return fetch(ntfyUrl, {
         method: "POST",
         headers: {
@@ -87,7 +135,7 @@ data:
     }
 
     async function toDiscord(p, alerts) {
-      const d = describe(p, alerts);
+      const d = await describe(p, alerts);
       const labels = p.commonLabels ?? {};
       const footer = [labels.source, labels.node, labels.namespace].filter(Boolean).join(" · ");
       const body = d.lines.join("\n").slice(0, 3800);
@@ -95,7 +143,7 @@ data:
         title: d.title.slice(0, 256),
         description: body ? "```\n" + body + "\n```" : undefined,
         color: COLOR[d.sev] ?? COLOR.info,
-        footer: footer ? { text: footer + (d.lines.length > 1 ? ` · ${d.lines.length} alerts` : "") } : undefined,
+        footer: footer ? { text: footer + (d.count > 1 ? ` · ${d.count} alerts` : "") } : undefined,
         timestamp: new Date().toISOString(),
       };
       return fetch(discordUrl, {
@@ -141,6 +189,8 @@ spec:
   template:
     metadata:
       labels: { app: ntfy-bridge }
+      # node reads server.mjs once at start: bump with every ConfigMap change so ArgoCD rolls the pod
+      annotations: { config-rev: "2" }
     spec:
       containers:
         - name: bridge

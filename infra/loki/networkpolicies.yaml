@@ -15,6 +15,7 @@ spec:
         - matchLabels: { app.kubernetes.io/name: grafana }
         - matchLabels: { app.kubernetes.io/name: vector }
         - matchLabels: { app.kubernetes.io/name: prometheus }
+        - matchLabels: { app: ntfy-bridge }
       toPorts:
         - ports: [{ port: "3100", protocol: TCP }]
     # kubelet readiness probe
@@ -85,6 +86,21 @@ metadata:
 spec:
   endpointSelector:
     matchLabels: { app.kubernetes.io/name: grafana }
+  egress:
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: loki }
+      toPorts:
+        - ports: [{ port: "3100", protocol: TCP }]
+---
+# The alert bridge quotes a failed sync Job's own error lines into its page.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ntfy-bridge-loki
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app: ntfy-bridge }
   egress:
     - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: loki }
