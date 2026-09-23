@@ -32,11 +32,15 @@ spec:
           annotations:
             summary: "loki answers 5xx to log pushes"
         - alert: LokiObjectStoreErrors
-          expr: sum(rate(loki_s3_request_duration_seconds_count{status_code!~"2.."}[5m])) > 0
+          # a query that hits its line limit cancels its in-flight chunk reads, which count as GetObject 500
+          expr: |
+            sum(rate(loki_s3_request_duration_seconds_count{operation!="S3.GetObject", status_code!~"2.."}[5m])) > 0
+            or (sum(rate(loki_s3_request_duration_seconds_count{operation="S3.GetObject", status_code!~"2.."}[15m])) > 0
+              unless sum(rate(loki_s3_request_duration_seconds_count{operation="S3.GetObject", status_code=~"2.."}[15m])) > 0)
           for: 10m
           labels: { severity: critical }
           annotations:
-            summary: "loki cannot reach unorouter-loki through the s3-gateway (non-2xx S3 requests for 10m)"
+            summary: "loki cannot reach unorouter-loki through the s3-gateway (S3 writes fail, or every read fails, for 10m)"
         - alert: LokiCompactorStale
           # the gauge is 0 until the first retention pass after a start
           expr: (time() - loki_compactor_apply_retention_last_successful_run_timestamp_seconds > 10800) and loki_compactor_apply_retention_last_successful_run_timestamp_seconds > 0
