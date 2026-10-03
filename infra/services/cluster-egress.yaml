@@ -1,0 +1,106 @@
+# The two egress rules every isolated namespace used to repeat in its own policies. Both
+# select by namespace list on purpose: kube-system, local-path-storage, cilium-secrets and
+# default carry no policies and must not start enforcing. A new isolated namespace goes into
+# both lists. The API server rule selects pods with their own ServiceAccount (the ones with
+# RBAC); a pod that has an SA but must not reach the API server goes into the NotIn.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: dns-egress
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: io.kubernetes.pod.namespace
+        operator: In
+        values: [argocd, cert-manager, cloudflared, cnpg-system, databases, dex, external-secrets, monitoring, openbao, s3-gateway, services, teleport, teleport-agent, uno-import, velero]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: apiserver-egress
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: io.kubernetes.pod.namespace
+        operator: In
+        values: [argocd, cert-manager, cloudflared, cnpg-system, databases, dex, external-secrets, monitoring, openbao, s3-gateway, services, teleport, teleport-agent, uno-import, velero]
+      - key: io.cilium.k8s.policy.serviceaccount
+        operator: NotIn
+        values: [default, argocd-repo-server, cloudflared, kps-alertmanager]
+  egress:
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
+# The Hetzner metadata service hands out each node's user_data, which is its full Talos machine
+# config (cluster CAs, Tailscale key). No pod has a reason to reach it. Deny only, so namespaces
+# without policies keep their default allow.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: metadata-egress-deny
+spec:
+  endpointSelector: {}
+  enableDefaultDeny:
+    egress: false
+    ingress: false
+  egressDeny:
+    - toCIDR:
+        - 169.254.169.254/32
+---
+# Pod traffic to another node is masqueraded to that node's mesh address, so the Talos firewall
+# admits it as node traffic: without this a pod in any namespace without policies reaches etcd
+# and trustd on the other nodes. No pod needs them (Cilium keeps identities in CRDs, Prometheus
+# scrapes etcd on 2381, the etcd backup uses apid on 50000). Node addresses match entities only,
+# never toCIDR. Deny only, so namespaces without policies keep their default allow.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: node-control-ports-deny
+spec:
+  endpointSelector: {}
+  enableDefaultDeny:
+    egress: false
+    ingress: false
+  egressDeny:
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports:
+            - { port: "2379", protocol: TCP }
+            - { port: "2380", protocol: TCP }
+            - { port: "50001", protocol: TCP }
+---
+# A namespace starts closed: DNS out, kubelet probes in, nothing else. Every namespace with
+# workloads already carries its own default-deny, so this changes only `default` and the ones
+# created later; their allows go into their own policies and, for the API server, into
+# apiserver-egress above. kube-system and local-path-storage stay open until their flows are
+# recorded. The Exists term keeps Cilium's health endpoints (no namespace label) out, which a
+# bare NotIn would select. DNS stays plain L4: a DNS L7 rule drops every query here (#46284).
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: namespace-default-deny
+spec:
+  endpointSelector:
+    matchExpressions:
+      - { key: io.kubernetes.pod.namespace, operator: Exists }
+      - { key: io.kubernetes.pod.namespace, operator: NotIn, values: [kube-system, local-path-storage] }
+  enableDefaultDeny:
+    egress: true
+    ingress: true
+  ingress:
+    - fromEntities: [host]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+            - { port: "53", protocol: TCP }

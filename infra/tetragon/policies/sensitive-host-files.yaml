@@ -1,0 +1,44 @@
+# A process inside a container opening node secrets or state on the host: the machine
+# secrets and state of Talos, etcd data, kubelet PKI and kubernetes config. Host
+# processes read these all day and are excluded through the mount namespace, the control
+# plane binaries by path (they run in their own mount namespaces), so a container only
+# matches when it reached the host filesystem, for example through hostPID and /proc/1/root.
+# Alert: infra/loki/logql-rules.yaml, group tetragon.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: sensitive-host-files
+spec:
+  kprobes:
+    - call: security_file_permission
+      syscall: false
+      args:
+        - index: 0
+          type: file
+        - index: 1
+          type: int
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: Prefix
+              values:
+                - /system/secrets
+                - /system/state
+                - /var/lib/etcd
+                - /var/lib/kubelet/pki
+                - /etc/kubernetes
+          matchNamespaces:
+            - namespace: Mnt
+              operator: NotIn
+              values: [host_ns]
+          # Talos runs etcd and the control plane in their own mount namespaces, reading their
+          # own certs and data all day. Excluded by path: a foreign binary at exactly this path
+          # inside a container would slip through, anything else still matches.
+          matchBinaries:
+            - operator: NotIn
+              values:
+                - /usr/local/bin/etcd
+                - /usr/local/bin/kube-apiserver
+                - /usr/local/bin/kube-controller-manager
+                - /usr/local/bin/kube-scheduler
+                - /usr/local/bin/kubelet

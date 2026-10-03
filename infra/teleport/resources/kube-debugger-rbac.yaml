@@ -1,0 +1,32 @@
+# Exec tier for the debuggers GitHub team: shell + port-forward into pods in the
+# services namespace ONLY. databases/openbao/monitoring stay unreachable. Read
+# access comes from the view ClusterRole via the readonly tier; this Role adds
+# just the interactive verbs. Applied via kubectl, recorded here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: teleport-debuggers
+  namespace: services
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  # No exec, no port-forward: either one dumps a pod's environment, and a pod
+  # in services carries the service secrets (2026-09-07).
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: teleport-debuggers
+  namespace: services
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: teleport-debuggers
+subjects:
+  - kind: Group
+    name: teleport-debuggers
+    apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,14 @@
+# Grafana data as a local-type PV so Velero's node-agent can read it (grafana.persistence.existingClaim).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: monitoring
+  annotations:
+    volumeType: local
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi

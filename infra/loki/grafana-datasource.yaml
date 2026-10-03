@@ -1,0 +1,22 @@
+# Picked up by Grafana's datasource sidecar. Name equals uid on purpose, see the note in
+# infra/monitoring/extras/grafana/postgres-datasource.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource-loki
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  loki.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://loki.monitoring.svc.cluster.local:3100
+        editable: false
+        jsonData:
+          maxLines: 1000
+          timeout: 60

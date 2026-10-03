@@ -1,0 +1,99 @@
+# ESO: pull S3 creds from Vault -> create newapi-pg-s3 / bot-pg-s3 k8s Secrets.
+# Replaces hand-applied secrets. On DR, ESO recreates these once Vault is up.
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: vault-backend
+spec:
+  provider:
+    vault:
+      server: http://openbao.openbao.svc:8200
+      path: secret
+      version: v2
+      auth:
+        kubernetes:
+          mountPath: kubernetes
+          role: eso
+          serviceAccountRef:
+            name: external-secrets
+            namespace: external-secrets
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-reader
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: newapi-pg-reader
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: newapi-pg-reader
+---
+# Grafana's datasource role. Separate from newapi-pg-reader because reader is cert-only
+# for Teleport and pg_hba is first-match-wins: one role cannot serve a cert client and a
+# password client. The role itself is declared in new-api/k8s/pg.yaml with
+# inRoles: [reader], so the column masking is inherited rather than duplicated.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-grafana-reader
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: newapi-pg-grafana-reader
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: newapi-pg-grafana-reader
+---
+# client CA (own CA + Teleport db-client CA bundle) for newapi-pg cert auth; pair lives in
+# OpenBao (DR). cnpg.io/reload label makes the instance reload on change.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-client-ca
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: newapi-pg-client-ca
+    creationPolicy: Owner
+    template:
+      metadata:
+        labels:
+          cnpg.io/reload: ""
+  dataFrom:
+    - extract:
+        key: newapi-pg-client-ca
+---
+# The s3-gateway auth pair for barman (the gateway encrypts; CNPG talks plain S3 to it). Same
+# key names as the old per cluster secrets so the ObjectStore s3Credentials stay unchanged.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: s3gw
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: s3gw
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: s3gw

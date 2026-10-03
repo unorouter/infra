@@ -1,0 +1,41 @@
+# Runtime record of what runs on the nodes: every process started in any pod (arguments,
+# capabilities, host namespaces) and the TracingPolicies in policies/. The export goes to
+# stdout, where Vector ships it to Loki and the locked archive. kube-system and host
+# processes are exported too (the chart excludes both by default): privileged and host
+# namespace pods are exactly what needs a record.
+tetragon:
+  enableProcessCred: true
+  enableProcessNs: true
+  processAncestors:
+    enabled: base,kprobe
+  exportAllowList: |-
+    {"event_set":["PROCESS_EXEC", "PROCESS_KPROBE", "PROCESS_LSM"]}
+  exportDenyList: |-
+    {"health_check":true}
+  # protects Loki if something starts forking in a loop; about 100 events a second
+  exportRateLimit: 6000
+  # Arguments land in Loki and the Object Locked archive, so key shaped strings become *****
+  # before export (`bao operator unseal <key>` must not be kept 90 days), in this order:
+  # every long bao/vault argument; base64 of 38+ that does not continue a path (paths such as
+  # /proc/1/root/system/secrets stay readable); 32+ runs of the token alphabet (hex, JWT,
+  # API keys); the value after password, token, secret or key. A key whose first character
+  # is a slash can still leave a fragment outside bao (about 1 in 500).
+  redactionFilters: |-
+    {"binary_regex": ["(?:^|/)(bao|vault)$"], "redact": ["(\\S{16,})"]}
+    {"redact": ["(?:^|[^A-Za-z0-9+/])([A-Za-z0-9+][A-Za-z0-9+/]{37,}={0,2})"]}
+    {"redact": ["([A-Za-z0-9+=_.-]{32,})"]}
+    {"redact": ["(?i)(?:password|passwd|token|secret|apikey|api-key|key)(?:\\s+|=|:)(\\S+)"]}
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+tetragonOperator:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
+export:
+  mode: stdout
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 64Mi }
+tolerations:
+  - operator: Exists

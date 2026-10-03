@@ -1,0 +1,133 @@
+# talhelper input for the cluster. `talhelper genconfig` renders clusterconfig/*.yaml
+# (gitignored) from this file, talsecret.sops.yaml (cluster CA and tokens) and
+# talenv.sops.yaml (substitution variables), decrypting both itself. Endpoint: the first node's mesh address (nodes must reach it and
+# cannot resolve tailnet names); in-cluster clients go through KubePrism, the laptop reaches
+# kubectl through Teleport and talosctl by the tailnet addresses in ipAddress (the tailnet
+# names are SANs). Interfaces come from the Hetzner metadata (public) and DHCP, nothing
+# static here, except the WireGuard mesh: every node carries wg0 (10.200.0.0/24) with a
+# static peer list, and because any explicit link config switches off Talos's default DHCP,
+# the one physical NIC is listed with dhcp on, by selector (Talos 1.14 names it enp1s0,
+# 1.13 eth0). ${WG_*} and TS_AUTHKEY come from talenv.sops.yaml, never
+# from this file. node12 carries the monitoring label: Prometheus, Loki,
+# Grafana and Alertmanager pin to it because local-path volumes bind to one node forever.
+clusterName: unorouter
+# The config contract, not the running version: the nodes run 1.14.1. At 1.14 talhelper emits
+# KubeNetworkConfig, KubeProxyConfig and friends, which clash with the v1alpha1 cluster patches;
+# raise it together with moving those patches to the new documents. A rebuild from a render
+# installs this version and needs a talosctl upgrade afterwards.
+talosVersion: v1.13.10
+kubernetesVersion: v1.36.4
+endpoint: https://10.200.0.11:6443
+allowSchedulingOnControlPlanes: true
+cniConfig:
+  name: none
+additionalApiServerCertSans: &sans
+  - unorouter-node11.taild195fa.ts.net
+  - unorouter-node12.taild195fa.ts.net
+  - unorouter-node13.taild195fa.ts.net
+additionalMachineCertSans: *sans
+patches:
+  - "@./patches/cluster.yaml"
+  - "@./patches/machine.yaml"
+  - "@./patches/volumes.yaml"
+  - "@./patches/firewall.yaml"
+  - "@./patches/etcd-encryption.yaml"
+nodes:
+  - hostname: unorouter-node11
+    ipAddress: 100.64.134.123
+    controlPlane: true
+    installDisk: /dev/sda
+    networkInterfaces:
+      - deviceSelector:
+          physical: true
+        dhcp: true
+      - interface: wg0
+        addresses: [10.200.0.11/24]
+        mtu: 1420
+        wireguard:
+          privateKey: ${WG_NODE11_PRIVATE}
+          listenPort: 51820
+          peers:
+            - publicKey: ${WG_NODE12_PUBLIC}
+              endpoint: ${WG_NODE12_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.12/32, 10.42.1.0/24]
+            - publicKey: ${WG_NODE13_PUBLIC}
+              endpoint: ${WG_NODE13_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.13/32, 10.42.2.0/24]
+    talosImageURL: factory.talos.dev/installer/4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b
+    extensionServices:
+      - name: tailscale
+        environment:
+          - TS_AUTHKEY=${TS_AUTHKEY}
+          - TS_HOSTNAME=unorouter-node11
+          - TS_USERSPACE=false
+          - TS_EXTRA_ARGS=--accept-dns=false
+          - TS_TAILSCALED_EXTRA_ARGS=--port=41641
+  - hostname: unorouter-node12
+    ipAddress: 100.72.240.97
+    controlPlane: true
+    installDisk: /dev/sda
+    networkInterfaces:
+      - deviceSelector:
+          physical: true
+        dhcp: true
+      - interface: wg0
+        addresses: [10.200.0.12/24]
+        mtu: 1420
+        wireguard:
+          privateKey: ${WG_NODE12_PRIVATE}
+          listenPort: 51820
+          peers:
+            - publicKey: ${WG_NODE11_PUBLIC}
+              endpoint: ${WG_NODE11_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.11/32, 10.42.0.0/24]
+            - publicKey: ${WG_NODE13_PUBLIC}
+              endpoint: ${WG_NODE13_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.13/32, 10.42.2.0/24]
+    talosImageURL: factory.talos.dev/installer/4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b
+    nodeLabels:
+      unorouter.com/monitoring: "true"
+    extensionServices:
+      - name: tailscale
+        environment:
+          - TS_AUTHKEY=${TS_AUTHKEY}
+          - TS_HOSTNAME=unorouter-node12
+          - TS_USERSPACE=false
+          - TS_EXTRA_ARGS=--accept-dns=false
+          - TS_TAILSCALED_EXTRA_ARGS=--port=41641
+  - hostname: unorouter-node13
+    ipAddress: 100.121.127.46
+    controlPlane: true
+    installDisk: /dev/sda
+    networkInterfaces:
+      - deviceSelector:
+          physical: true
+        dhcp: true
+      - interface: wg0
+        addresses: [10.200.0.13/24]
+        mtu: 1420
+        wireguard:
+          privateKey: ${WG_NODE13_PRIVATE}
+          listenPort: 51820
+          peers:
+            - publicKey: ${WG_NODE11_PUBLIC}
+              endpoint: ${WG_NODE11_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.11/32, 10.42.0.0/24]
+            - publicKey: ${WG_NODE12_PUBLIC}
+              endpoint: ${WG_NODE12_ENDPOINT}:51820
+              persistentKeepaliveInterval: 25s
+              allowedIPs: [10.200.0.12/32, 10.42.1.0/24]
+    talosImageURL: factory.talos.dev/installer/4a0d65c669d46663f377e7161e50cfd570c401f26fd9e7bda34a0216b6f1922b
+    extensionServices:
+      - name: tailscale
+        environment:
+          - TS_AUTHKEY=${TS_AUTHKEY}
+          - TS_HOSTNAME=unorouter-node13
+          - TS_USERSPACE=false
+          - TS_EXTRA_ARGS=--accept-dns=false
+          - TS_TAILSCALED_EXTRA_ARGS=--port=41641

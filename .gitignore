@@ -1,0 +1,13 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+kubeconfig*
+*.dec.yaml
+*.dec.env
+.env
+BITWARDEN-*.txt
+talos/clusterconfig/
+talos/talsecret.yaml
+talos/talosconfig
+*.snapshot

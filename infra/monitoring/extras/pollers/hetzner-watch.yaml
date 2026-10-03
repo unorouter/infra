@@ -1,0 +1,121 @@
+# Pages within five minutes when someone acts on the Hetzner project outside a planned
+# change: a new server, a rebuild or rescue boot (both read the disk or boot other code on
+# a node), a root password reset, a snapshot, an ISO, a console, power actions, firewall
+# changes, a new SSH key. The Hetzner API names no actor, so every such action is news. The
+# token is read only (OpenBao secret/hetzner-watch, "hetzner-watch" in the console); the
+# Read & Write one lives in tofu/.env on the operator laptop only. Planned rebuilds and
+# node rolls page too: that is the point, they are rare and announced.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: hetzner-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: hetzner-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: HCLOUD_TOKEN
+      remoteRef: { key: hetzner-watch, property: token }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hetzner-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, urllib.request
+    from datetime import datetime, timedelta, timezone
+    import notify
+
+    API = "https://api.hetzner.cloud/v1"
+    TOKEN = os.environ["HCLOUD_TOKEN"]
+    SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
+    CRITICAL = {"create_server", "delete_server", "rebuild_server", "enable_rescue", "reset_password",
+                "create_image", "attach_iso", "request_console", "change_type", "change_protection",
+                "poweroff", "shutdown", "reset", "set_firewall_rules", "apply_firewall",
+                "remove_firewall", "delete_firewall", "create_firewall"}
+    since = datetime.now(timezone.utc) - timedelta(seconds=SINCE)
+
+    def get(path):
+        items, page = [], 1
+        while True:
+            sep = "&" if "?" in path else "?"
+            req = urllib.request.Request(f"{API}{path}{sep}per_page=50&page={page}", headers={"Authorization": "Bearer " + TOKEN})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                d = json.load(r)
+            key = [k for k in d if k != "meta"][0]
+            items += d[key]
+            nxt = (d.get("meta") or {}).get("pagination", {}).get("next_page")
+            if not nxt or page >= 5:
+                return items
+            page += 1
+
+    def recent(ts):
+        return ts and datetime.fromisoformat(ts.replace("Z", "+00:00")) >= since
+
+    names = {s["id"]: s["name"] for s in get("/servers")}
+    critical, info = [], []
+    for kind in ("servers", "firewalls", "primary_ips", "volumes", "networks", "load_balancers", "floating_ips"):
+        for a in get(f"/{kind}/actions?sort=started:desc"):
+            if not recent(a.get("started")):
+                continue
+            res = ", ".join(f"{r['type']} {names.get(r['id'], r['id'])}" for r in a.get("resources") or [])
+            line = f"{a['started'][11:19]}Z {a['command']} {res} ({a.get('status')})"
+            (critical if a["command"] in CRITICAL else info).append(line)
+    for k in get("/ssh_keys"):
+        if recent(k.get("created")):
+            critical.append(f"{k['created'][11:19]}Z new SSH key {k['name']} {k.get('fingerprint')}")
+    for img in get("/images?type=snapshot"):
+        if recent(img.get("created")):
+            critical.append(f"{img['created'][11:19]}Z new snapshot {img.get('description')} from server {names.get(img.get('created_from', {}).get('id'), '?')}")
+
+    if critical:
+        notify.alert("HetznerProjectAction", "hetzner: " + "; ".join(critical[:10]))
+    if info:
+        notify.digest("HetznerProjectActivity", "hetzner activity (last %ds)" % SINCE, info[:25])
+    print(f"critical={len(critical)} info={len(info)} servers={len(names)}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hetzner-watch
+  namespace: monitoring
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.14-alpine@sha256:2e740b2c28a426e74f11396c05e38afb3191acced75045b8d62df573c1dc8ce8
+              command: ["python3", "-u", "/app/watch.py"]
+              envFrom: [{ secretRef: { name: hetzner-watch } }]
+              env:
+                - name: WATCH_NAME
+                  value: hetzner-watch
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
+          volumes:
+            - name: app
+              configMap: { name: hetzner-watch }
+            - name: lib
+              configMap: { name: watch-lib }

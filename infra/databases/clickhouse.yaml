@@ -1,0 +1,391 @@
+# ClickHouse: the gateway's log store (new-api LOG_SQL_DSN). Postgres keeps every other table.
+# Recent parts sit on the local volume; parts older than the gateway's move window go to the
+# unorouter-clickhouse bucket through an `encrypted` disk (AES-256-CTR, key in OpenBao
+# secret/clickhouse cold_key_hex), so Hetzner only ever holds ciphertext. That key is the only
+# way to read the cold tier: losing it loses every moved part, the backups below do not need it.
+#
+# The cold tier talks to Hetzner directly, not through the s3-gateway: merges and TTL moves make
+# many small reads, writes and deletes that the gateway's write cache is not built for. The
+# bucket is unlocked and unversioned because ClickHouse deletes replaced parts itself.
+#
+# Users: admin (entrypoint, access management), gateway (new-api: create, insert, alter on
+# new_api_logs) and reader (read only). default is removed. Backups: see the CronJob below.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: clickhouse
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: clickhouse
+    creationPolicy: Owner
+  data:
+    - { secretKey: CLICKHOUSE_PASSWORD, remoteRef: { key: clickhouse, property: admin_password } }
+    - { secretKey: CH_GATEWAY_PASSWORD, remoteRef: { key: clickhouse, property: gateway_password } }
+    - { secretKey: CH_READER_PASSWORD, remoteRef: { key: clickhouse, property: reader_password } }
+    - { secretKey: CH_COLD_KEY, remoteRef: { key: clickhouse, property: cold_key_hex } }
+    - { secretKey: CH_COLD_ACCESS_KEY_ID, remoteRef: { key: pg-s3, property: ACCESS_KEY_ID } }
+    - { secretKey: CH_COLD_SECRET_ACCESS_KEY, remoteRef: { key: pg-s3, property: ACCESS_SECRET_KEY } }
+    - { secretKey: CH_BACKUP_ACCESS_KEY_ID, remoteRef: { key: s3gw, property: ACCESS_KEY_ID } }
+    - { secretKey: CH_BACKUP_SECRET_ACCESS_KEY, remoteRef: { key: s3gw, property: ACCESS_SECRET_KEY } }
+    - { secretKey: NEWAPI_PG_DICT_PASSWORD, remoteRef: { key: newapi-pg-clickhouse-dict, property: password } }
+---
+# Password of the clickhouse_dict Postgres role (new-api/k8s/pg.yaml managed.roles).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: newapi-pg-clickhouse-dict
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: newapi-pg-clickhouse-dict
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/basic-auth
+  dataFrom:
+    - extract:
+        key: newapi-pg-clickhouse-dict
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse
+  namespace: databases
+data:
+  storage.xml: |
+    <clickhouse>
+      <storage_configuration>
+        <disks>
+          <s3cold>
+            <type>s3</type>
+            <endpoint>https://fsn1.your-objectstorage.com/unorouter-clickhouse/prod/</endpoint>
+            <access_key_id from_env="CH_COLD_ACCESS_KEY_ID"/>
+            <secret_access_key from_env="CH_COLD_SECRET_ACCESS_KEY"/>
+            <region>fsn1</region>
+            <metadata_path>/var/lib/clickhouse/disks/s3cold/</metadata_path>
+          </s3cold>
+          <s3cache>
+            <type>cache</type>
+            <disk>s3cold</disk>
+            <path>/var/lib/clickhouse/s3cache/</path>
+            <max_size>4Gi</max_size>
+          </s3cache>
+          <cold>
+            <type>encrypted</type>
+            <disk>s3cache</disk>
+            <path>data/</path>
+            <algorithm>AES_256_CTR</algorithm>
+            <key_hex from_env="CH_COLD_KEY"/>
+          </cold>
+          <!-- s3_plain keeps real object names, so a backup restores without this pod's metadata -->
+          <backups>
+            <type>s3_plain</type>
+            <endpoint>https://s3.unorouter.com/unorouter-backups/clickhouse/</endpoint>
+            <access_key_id from_env="CH_BACKUP_ACCESS_KEY_ID"/>
+            <secret_access_key from_env="CH_BACKUP_SECRET_ACCESS_KEY"/>
+            <region>fsn1</region>
+          </backups>
+        </disks>
+        <policies>
+          <!-- the first volume must be called default to switch an existing table onto this policy -->
+          <tiered>
+            <volumes>
+              <default><disk>default</disk></default>
+              <cold><disk>cold</disk></cold>
+            </volumes>
+          </tiered>
+        </policies>
+      </storage_configuration>
+      <backups>
+        <allowed_disk>backups</allowed_disk>
+      </backups>
+    </clickhouse>
+  server.xml: |
+    <clickhouse>
+      <logger>
+        <level>warning</level>
+        <console>1</console>
+      </logger>
+      <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
+      <!-- ZSTD over the default LZ4: the log text compresses about 11x instead of 7x -->
+      <compression>
+        <case>
+          <method>zstd</method>
+          <level>3</level>
+        </case>
+      </compression>
+      <!-- newapi-pg replicas through the column-scoped clickhouse_dict role; password stays out of DDL -->
+      <named_collections>
+        <newapi_pg>
+          <host>newapi-pg-ro.databases.svc.cluster.local</host>
+          <port>5432</port>
+          <database>newapi</database>
+          <user>clickhouse_dict</user>
+          <password from_env="NEWAPI_PG_DICT_PASSWORD"/>
+        </newapi_pg>
+      </named_collections>
+      <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>9363</port>
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+      </prometheus>
+      <!-- system logs have no TTL by default and would outgrow the log data itself -->
+      <query_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></query_log>
+      <query_thread_log remove="remove"/>
+      <query_views_log remove="remove"/>
+      <part_log><ttl>event_date + INTERVAL 14 DAY DELETE</ttl></part_log>
+      <trace_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></trace_log>
+      <metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></metric_log>
+      <asynchronous_metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></asynchronous_metric_log>
+      <text_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></text_log>
+      <error_log><ttl>event_date + INTERVAL 14 DAY DELETE</ttl></error_log>
+      <processors_profile_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></processors_profile_log>
+      <latency_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></latency_log>
+      <backup_log><ttl>event_date + INTERVAL 90 DAY DELETE</ttl></backup_log>
+    </clickhouse>
+  users.xml: |
+    <clickhouse>
+      <profiles>
+        <reader>
+          <readonly>2</readonly>
+          <max_execution_time>120</max_execution_time>
+          <max_memory_usage>2000000000</max_memory_usage>
+        </reader>
+      </profiles>
+      <users>
+        <default remove="remove"/>
+        <gateway>
+          <password from_env="CH_GATEWAY_PASSWORD"/>
+          <networks><ip>::/0</ip></networks>
+          <profile>default</profile>
+          <quota>default</quota>
+          <grants>
+            <query>GRANT SELECT, INSERT, CREATE TABLE, ALTER, OPTIMIZE ON new_api_logs.*</query>
+          </grants>
+        </gateway>
+        <reader>
+          <password from_env="CH_READER_PASSWORD"/>
+          <networks><ip>::/0</ip></networks>
+          <profile>reader</profile>
+          <quota>default</quota>
+          <grants>
+            <query>GRANT SELECT ON new_api_logs.*</query>
+          </grants>
+        </reader>
+      </users>
+    </clickhouse>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: databases
+spec:
+  selector: { app: clickhouse }
+  ports:
+    - { name: native, port: 9000, targetPort: 9000 }
+    - { name: http, port: 8123, targetPort: 8123 }
+    - { name: metrics, port: 9363, targetPort: 9363 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: databases
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels: { app: clickhouse }
+  template:
+    metadata:
+      labels: { app: clickhouse }
+      annotations:
+        # the local volume is restorable from the nightly ClickHouse backup; Velero would copy it twice
+        backup.velero.io/backup-volumes-excludes: data
+    spec:
+      automountServiceAccountToken: false
+      # the volume is local-path: the first schedule pins it to this node for good
+      nodeSelector: { kubernetes.io/hostname: unorouter-node11 }
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:25.8.33.6
+          env:
+            - { name: CLICKHOUSE_USER, value: admin }
+            - { name: CLICKHOUSE_DB, value: new_api_logs }
+            - { name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1" }
+          envFrom:
+            - secretRef: { name: clickhouse }
+          ports:
+            - { name: native, containerPort: 9000 }
+            - { name: http, containerPort: 8123 }
+            - { name: metrics, containerPort: 9363 }
+          readinessProbe:
+            httpGet: { path: /ping, port: 8123 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /ping, port: 8123 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 250m, memory: 1Gi }
+            limits: { memory: 4Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/clickhouse }
+            - { name: config, mountPath: /etc/clickhouse-server/config.d/storage.xml, subPath: storage.xml }
+            - { name: config, mountPath: /etc/clickhouse-server/config.d/server.xml, subPath: server.xml }
+            - { name: config, mountPath: /etc/clickhouse-server/users.d/users.xml, subPath: users.xml }
+      volumes:
+        - name: config
+          configMap: { name: clickhouse }
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests: { storage: 30Gi }
+---
+# Nightly backup through the s3-gateway into the locked unorouter-backups bucket (crypt there,
+# 30 day lock, 31 day expiry). The first run of each ISO week writes a full backup; the other
+# nights are incremental on that week's full, so no chain outlives the bucket's expiry.
+# Restore: RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<day or full>').
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: clickhouse-backup
+  namespace: databases
+spec:
+  # after the newapi-pg base backup (03:00, about 90 min) has left the gateway
+  schedule: "15 5 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 10800
+      template:
+        metadata:
+          labels: { app: clickhouse-backup }
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            runAsNonRoot: true
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: backup
+              image: clickhouse/clickhouse-server:25.8.33.6
+              env:
+                - name: CLICKHOUSE_PASSWORD
+                  valueFrom: { secretKeyRef: { name: clickhouse, key: CLICKHOUSE_PASSWORD } }
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  q() { clickhouse-client --host clickhouse --user admin --password "$CLICKHOUSE_PASSWORD" --query "$1"; }
+                  week=new_api_logs/$(date -u +%G-W%V); day=$(date -u +%F)
+                  # cold parts are stored decrypted: a restore must not depend on the cold tier key
+                  plain="decrypt_files_from_encrypted_disks = 1"
+                  # an incremental needs this week's full; the first night of a week has none yet
+                  if q "BACKUP DATABASE new_api_logs TO Disk('backups', '$week/$day') SETTINGS $plain, base_backup = Disk('backups', '$week/full')"; then
+                    echo "incremental $week/$day done"
+                  else
+                    q "BACKUP DATABASE new_api_logs TO Disk('backups', '$week/full') SETTINGS $plain"
+                    echo "full $week/full done"
+                  fi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { memory: 256Mi }
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: clickhouse
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: { app: clickhouse }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api }
+        - matchLabels: { io.kubernetes.pod.namespace: databases, app: clickhouse-backup }
+      toPorts:
+        - ports: [{ port: "9000", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "9363", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8123", protocol: TCP }]
+  egress:
+    # Hetzner Object Storage for the cold tier; no FQDN rules on this cluster (DNS proxy)
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
+      toPorts:
+        - ports: [{ port: "8443", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: clickhouse-backup
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: { app: clickhouse-backup }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, app: clickhouse }
+      toPorts:
+        - ports: [{ port: "9000", protocol: TCP }]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: clickhouse
+  namespace: databases
+spec:
+  selector:
+    matchLabels: { app: clickhouse }
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 60s

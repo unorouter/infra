@@ -1,0 +1,51 @@
+# Follows apid on all three nodes into stdout, where Vector ships it to Loki and the locked
+# archive. apid logs every Talos API call with its method and the caller's role
+# (talos-role=os:admin, os:etcd:backup, ...); the kube-apiserver audit log never sees these.
+# The talosconfig in Secret talos-apid-reader is minted with
+# `talosctl config new --roles os:reader` (created by hand like talos-etcd-backup): it reads
+# logs and redacted resources, never secrets or files. Re-mint it after a Talos CA rotation.
+# Alerts: infra/loki/logql-rules.yaml, group talos.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: talos-apid-log
+  namespace: kube-system
+  labels: { app: talos-apid-log }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: talos-apid-log }
+  template:
+    metadata:
+      labels: { app: talos-apid-log }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: follow
+          image: ghcr.io/siderolabs/talosctl:v1.13.10@sha256:3116f64c97ddffb53bd3c5bf87c8614d99f04df4326177dbbb7702b5087f0e4d
+          # talosctl ends the stream when a node restarts; the pod restarts and follows again.
+          # --tail=0: a replayed history line would land in Loki as a new call and page again.
+          args:
+            - --talosconfig=/talos/talosconfig
+            - --endpoints=10.200.0.11,10.200.0.12,10.200.0.13
+            - --nodes=10.200.0.11,10.200.0.12,10.200.0.13
+            - logs
+            - apid
+            - --follow
+            - --tail=0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 5m, memory: 24Mi }
+            limits: { memory: 96Mi }
+          volumeMounts: [{ name: talosconfig, mountPath: /talos, readOnly: true }]
+      volumes:
+        - name: talosconfig
+          secret: { secretName: talos-apid-reader }

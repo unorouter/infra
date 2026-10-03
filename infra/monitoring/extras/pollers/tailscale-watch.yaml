@@ -1,0 +1,129 @@
+# Pages the phone within five minutes when the tailnet changes in a way that needs the
+# operator: a device joins, a key or OAuth client is created, Tailnet Lock or the policy file
+# changes. Two checks per run:
+#   1. the configuration audit log of the last window (critical for the events above,
+#      Discord digest for the rest),
+#   2. the device list against EXPECTED_DEVICES, re-raised every run while a stranger stays.
+# The OAuth client (read only, OpenBao secret/tailscale-watch) mints a token each run; its
+# own token events are skipped.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: tailscale-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: tailscale-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: TS_CLIENT_ID
+      remoteRef: { key: tailscale-watch, property: client_id }
+    - secretKey: TS_CLIENT_SECRET
+      remoteRef: { key: tailscale-watch, property: client_secret }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tailscale-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, urllib.parse, urllib.request
+    from datetime import datetime, timedelta, timezone
+    import notify
+
+    API = "https://api.tailscale.com/api/v2"
+    CLIENT_ID = os.environ["TS_CLIENT_ID"]
+    SINCE = int(os.environ.get("SINCE_SECONDS", "330"))
+    EXPECTED = {h.strip() for h in os.environ.get("EXPECTED_DEVICES", "").split(",") if h.strip()}
+
+    def call(path, token=None, data=None):
+        headers = {"Authorization": "Bearer " + token} if token else {}
+        body = urllib.parse.urlencode(data).encode() if data else None
+        req = urllib.request.Request(API + path, data=body, headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.load(r)
+
+    token = call("/oauth/token", data={"client_id": CLIENT_ID, "client_secret": os.environ["TS_CLIENT_SECRET"]})["access_token"]
+
+    now = datetime.now(timezone.utc)
+    fmt = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
+    q = urllib.parse.urlencode({"start": fmt(now - timedelta(seconds=SINCE)), "end": fmt(now)})
+    logs = call(f"/tailnet/-/logging/configuration?{q}", token).get("logs") or []
+
+    critical, info = {}, []
+    for e in logs:
+        actor = e.get("actor") or {}
+        if actor.get("id") == CLIENT_ID:
+            continue
+        target = e.get("target") or {}
+        kind, action, prop = target.get("type", "?"), e.get("action", "?"), target.get("property") or ""
+        who = actor.get("loginName") or actor.get("displayName") or actor.get("type") or "?"
+        line = f"{e.get('eventTime', '')[11:19]}Z {action} {kind}{('.' + prop) if prop else ''} {target.get('name') or target.get('id') or ''} by {who} via {e.get('origin', '?')}"
+        if kind == "NODE" and action in ("CREATE", "APPROVE"):
+            critical.setdefault("TailscaleDeviceAdded", []).append(line)
+        elif kind in ("API_KEY", "OAUTH_CLIENT") and action == "CREATE":
+            critical.setdefault("TailscaleKeyCreated", []).append(line)
+        elif kind == "TAILNET" or (kind == "USER" and action in ("CREATE", "UPDATE", "APPROVE")):
+            critical.setdefault("TailscaleTailnetChanged", []).append(line)
+        else:
+            info.append(line)
+
+    for name, lines in critical.items():
+        notify.alert(name, "tailscale: " + "; ".join(lines[:10]))
+    if info:
+        notify.digest("TailscaleActivity", "tailscale activity (last %ds)" % SINCE, info[:25])
+
+    devices = call("/tailnet/-/devices", token).get("devices") or []
+    strangers = [d for d in devices if EXPECTED and d.get("hostname") not in EXPECTED]
+    if strangers:
+        notify.alert("TailscaleUnknownDevice", "unknown tailnet device(s): " + "; ".join(
+            f"{d.get('hostname')} {(d.get('addresses') or ['?'])[0]} tags={','.join(d.get('tags') or []) or '-'} os={d.get('os')} created={d.get('created')}"
+            for d in strangers[:10]))
+    print(f"events={len(logs)} critical={sum(len(v) for v in critical.values())} devices={len(devices)} strangers={len(strangers)}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tailscale-watch
+  namespace: monitoring
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.14-alpine@sha256:2e740b2c28a426e74f11396c05e38afb3191acced75045b8d62df573c1dc8ce8
+              command: ["python3", "-u", "/app/watch.py"]
+              envFrom: [{ secretRef: { name: tailscale-watch } }]
+              env:
+                - name: WATCH_NAME
+                  value: tailscale-watch
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
+                # hostnames as the tailnet reports them; a new node goes here in the same commit
+                - name: EXPECTED_DEVICES
+                  value: arch-laptop,netcup-don,unorouter-node11,unorouter-node12,unorouter-node13
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
+          volumes:
+            - name: app
+              configMap: { name: tailscale-watch }
+            - name: lib
+              configMap: { name: watch-lib }

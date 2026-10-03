@@ -1,0 +1,71 @@
+# Custom CNPG metrics for the model catalog the gateway actually exposes.
+#
+# 2026-09-07: a sync run read the option maps from a gateway pod that was mid-restart,
+# got an empty base, and wrote back only the groups its own config knew. AutoGroups
+# went 1825 -> 220, UserUsableGroups 2345 -> 220, ModelPrice 219 -> 0. The channels and
+# abilities were untouched, so nothing existing alerted: the site showed 30 models and
+# 0 free for two hours until a user noticed. These series measure what users see
+# (models with an enabled ability in a group the options still know) and the size of
+# every option map the sync writes, so the same failure pages within minutes.
+#
+# Wired into the cluster via monitoring.customQueriesConfigMap in new-api/k8s/pg.yaml.
+# Metric names: cnpg_newapi_catalog_models_{visible,enabled}{tier=free|paid} and
+# cnpg_newapi_catalog_options_entries{key=...}.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnpg-newapi-catalog
+  namespace: databases
+  labels:
+    cnpg.io/reload: "true"
+data:
+  queries: |
+    newapi_catalog_models:
+      query: |
+        WITH usable AS (
+          SELECT jsonb_object_keys(
+                   CASE WHEN value ~ '^\s*\{' THEN value::jsonb ELSE '{}'::jsonb END
+                 ) AS g
+          FROM options WHERE key = 'UserUsableGroups'
+        ),
+        en AS (SELECT DISTINCT model, "group" FROM abilities WHERE enabled),
+        vis AS (SELECT DISTINCT en.model FROM en JOIN usable u ON u.g = en."group")
+        SELECT t.tier,
+               (SELECT count(*) FROM vis
+                 WHERE (vis.model LIKE '%:free') = (t.tier = 'free'))::float8 AS visible,
+               (SELECT count(DISTINCT model) FROM en
+                 WHERE (model LIKE '%:free') = (t.tier = 'free'))::float8 AS enabled
+        FROM (VALUES ('free'), ('paid')) AS t(tier)
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - tier:
+            usage: "LABEL"
+            description: "free (model id ends in :free) or paid"
+        - visible:
+            usage: "GAUGE"
+            description: "Models with an enabled ability whose group is present in UserUsableGroups: what the model list and pricing page show"
+        - enabled:
+            usage: "GAUGE"
+            description: "Models with an enabled ability in any group, regardless of the option maps"
+
+    newapi_catalog_options:
+      query: |
+        SELECT key,
+               (CASE WHEN value ~ '^\s*\[' THEN jsonb_array_length(value::jsonb)
+                     WHEN value ~ '^\s*\{' THEN (SELECT count(*) FROM jsonb_object_keys(value::jsonb))
+                     ELSE 0 END)::float8 AS entries
+        FROM options
+        WHERE key IN ('AutoGroups', 'UserUsableGroups', 'GroupRatio', 'ModelRatio',
+                      'CompletionRatio', 'CacheRatio', 'ModelPrice')
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - key:
+            usage: "LABEL"
+            description: "Option map name"
+        - entries:
+            usage: "GAUGE"
+            description: "Entries in the option map (array length or object keys); 0 when the value is not JSON"

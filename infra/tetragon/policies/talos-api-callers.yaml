@@ -1,0 +1,24 @@
+# Every connection apid (50000) and trustd (50001) accept, with the peer address: the apid
+# log names the method but not the caller. The return is the accepted socket (daddr is the
+# peer); Go's non blocking accept also returns empty sockets (AF_UNSPEC), and Talos probes
+# both from loopback every minute, about 20 events a minute for the cluster in all.
+# Alert: infra/loki/logql-rules.yaml, group tetragon.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: talos-api-callers
+spec:
+  kprobes:
+    - call: inet_csk_accept
+      syscall: false
+      return: true
+      args:
+        - index: 0
+          type: sock
+      returnArg:
+        index: 0
+        type: sock
+      selectors:
+        - matchBinaries:
+            - operator: In
+              values: [/apid, /trustd]

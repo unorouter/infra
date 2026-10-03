@@ -1,0 +1,128 @@
+# uno-import lives in its own namespace because its gluetun sidecar needs NET_ADMIN, which
+# the cluster-wide PodSecurity baseline (talos/patches/cluster.yaml) forbids. The
+# labels override the cluster default for this namespace only; nothing else may run here.
+# PodSecurity cannot grant one capability, so the policy below enforces the rest of
+# baseline here: NET_ADMIN on the `vpn` container is the only exception.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: uno-import
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+# The Deployment comes from the uno-import app repo, so without this a push there could run a
+# privileged or host-namespace pod, which is root on the node.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: uno-import-baseline
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+  variables:
+    - name: containers
+      expression: >-
+        object.spec.containers +
+        (has(object.spec.initContainers) ? object.spec.initContainers : [])
+    - name: baselineCaps
+      expression: >-
+        ['AUDIT_WRITE', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'FSETID', 'KILL', 'MKNOD',
+         'NET_BIND_SERVICE', 'SETFCAP', 'SETGID', 'SETPCAP', 'SETUID', 'SYS_CHROOT']
+  validations:
+    - expression: >-
+        !(has(object.spec.hostNetwork) && object.spec.hostNetwork) &&
+        !(has(object.spec.hostPID) && object.spec.hostPID) &&
+        !(has(object.spec.hostIPC) && object.spec.hostIPC)
+      message: host namespaces are not allowed in uno-import
+    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.hostPath))"
+      message: hostPath volumes are not allowed in uno-import
+    - expression: "!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0"
+      message: ephemeral (debug) containers are not allowed in uno-import
+    - expression: >-
+        !has(object.spec.securityContext) || !has(object.spec.securityContext.sysctls)
+      message: sysctls are not allowed in uno-import
+    - expression: >-
+        variables.containers.all(c, !has(c.securityContext) ||
+          !has(c.securityContext.privileged) || !c.securityContext.privileged)
+      message: privileged containers are not allowed in uno-import
+    - expression: >-
+        variables.containers.all(c, !has(c.securityContext) ||
+          !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) ||
+          c.securityContext.capabilities.add.all(cap, cap in variables.baselineCaps ||
+            (cap == 'NET_ADMIN' && c.name == 'vpn')))
+      message: only the baseline capabilities, plus NET_ADMIN on the vpn container, are allowed
+    - expression: >-
+        variables.containers.all(c, !has(c.ports) ||
+          c.ports.all(p, !has(p.hostPort) || p.hostPort == 0))
+      message: hostPort is not allowed in uno-import
+    - expression: >-
+        variables.containers.all(c, !has(c.securityContext) ||
+          !has(c.securityContext.procMount) || c.securityContext.procMount == 'Default')
+      message: unmasked /proc is not allowed in uno-import
+    - expression: >-
+        !(has(object.spec.securityContext) && has(object.spec.securityContext.seccompProfile) &&
+          object.spec.securityContext.seccompProfile.type == 'Unconfined') &&
+        variables.containers.all(c, !(has(c.securityContext) &&
+          has(c.securityContext.seccompProfile) &&
+          c.securityContext.seccompProfile.type == 'Unconfined'))
+      message: an Unconfined seccomp profile is not allowed in uno-import
+    - expression: >-
+        !(has(object.spec.securityContext) && has(object.spec.securityContext.appArmorProfile) &&
+          object.spec.securityContext.appArmorProfile.type == 'Unconfined') &&
+        variables.containers.all(c, !(has(c.securityContext) &&
+          has(c.securityContext.appArmorProfile) &&
+          c.securityContext.appArmorProfile.type == 'Unconfined'))
+      message: an Unconfined AppArmor profile is not allowed in uno-import
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: uno-import-baseline
+spec:
+  policyName: uno-import-baseline
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: uno-import }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: uno-import
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Card importer behind a gluetun sidecar. In from the tunnel (cards.unorouter.com). Out: only
+# the PIA OpenVPN tunnel and PIA's API; every card site is fetched inside the tunnel.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: uno-import
+  namespace: uno-import
+spec:
+  endpointSelector:
+    matchLabels: { app: uno-import }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+      toPorts:
+        - ports: [{ port: "4000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "4000", protocol: TCP }]
+  egress:
+    - toEntities: [world]
+      toPorts:
+        - ports:
+            - { port: "1197", protocol: UDP }
+            - { port: "1198", protocol: UDP }
+            - { port: "443", protocol: TCP }

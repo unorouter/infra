@@ -1,0 +1,68 @@
+# Encrypted at rest (LUKS2, key derived from the VM UUID, 2026-09-17): covers a disk copied
+# away from the VM, not the provider holding the VM. Inert on a provisioned volume, it takes
+# effect when the volume is re-provisioned (docs/operations.md "Encryption"). STATE is install
+# time only: on an existing node it lands with a Hetzner rebuild that passes this config as
+# user data (rehearsed 2026-09-17, the VM UUID survives a rebuild).
+# Partitions on the install disk next to Talos's own: the local-path volume for every PVC on
+# the node, and 4 GiB of host swap.
+apiVersion: v1alpha1
+kind: UserVolumeConfig
+name: local-path-provisioner
+provisioning:
+  diskSelector:
+    match: system_disk
+  minSize: 40GiB
+  grow: true
+filesystem:
+  type: xfs
+encryption:
+  provider: luks2
+  keys:
+    - slot: 0
+      nodeID: {}
+
+---
+apiVersion: v1alpha1
+kind: SwapVolumeConfig
+name: swap
+provisioning:
+  diskSelector:
+    match: system_disk
+  minSize: 4GiB
+  maxSize: 4GiB
+encryption:
+  provider: luks2
+  keys:
+    - slot: 0
+      nodeID: {}
+
+---
+# Without a cap EPHEMERAL grows over the whole disk at install and the two volumes above never
+# get a partition (seen on the proof: "not enough space"). Install time only. EPHEMERAL holds
+# images, container rootfs and logs: about 25 to 29 GB of images in practice. On a 160 GB
+# cx43 disk: system 2.3 GB, EPHEMERAL 60, swap 4, the user volume takes the remaining ~93 for
+# the local-path volumes (a newapi-pg instance is 24 GB, Prometheus 10, the gateway cache up to 40).
+apiVersion: v1alpha1
+kind: VolumeConfig
+name: EPHEMERAL
+provisioning:
+  diskSelector:
+    match: system_disk
+  minSize: 40GiB
+  maxSize: 60GiB
+  grow: false
+encryption:
+  provider: luks2
+  keys:
+    - slot: 0
+      nodeID: {}
+
+---
+apiVersion: v1alpha1
+kind: VolumeConfig
+name: STATE
+encryption:
+  provider: luks2
+  keys:
+    - slot: 0
+      nodeID: {}

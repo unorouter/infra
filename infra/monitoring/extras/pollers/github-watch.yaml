@@ -1,0 +1,194 @@
+# Pages within ten minutes on GitHub changes that open a path into the cluster or the
+# images: a repository ruleset that is not active, a deploy key or webhook, an org member,
+# outside collaborator or installed app nobody expects, a commit on a deploy repo's main by
+# an unexpected account. Actions secret changes go to the Discord digest. ArgoCD deploys
+# whatever lands on infra main, so that branch is the cluster.
+# Credentials: the read-only GitHub App "unorouter-github-watch" (OpenBao
+# secret/github-watch: app_id, installation_id, private_key). No personal token involved.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: github-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: github-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: GH_APP_ID
+      remoteRef: { key: github-watch, property: app_id }
+    - secretKey: GH_INSTALLATION_ID
+      remoteRef: { key: github-watch, property: installation_id }
+    - secretKey: GH_APP_KEY
+      remoteRef: { key: github-watch, property: private_key }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: github-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import base64, hashlib, json, os, time, urllib.error, urllib.request
+    from datetime import datetime, timedelta, timezone
+    import notify
+
+    ORG = os.environ.get("GH_ORG", "unorouter")
+    SINCE = int(os.environ.get("SINCE_SECONDS", "660"))
+    split = lambda k: {x.strip() for x in os.environ.get(k, "").split(",") if x.strip()}
+    MEMBERS, APPS, COMMITTERS, DEPLOY_REPOS = split("EXPECTED_MEMBERS"), split("EXPECTED_APPS"), split("EXPECTED_COMMITTERS"), split("DEPLOY_REPOS")
+    since = datetime.now(timezone.utc) - timedelta(seconds=SINCE)
+
+    def der_ints(b):
+        # PKCS#1 RSAPrivateKey: SEQUENCE of INTEGERs; only n (1) and d (3) are needed
+        def length(i):
+            l = b[i]; i += 1
+            if l & 0x80:
+                n = l & 0x7F; l = int.from_bytes(b[i:i + n], "big"); i += n
+            return l, i
+        assert b[0] == 0x30
+        _, i = length(1)
+        out = []
+        while i < len(b) and len(out) < 4:
+            assert b[i] == 0x02
+            l, i = length(i + 1)
+            out.append(int.from_bytes(b[i:i + l], "big")); i += l
+        return out[1], out[3]
+
+    def app_jwt():
+        pem = os.environ["GH_APP_KEY"]
+        der = base64.b64decode("".join(l for l in pem.splitlines() if "-----" not in l))
+        n, d = der_ints(der)
+        b64 = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+        now = int(time.time())
+        msg = b64(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()) + "." + b64(json.dumps({"iat": now - 60, "exp": now + 540, "iss": os.environ["GH_APP_ID"]}).encode())
+        k = (n.bit_length() + 7) // 8
+        digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(msg.encode()).digest()
+        em = b"\x00\x01" + b"\xff" * (k - len(digest_info) - 3) + b"\x00" + digest_info
+        return msg + "." + b64(pow(int.from_bytes(em, "big"), d, n).to_bytes(k, "big"))
+
+    def call(path, token, method="GET", missing=None):
+        req = urllib.request.Request("https://api.github.com" + path, method=method,
+                                     headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            # private repos on the free plan answer 403 for rulesets and similar features
+            if missing is not None and e.code in (403, 404):
+                return missing
+            raise
+
+    token = call(f"/app/installations/{os.environ['GH_INSTALLATION_ID']}/access_tokens", app_jwt(), "POST")["token"]
+    # forks pull upstream history in, with upstream authors and committers: a commit that
+    # exists in the upstream repository is theirs, not a push to ours
+    UPSTREAM = dict(x.split("=", 1) for x in split("FORK_UPSTREAMS"))
+    def in_upstream(repo, sha):
+        up = UPSTREAM.get(repo)
+        return bool(up) and bool(call(f"/repos/{up}/commits/{sha}", token, missing={}))
+    recent = lambda ts: bool(ts) and datetime.fromisoformat(ts.replace("Z", "+00:00")) >= since
+    critical, info = {}, []
+    add = lambda name, line: critical.setdefault(name, []).append(line)
+
+    members = {m["login"] for m in call(f"/orgs/{ORG}/members?per_page=100", token)}
+    outside = {m["login"] for m in call(f"/orgs/{ORG}/outside_collaborators?per_page=100", token)}
+    for who in sorted((members - MEMBERS) | outside):
+        add("GitHubUnexpectedMember", f"{who} ({'outside collaborator' if who in outside else 'org member'})")
+    for inst in call(f"/orgs/{ORG}/installations", token).get("installations", []):
+        if inst.get("app_slug") not in APPS:
+            add("GitHubUnexpectedApp", f"app {inst.get('app_slug')} installed ({inst.get('repository_selection')} repos)")
+    for h in call(f"/orgs/{ORG}/hooks", token):
+        add("GitHubWebhook", f"org webhook {h.get('config', {}).get('url')} created {h.get('created_at')}")
+    for s in call(f"/orgs/{ORG}/actions/secrets?per_page=100", token).get("secrets", []):
+        if recent(s.get("updated_at")):
+            info.append(f"org Actions secret {s['name']} changed {s['updated_at'][11:19]}Z")
+
+    repos = call(f"/orgs/{ORG}/repos?per_page=100", token)
+    for repo in repos:
+        name = repo["name"]
+        if recent(repo.get("created_at")):
+            add("GitHubRepoCreated", f"repo {name} created ({repo.get('visibility')})")
+        for rs in call(f"/repos/{ORG}/{name}/rulesets", token, missing=[]):
+            full = call(f"/repos/{ORG}/{name}/rulesets/{rs['id']}", token)
+            if full.get("enforcement") != "active":
+                add("GitHubRulesetInactive", f"{name}: ruleset {full.get('name')} is {full.get('enforcement')}")
+        for key in call(f"/repos/{ORG}/{name}/keys", token, missing=[]):
+            add("GitHubDeployKey", f"{name}: deploy key {key.get('title')} (read_only={key.get('read_only')}) created {key.get('created_at')}")
+        for h in call(f"/repos/{ORG}/{name}/hooks", token, missing=[]):
+            add("GitHubWebhook", f"{name}: webhook {h.get('config', {}).get('url')} created {h.get('created_at')}")
+        for s in call(f"/repos/{ORG}/{name}/actions/secrets?per_page=100", token, missing={}).get("secrets", []):
+            if recent(s.get("updated_at")):
+                info.append(f"{name}: Actions secret {s['name']} changed {s['updated_at'][11:19]}Z")
+        if name in DEPLOY_REPOS:
+            branch = repo.get("default_branch", "main")
+            for c in call(f"/repos/{ORG}/{name}/commits?sha={branch}&since={since.strftime('%Y-%m-%dT%H:%M:%SZ')}&per_page=100", token):
+                # whoever put the commit on the branch: the committer. Upstream authors of merged
+                # fork commits do not count; web-flow means the web UI, where the author pushed.
+                committer = (c.get("committer") or {}).get("login") or c["commit"]["committer"]["name"]
+                if committer == "web-flow":
+                    committer = (c.get("author") or {}).get("login") or c["commit"]["author"]["name"]
+                line = f"{name}@{branch} {c['sha'][:7]} by {committer}: {c['commit']['message'].splitlines()[0][:80]}"
+                if committer not in COMMITTERS and not in_upstream(name, c["sha"]):
+                    add("GitHubUnexpectedCommit", line)
+                else:
+                    info.append(line)
+
+    for name, lines in critical.items():
+        notify.alert(name, "github: " + "; ".join(lines[:10]))
+    if info:
+        notify.digest("GitHubActivity", "github activity (last %ds)" % SINCE, info[:25])
+    print(f"repos={len(repos)} critical={sum(len(v) for v in critical.values())} info={len(info)}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: github-watch
+  namespace: monitoring
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 420
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.14-alpine@sha256:2e740b2c28a426e74f11396c05e38afb3191acced75045b8d62df573c1dc8ce8
+              command: ["python3", "-u", "/app/watch.py"]
+              envFrom: [{ secretRef: { name: github-watch } }]
+              env:
+                - name: WATCH_NAME
+                  value: github-watch
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
+                - name: EXPECTED_MEMBERS
+                  value: 0-don,2-don,bishop67
+                - name: EXPECTED_APPS
+                  value: renovate,unorouter-github-watch
+                # commits on these repos' default branch deploy through ArgoCD or the image workflow
+                - name: DEPLOY_REPOS
+                  value: infra,unorouter,new-api,new-api-sync,unorouter-bot,uno-import
+                - name: EXPECTED_COMMITTERS
+                  value: 0-don,unorouter-ci,renovate[bot],github-actions[bot]
+                - name: FORK_UPSTREAMS
+                  value: new-api=QuantumNous/new-api
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
+          volumes:
+            - name: app
+              configMap: { name: github-watch }
+            - name: lib
+              configMap: { name: watch-lib }

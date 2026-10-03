@@ -1,0 +1,16 @@
+# Secrets at rest in etcd. The first key writes, every listed key reads; the name travels
+# with each stored value (k8s:enc:secretbox:v1:<name>:), so a key stays listed until every
+# Secret has been rewritten under its successor (kubectl get secrets -A -o json |
+# kubectl replace -f -). Keys live in talenv.sops.yaml. Replaces the v1alpha1
+# secretboxEncryptionSecret (key2), left empty in talsecret.sops.yaml so talhelper omits it.
+apiVersion: v1alpha1
+kind: KubeEtcdEncryptionConfig
+config:
+  resources:
+    - resources: [secrets]
+      providers:
+        - secretbox:
+            keys:
+              - name: key3
+                secret: ${SECRETBOX_KEY3}
+        - identity: {}

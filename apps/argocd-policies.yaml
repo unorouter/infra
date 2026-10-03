@@ -1,0 +1,18 @@
+# ArgoCD itself is installed by the k3s HelmChart CR in kube-system, so its namespace has no
+# app of its own; this one carries only the NetworkPolicies for it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-policies
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/unorouter/infra.git
+    targetRevision: main
+    path: infra/argocd
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }

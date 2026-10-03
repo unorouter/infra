@@ -1,0 +1,200 @@
+# Records every suspicious request pattern Cloudflare saw in front of the three zones, five
+# minutes at a time, and posts a Discord warning on a sweep. Nothing is blocked: probes are
+# kept for learning. One JSON line per source per window (kind=edge-probe) goes to Loki and
+# the locked archive through Vector. A source is recorded only with a signal: attack
+# payloads, login flow tampering (forged OAuth codes, Teleport API enumeration), names under
+# unorouter.com/.ai that do not exist, scanner paths, or 100+ errors. Our own servers are
+# skipped; their addresses live in OpenBao (cloudflare-edge own_sources), not in git.
+# Free plan zones lack the query string and network in this dataset and get a reduced read.
+# Token: cloudflare-edge analytics_token, Zone Analytics Read on the account's zones only.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: edge-probe-watch
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: edge-probe-watch
+    creationPolicy: Owner
+  data:
+    - secretKey: CF_API_TOKEN
+      remoteRef: { key: cloudflare-edge, property: analytics_token }
+    - secretKey: OWN_SOURCES
+      remoteRef: { key: cloudflare-edge, property: own_sources }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-probe-watch
+  namespace: monitoring
+data:
+  watch.py: |
+    import json, os, re, sys, urllib.request
+    from collections import defaultdict
+    from datetime import datetime, timedelta, timezone
+
+    ZONES = [z.split(":") for z in os.environ.get("CF_ZONES", "bc178db579d52011b4b2998da622b9e3:unorouter.com").split(",") if z.strip()]
+    TOKEN = os.environ["CF_API_TOKEN"]
+    KNOWN = {h.strip() for h in os.environ.get("KNOWN_HOSTS", "").split(",") if h.strip()}
+    # Hostname checks only where every real name is listed; coding-global.com carries dozens of lane shards.
+    STRICT_ZONES = tuple("." + z.strip() for z in os.environ.get("STRICT_ZONES", "unorouter.com,unorouter.ai").split(",") if z.strip())
+    # Our own servers (nodes, netcup) reach the lanes through the edge; their addresses stay out of git.
+    OWN = [x.strip() for x in os.environ.get("OWN_SOURCES", "").split(",") if x.strip()]
+    def own(ip):
+        return any(ip == o or (o.endswith("::") and ip.startswith(o[:-1])) for o in OWN)
+    # Cloudflare's adaptive dataset lags a few minutes; each run reads the closed 5 minute window before that.
+    LAG, STEP = 180, 300
+
+    PAYLOAD = re.compile(r"\.\./|%2e%2e|%0d|%0a|<script|%3cscript|169\.254\.|metadata\.google|localhost|127\.0\.0\.1|0x7f0|\[::1\]|evil\.|attacker|oast\.|interact\.sh|burpcollaborator|\$\{jndi|union(\s|%20|\+)+select|/etc/passwd|win\.ini|file://|gopher://|dict://", re.I)
+    NOISE = re.compile(r"\.php(\?|$)|wp-(admin|login|content|includes)|xmlrpc|phpmyadmin|/\.env|/\.git/|/\.aws|actuator|server-status|/cgi-bin/|\.(asp|aspx|jsp)(\?|$)", re.I)
+    TAMPER = [
+        re.compile(r"^teleport\.[^/]+/v1/webapi/(users|tokens|mfa|connectors|sites|nodes|kubes|databases|desktops|applications|cluster)"),
+        re.compile(r"/v1/webapi/github/callback\?.*code=(x|fake|bogus|test|invalid)\b", re.I),
+        re.compile(r"/api/oauth/[a-z]+\?.*code=(x|fake|bogus|test|invalid)\b", re.I),
+        re.compile(r"(redirect_url|redirect_uri|return_to|next|url)=https?(://|%3a%2f%2f)(?![^&]*unorouter\.(com|ai))", re.I),
+        re.compile(r"/v1/webapi/github/callback.*(state=(x|fake|fakestate)\b|^[^?]*$)", re.I),
+    ]
+
+    FULL_FILTER = """{OR:[
+        {AND:[{edgeResponseStatus_geq:400},{OR:[{clientRequestHTTPHost_notlike:"api.%"},{clientRequestPath_notlike:"/v1/%"}]}]},
+        {clientRequestQuery_like:"%evil%"},{clientRequestQuery_like:"%25%0d%"},{clientRequestQuery_like:"%25%0a%"},{clientRequestQuery_like:"%code=bogus%"},
+        {clientRequestQuery_like:"%code=x%"},{clientRequestQuery_like:"%169.254%"},{clientRequestQuery_like:"%localhost%"},{clientRequestQuery_like:"%127.0.0.1%"},
+        {clientRequestPath_like:"%..%"},{clientRequestPath_like:"/v1/webapi/github/callback%"},{clientRequestQuery_like:"%redirect_ur%http%"}]}"""
+    FULL_DIMS = "clientIP clientAsn clientASNDescription clientCountryName userAgent clientRequestHTTPHost clientRequestHTTPMethodName clientRequestPath clientRequestQuery edgeResponseStatus"
+    # Zones on the Free plan expose neither the query string nor the network in this dataset.
+    LITE_FILTER = """{OR:[{edgeResponseStatus_geq:400},{clientRequestPath_like:"%..%"}]}"""
+    LITE_DIMS = "clientIP clientCountryName userAgent clientRequestHTTPHost clientRequestHTTPMethodName clientRequestPath edgeResponseStatus"
+
+    def query(zone, start, end, flt, dims):
+        q = ("query($z:String!,$s:Time!,$e:Time!){viewer{zones(filter:{zoneTag:$z}){httpRequestsAdaptiveGroups(limit:10000,"
+             "filter:{AND:[{datetime_geq:$s},{datetime_lt:$e}," + flt + "]}){count dimensions{" + dims + "}}}}}")
+        body = json.dumps({"query": q, "variables": {"z": zone, "s": start, "e": end}}).encode()
+        req = urllib.request.Request("https://api.cloudflare.com/client/v4/graphql", data=body,
+                                     headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return json.load(r)
+
+    def fetch(zone, start, end):
+        d = query(zone, start, end, FULL_FILTER, FULL_DIMS)
+        if d.get("errors") and "does not have access" in json.dumps(d["errors"]):
+            d = query(zone, start, end, LITE_FILTER, LITE_DIMS)
+        if d.get("errors"):
+            print(json.dumps({"kind": "edge-probe-error", "zone": zone, "errors": d["errors"]})[:500], flush=True)
+            return []
+        rows = d["data"]["viewer"]["zones"][0]["httpRequestsAdaptiveGroups"]
+        for r in rows:
+            x = r["dimensions"]
+            x.setdefault("clientRequestQuery", ""); x.setdefault("clientAsn", 0); x.setdefault("clientASNDescription", "")
+        return rows
+
+    def score(rows):
+        by = defaultdict(lambda: {"n": 0, "n4xx": 0, "hosts": set(), "payload": 0, "noise": 0, "tamper": 0, "unknown_host": 0, "samples": defaultdict(int), "ua": defaultdict(int)})
+        for r in rows:
+            x, c = r["dimensions"], r["count"]
+            if own(x["clientIP"]):
+                continue
+            p = by[x["clientIP"]]
+            p["asn"], p["asn_name"], p["country"] = x["clientAsn"], x["clientASNDescription"], x["clientCountryName"]
+            host, path, qs, st = x["clientRequestHTTPHost"], x["clientRequestPath"], x["clientRequestQuery"], x["edgeResponseStatus"]
+            url = host + path + qs
+            p["n"] += c; p["hosts"].add(host); p["ua"][x["userAgent"][:120]] += c
+            if st >= 400: p["n4xx"] += c
+            if PAYLOAD.search(path + qs): p["payload"] += c
+            elif NOISE.search(path): p["noise"] += c
+            if any(t.search(url) for t in TAMPER): p["tamper"] += c
+            if KNOWN and ("." + host).endswith(STRICT_ZONES) and host not in KNOWN: p["unknown_host"] += c
+            p["samples"][(host, x["clientRequestHTTPMethodName"], (path + qs)[:160], st)] += c
+        return by
+
+    CRAWLER = re.compile(r"Googlebot|bingbot|ClaudeBot|Claude-User|GPTBot|OAI-SearchBot|PerplexityBot|Applebot|DuckDuckBot|YandexBot|Baiduspider", re.I)
+
+    def verdict(p):
+        targeted = p["payload"] + p["tamper"] + p["unknown_host"]
+        crawler = CRAWLER.search(max(p["ua"], key=p["ua"].get) if p["ua"] else "")
+        broad = len(p["hosts"]) >= 5 and (p["n4xx"] >= 20 or p["unknown_host"] >= 5) and not crawler
+        sweep = p["tamper"] >= 3 or p["payload"] >= 3 or broad
+        return ("sweep" if sweep else "targeted" if targeted else "noise" if p["noise"] else "errors"), targeted
+
+    def run(start, end, emit=True):
+        found, rows = [], []
+        for zone, _ in ZONES:
+            rows += fetch(zone, start, end)
+        for ip, p in score(rows).items():
+            kind, targeted = verdict(p)
+            if kind == "errors" and p["n4xx"] < 100:
+                continue
+            rec = {"kind": "edge-probe", "verdict": kind, "window": start, "ip": ip, "asn": p["asn"], "asn_name": p["asn_name"],
+                   "country": p["country"], "requests": p["n"], "n4xx": p["n4xx"], "hosts": sorted(p["hosts"]),
+                   "payload": p["payload"], "tamper": p["tamper"], "unknown_host": p["unknown_host"], "noise": p["noise"],
+                   "user_agent": max(p["ua"], key=p["ua"].get),
+                   "samples": [[h, m, u, s, n] for (h, m, u, s), n in sorted(p["samples"].items(), key=lambda kv: -kv[1])[:30]]}
+            found.append(rec)
+            if emit:
+                print(json.dumps(rec, separators=(",", ":")), flush=True)
+        return found
+
+    if __name__ == "__main__":
+        if len(sys.argv) == 3:
+            run(sys.argv[1], sys.argv[2])
+            raise SystemExit
+        now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        end = now - timedelta(seconds=LAG)
+        end -= timedelta(minutes=end.minute % 5)
+        start = end - timedelta(seconds=STEP)
+        f = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        found = run(f(start), f(end))
+        sweeps = [r for r in found if r["verdict"] == "sweep"]
+        if sweeps:
+            import notify
+            notify.alert("EdgeProbeSweep", severity="warning", ttl=1800, summary="; ".join(
+                f"{r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:30]}): {r['requests']} req, {len(r['hosts'])} hosts, "
+                f"{r['payload']} payload, {r['tamper']} auth tampering, {r['unknown_host']} unknown host" for r in sweeps[:5]))
+        print(json.dumps({"kind": "edge-probe-run", "window": f(start), "recorded": len(found), "sweeps": len(sweeps)}), flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: edge-probe-watch
+  namespace: monitoring
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: watch
+              image: python:3.14-alpine@sha256:2e740b2c28a426e74f11396c05e38afb3191acced75045b8d62df573c1dc8ce8
+              command: ["python3", "-u", "/app/watch.py"]
+              envFrom: [{ secretRef: { name: edge-probe-watch } }]
+              env:
+                - name: WATCH_NAME
+                  value: edge-probe-watch
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
+                - name: CF_ZONES
+                  value: bc178db579d52011b4b2998da622b9e3:unorouter.com,09567baf778ae9946a29a034811323c6:unorouter.ai,f56ce8ac5c1e8e621fe2d420591a78e3:coding-global.com
+                # every real name under the strict zones; a request to any other name is a guess
+                - name: KNOWN_HOSTS
+                  value: unorouter.com,www.unorouter.com,api.unorouter.com,bot.unorouter.com,mcp.unorouter.com,teleport.unorouter.com,dex.unorouter.com,s3.unorouter.com,cards.unorouter.com,status.unorouter.com,ph.unorouter.com,grafana.unorouter.com,argocd.unorouter.com,openbao.unorouter.com,import.unorouter.com,unorouter.ai,www.unorouter.ai,api.unorouter.ai
+              resources:
+                requests: { cpu: 10m, memory: 48Mi }
+                limits: { memory: 192Mi }
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
+          volumes:
+            - name: app
+              configMap: { name: edge-probe-watch }
+            - name: lib
+              configMap: { name: watch-lib }

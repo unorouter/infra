@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tetragon
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
+spec:
+  project: default
+  sources:
+    - repoURL: https://helm.cilium.io/
+      chart: tetragon
+      targetRevision: 1.7.1
+      helm:
+        valueFiles:
+          - $values/infra/tetragon/values.yaml
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/unorouter/infra.git
+      targetRevision: main
+      path: infra/tetragon/policies
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  # the TracingPolicy CRD comes from the Tetragon operator at start, so the first sync skips the
+  # policy dry run and a retry applies it once the CRD exists
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [ServerSideApply=true, SkipDryRunOnMissingResource=true]
+    retry:
+      limit: 10
+      backoff: { duration: 30s, factor: 2, maxDuration: 5m }

@@ -1,0 +1,23 @@
+
+# ghcr pull secret for the PRIVATE unorouter image (its build bakes server secrets).
+# OpenBao key ghcr-pull.dockerconfigjson = full .dockerconfigjson value (PAT read:packages).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: ghcr-pull
+  namespace: services
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: ghcr-pull
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: "{{ .dockerconfigjson }}"
+  data:
+    - secretKey: dockerconfigjson
+      remoteRef: { key: ghcr-pull, property: dockerconfigjson }
