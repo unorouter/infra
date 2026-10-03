@@ -164,6 +164,11 @@ data:
       </profiles>
       <users>
         <default remove="remove"/>
+        <!-- merges into the entrypoint's admin: the newapi_pg named collection is config defined -->
+        <admin>
+          <named_collection_control>1</named_collection_control>
+          <show_named_collections>1</show_named_collections>
+        </admin>
         <gateway>
           <password from_env="CH_GATEWAY_PASSWORD"/>
           <networks><ip>::/0</ip></networks>
