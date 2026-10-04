@@ -289,7 +289,7 @@ spec:
 # 30 day lock, 31 day expiry). The first run of each ISO week writes a full backup, every other
 # run is incremental on the previous one of that week (system.backup_log), so an hour of rows is
 # the most a lost volume costs and no chain outlives the bucket's expiry. RESTORE follows the
-# chain by itself: RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<hour>').
+# chain by itself: RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<newest>').
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -328,7 +328,7 @@ spec:
                 - |
                   set -euo pipefail
                   q() { clickhouse-client --host clickhouse --user admin --password "$CLICKHOUSE_PASSWORD" --query "$1"; }
-                  week=new_api_logs/$(date -u +%G-W%V); hour=$(date -u +%FT%H)
+                  week=new_api_logs/$(date -u +%G-W%V); hour=$(date -u +%FT%H%M)
                   # cold parts are stored decrypted: a restore must not depend on the cold tier key
                   plain="decrypt_files_from_encrypted_disks = 1"
                   base=$(q "SELECT name FROM system.backup_log WHERE status = 'BACKUP_CREATED' AND startsWith(name, 'Disk(''backups'', ''$week/') ORDER BY event_time_microseconds DESC LIMIT 1 FORMAT TSVRaw")
