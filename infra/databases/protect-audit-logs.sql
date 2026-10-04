@@ -40,6 +40,9 @@
 
 BEGIN;
 
+-- Re-runnable: the guard at the end would refuse the trigger drops below. Recreated there.
+DROP EVENT TRIGGER IF EXISTS evidence_protect_audit_log_triggers;
+
 -- Nothing in the application truncates this table, and TRUNCATE fires no row
 -- trigger, so leaving the privilege in place would leave a one-word bypass of
 -- everything below. Revoked rather than trigger-guarded: a privilege the app does
@@ -106,5 +109,33 @@ CREATE TRIGGER trg_protect_audit_logs_update
   BEFORE UPDATE ON audit_logs
   FOR EACH ROW
   EXECUTE FUNCTION protect_audit_log_update();
+
+-- The app role owns both tables and could drop or disable the triggers above. After every DDL
+-- statement this checks they are still in place, enabled and unchanged, and rolls the
+-- statement back otherwise. Same pattern as evidence_protect_pat_capture in pat-audit.sql.
+CREATE OR REPLACE FUNCTION public.protect_audit_log_triggers() RETURNS event_trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF session_user = 'postgres' THEN RETURN; END IF;
+  IF to_regclass('public.audit_logs') IS NULL OR to_regclass('public.logs') IS NULL THEN
+    RAISE EXCEPTION 'audit tables require database administrator maintenance';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.audit_logs'::regclass
+      AND tgenabled IN ('O','A') AND NOT tgisinternal AND tgqual IS NULL AND tgnargs = 0
+      AND ((tgname = 'trg_protect_audit_logs' AND tgtype = 11
+            AND tgfoid = 'public.protect_audit_log_rows()'::regprocedure)
+        OR (tgname = 'trg_protect_audit_logs_update' AND tgtype = 19
+            AND tgfoid = 'public.protect_audit_log_update()'::regprocedure))) <> 2
+  OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.logs'::regclass
+      AND tgenabled IN ('O','A') AND NOT tgisinternal AND tgname = 'trg_protect_audit_logs'
+      AND tgtype = 11 AND tgfoid = 'public.protect_audit_log_rows()'::regprocedure) <> 1 THEN
+    RAISE EXCEPTION 'audit log trigger definitions require database administrator maintenance';
+  END IF;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.protect_audit_log_triggers() FROM PUBLIC, newapi;
+DROP EVENT TRIGGER IF EXISTS evidence_protect_audit_log_triggers;
+CREATE EVENT TRIGGER evidence_protect_audit_log_triggers ON ddl_command_end
+  EXECUTE FUNCTION public.protect_audit_log_triggers();
 
 COMMIT;
