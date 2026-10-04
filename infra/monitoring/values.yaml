@@ -97,8 +97,8 @@ grafana:
       email_claim: sub
       auto_sign_up: true
       # Teleport puts the user's teleport roles in the `roles` claim. Everyone reaching this
-      # app already passed the GitHub org gate (unorouter/admins -> access,editor,...).
-      role_attribute_path: contains(roles[*], 'editor') && 'Admin' || 'Viewer'
+      # app already passed the GitHub org gate; the admins team carries kube-admin.
+      role_attribute_path: (contains(roles[*], 'editor') || contains(roles[*], 'kube-admin')) && 'Admin' || 'Viewer'
       role_attribute_strict: false
     # FALLBACK only: direct dex login, used when reaching Grafana outside the Teleport tunnel
     # (e.g. port-forward during an incident where the tunnel itself is the problem).
