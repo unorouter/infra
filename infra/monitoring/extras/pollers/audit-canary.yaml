@@ -1,0 +1,67 @@
+# Proves the security alerts can see. Hourly, one unauthenticated request to the gateway with
+# the user agent uno-audit-canary/1. The gateway refuses it and writes a security.auth_rejected
+# row to audit_logs like any other refusal; cnpg_newapi_audit_canary_count counts those rows
+# through the same table, grants and exporter as every security query, and
+# SecurityAuditCanarySilent pages when it reads zero. A log store move, a lost grant, a broken
+# exporter or a gateway that stopped auditing all end in that zero.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: audit-canary
+  namespace: monitoring
+spec:
+  schedule: "7 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels: { app: audit-canary }
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: canary
+              image: python:3.14-alpine@sha256:2e740b2c28a426e74f11396c05e38afb3191acced75045b8d62df573c1dc8ce8
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              command:
+                - python3
+                - -c
+                - |
+                  import json, urllib.request, urllib.error
+                  req = urllib.request.Request("http://new-api.services.svc.cluster.local:3000/api/user/self",
+                                               headers={"User-Agent": "uno-audit-canary/1"})
+                  try:
+                      status = urllib.request.urlopen(req, timeout=20).status
+                  except urllib.error.HTTPError as e:
+                      status = e.code
+                  print(json.dumps({"kind": "audit-canary", "status": status}), flush=True)
+                  raise SystemExit(0 if status in (401, 403) else 1)
+              resources:
+                requests: { cpu: 5m, memory: 16Mi }
+                limits: { memory: 64Mi }
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: audit-canary
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app: audit-canary }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api }
+      toPorts:
+        - ports: [{ port: "3000", protocol: TCP }]

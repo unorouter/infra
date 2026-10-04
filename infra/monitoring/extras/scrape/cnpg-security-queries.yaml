@@ -24,6 +24,23 @@ metadata:
     cnpg.io/reload: "true"
 data:
   queries: |
+    # Hourly canary rows from monitoring/audit-canary (pollers/audit-canary.yaml). Zero means the
+    # path from gateway audit row to alert is broken somewhere; SecurityAuditCanarySilent pages.
+    newapi_audit_canary:
+      query: |
+        SELECT count(*)::float8 AS count
+        FROM audit_logs
+        WHERE action LIKE 'security.%'
+          AND user_agent = 'uno-audit-canary/1'
+          AND created_at > extract(epoch from now())::bigint - 10800
+      primary: true
+      target_databases:
+        - newapi
+      metrics:
+        - count:
+            usage: "GAUGE"
+            description: "Canary refusals recorded in audit_logs in the last 3h. Expected 3; zero means the security alerts are blind."
+
     newapi_admin_actions:
       query: |
         SELECT coalesce(nullif(ip,''),'unknown') AS ip,

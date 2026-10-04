@@ -31,6 +31,7 @@ spec:
         - matchLabels: { app: new-api-sync }
         - matchLabels: { app: new-api-sync-full }
         - matchLabels: { app: unorouter-mcp }
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app: audit-canary }
       toPorts:
         - ports: [{ port: "3000", protocol: TCP }]
     - fromEntities: [host]

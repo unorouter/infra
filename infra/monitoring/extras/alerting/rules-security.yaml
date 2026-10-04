@@ -1,4 +1,4 @@
-# Security alerts for the new-api gateway, read from its own `logs` table.
+# Security alerts for the new-api gateway, read from its `audit_logs` and `logs` tables.
 #
 # Why they exist: every admin action, login, key reveal, refused check and setting
 # change is written to `logs` with a source address. Left unread, that table only
@@ -556,6 +556,22 @@ spec:
         # when nothing is happening. The ip-labelled ones (admin_actions, admin_logins)
         # legitimately vanish while idle, because a GROUP BY over zero rows produces no
         # series at all -- using one of those here would page every quiet night.
+        # A metric that exists but reads zero forever looks exactly like a quiet night. The
+        # canary writes one refused request per hour; no canary row in 3h means the gateway
+        # stopped auditing, the table moved, a grant went missing or the exporter broke. Any
+        # exporter that takes over these metrics must also serve cnpg_newapi_audit_canary_count.
+        - alert: SecurityAuditCanarySilent
+          expr: (max(cnpg_newapi_audit_canary_count) or vector(0)) == 0
+          for: 30m
+          labels: { severity: critical }
+          annotations:
+            summary: "security alerts are blind: no audit canary row in 3h"
+            description: >-
+              monitoring/audit-canary sends one refused request to new-api every hour and
+              cnpg_newapi_audit_canary_count counts those rows in audit_logs. Check the CronJob
+              (kubectl -n monitoring get jobs -l app=audit-canary), then
+              SELECT * FROM audit_logs WHERE user_agent='uno-audit-canary/1' ORDER BY created_at DESC LIMIT 3,
+              then the exporter grants and which store the gateway writes audit rows to.
         - alert: SecurityMetricsMissing
           expr: absent(cnpg_newapi_channel_key_reads_count) or absent(cnpg_newapi_admin_logins_total_count) or absent(cnpg_newapi_security_denials_total_count) or absent(cnpg_newapi_denials_from_new_ip_offending_ips) or absent(cnpg_newapi_privilege_probes_pat_route_count) or absent(cnpg_newapi_root_pat_from_new_network_count) or absent(cnpg_newapi_registrations_total_5m) or absent(cnpg_newapi_abuse_accounts_5m)
           for: 1h
