@@ -158,7 +158,9 @@ data:
       <query_views_log remove="remove"/>
       <part_log><ttl>event_date + INTERVAL 14 DAY DELETE</ttl></part_log>
       <trace_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></trace_log>
-      <metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></metric_log>
+      <!-- 1,435 columns on 25.8: each merge reserves ~2 MiB per column twice, ~5 GiB spikes that
+           made the overcommit tracker stop inserts (2026-10-04). Prometheus scrapes these. -->
+      <metric_log remove="remove"/>
       <asynchronous_metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></asynchronous_metric_log>
       <text_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></text_log>
       <error_log><ttl>event_date + INTERVAL 14 DAY DELETE</ttl></error_log>
