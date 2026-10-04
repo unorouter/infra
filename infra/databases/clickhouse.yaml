@@ -320,7 +320,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: clickhouse
-          image: clickhouse/clickhouse-server:25.8.33.6
+          image: clickhouse/clickhouse-server:25.8.33.6@sha256:0152dd511befe6a2c2ef53e930726179669b08116da78500b37c51c96ff5ee77
           command:
             - bash
             - -c
@@ -353,10 +353,10 @@ spec:
             periodSeconds: 30
             failureThreshold: 6
           resources:
-            # 4Gi (3 GiB server cap) refused inserts while a merge of the current month and the
-            # gateway's token lookups overlapped (2026-10-04)
-            requests: { cpu: 250m, memory: 2Gi }
-            limits: { memory: 6Gi }
+            # peak 2.3 GiB on the replica that runs the backups once metric_log was gone; the
+            # server caps itself at 75 % (3 GiB) and a refused insert goes to the spool
+            requests: { cpu: 250m, memory: 1536Mi }
+            limits: { memory: 4Gi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
@@ -413,7 +413,7 @@ spec:
             seccompProfile: { type: RuntimeDefault }
           containers:
             - name: backup
-              image: clickhouse/clickhouse-server:25.8.33.6
+              image: clickhouse/clickhouse-server:25.8.33.6@sha256:0152dd511befe6a2c2ef53e930726179669b08116da78500b37c51c96ff5ee77
               env:
                 - name: CLICKHOUSE_PASSWORD
                   valueFrom: { secretKeyRef: { name: clickhouse, key: CLICKHOUSE_PASSWORD } }

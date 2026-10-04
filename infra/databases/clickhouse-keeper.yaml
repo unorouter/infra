@@ -95,7 +95,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: keeper
-          image: clickhouse/clickhouse-keeper:25.8.33.6
+          image: clickhouse/clickhouse-keeper:25.8.33.6@sha256:86ef98ab9c41998c562806a062ef1079af07755f6bcec0a46e9caa9b7a4b4253
           command:
             - bash
             - -c
@@ -112,8 +112,8 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 30
           resources:
-            requests: { cpu: 50m, memory: 256Mi }
-            limits: { memory: 1Gi }
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
