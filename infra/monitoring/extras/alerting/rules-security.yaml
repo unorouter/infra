@@ -559,6 +559,29 @@ spec:
     # safety.
     - name: newapi.security.pipeline
       rules:
+        # The Loki ruler evaluates every LogQL rule (infra/loki/logql-rules.yaml), including the
+        # feed-silence alerts; if it stops, all of them stop at once. Watchdog covers Prometheus,
+        # and Prometheus watches the ruler here.
+        - alert: LokiRulerStalled
+          expr: >-
+            (time() - max(loki_prometheus_rule_group_last_evaluation_timestamp_seconds) > 600)
+            or absent(loki_prometheus_rule_group_last_evaluation_timestamp_seconds)
+          for: 10m
+          labels: { severity: critical, burn_in: "until-2026-10-11" }
+          annotations:
+            summary: "Loki ruler has not evaluated a rule group for 10m: every log alert is blind"
+        - alert: LokiRuleEvaluationFailing
+          expr: sum by (rule_group) (increase(loki_prometheus_rule_evaluation_failures_total[15m])) > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Loki rule group {{ $labels.rule_group }} fails to evaluate: its alerts cannot fire"
+        - alert: LokiRulerConfigReloadFailed
+          expr: min(loki_ruler_config_last_reload_successful) == 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Loki ruler failed to load its rules: new or changed log alerts are not active"
         # Every watcher CronJob in monitoring is an entry point that is only watched while it
         # succeeds (KubeJobFailed is off as noise). Stale after a few of its own intervals.
         - alert: WatcherStale
