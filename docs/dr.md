@@ -93,7 +93,9 @@ new_api_logs`, then each table's `SHOW CREATE TABLE ... FORMAT TSVRaw` from a he
 run as is (the engine path uses `{database}`, `{table}`, `{replica}`), then
 `infra/databases/clickhouse/sql/security.sql` (dictionaries and the exporter user are per node).
 It fetches everything from the others and turns Ready. A replica whose Keeper metadata is gone
-but whose data survived: `SYSTEM RESTORE REPLICA new_api_logs.<table>`. Keeper lost all three
+but whose data survived: `SYSTEM RESTORE REPLICA new_api_logs.<table>`. One Keeper member lost
+its volume: delete its claim and pod, it rejoins under the same id and copies the log from the
+leader (tested 2026-10-04, in sync within seconds, no replica read only). Keeper lost all three
 members: the tables stay read only until Keeper is back; recreate it empty, then `SYSTEM
 RESTORE REPLICA` on every replica.
 
