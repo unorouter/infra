@@ -74,6 +74,15 @@ data:
             AND ip LIKE '10.42.%'
             AND created_at > toUnixTimestamp(now()) - 10800
 
+      # Successful relay calls (logs type 2) in the last 15 minutes, for NewApiSuccessfulTrafficStopped.
+      - query_name: successful_calls
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count
+          FROM logs
+          WHERE type = 2
+            AND created_at > toUnixTimestamp(now()) - 900
+
       - query_name: admin_actions
         no_prepared_statement: true
         query: |
@@ -438,6 +447,11 @@ data:
         help: "Canary refusals recorded in audit_logs in the last 3h. Expected 3; zero means the security alerts are blind."
         values: [count]
         query_ref: audit_canary
+      - metric_name: cnpg_newapi_successful_calls_15m_count
+        type: gauge
+        help: "Successful relay calls in the last 15 minutes. The 15-day low was 1,736."
+        values: [count]
+        query_ref: successful_calls
       - metric_name: cnpg_newapi_admin_actions_count
         type: gauge
         help: "Admin and security audit actions in the last 5 minutes, by source IP"

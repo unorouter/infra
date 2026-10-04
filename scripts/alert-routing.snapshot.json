@@ -356,6 +356,12 @@
  "NewApiRegistrationSpike|warning|||": [
   "discord"
  ],
+ "NewApiSuccessfulTrafficMissing|warning|||": [
+  "discord"
+ ],
+ "NewApiSuccessfulTrafficStopped|critical||page|until-2026-10-11": [
+  "discord"
+ ],
  "NewApiSyncJobFailed|warning|||": [
   "discord"
  ],

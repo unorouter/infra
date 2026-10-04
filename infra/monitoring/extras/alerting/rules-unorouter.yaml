@@ -313,6 +313,29 @@ spec:
           annotations:
             summary: "Public endpoint {{ $labels.instance }} failing from inside the cluster"
             description: "This is the exact hairpin path Cloudflare began dropping mid-TLS-handshake. External checks looked fine at the time."
+        # Every probe can stay green while customers get no successful answer (lanes pulled,
+        # billing broken, an upstream refusing everything). Successful relay calls per 15 minutes,
+        # 15 days measured on 2026-10-04: low 1,736, and a drop below a quarter of both an hour ago
+        # and the same time last week never happened (bursts ending do reach a fifth of an hour ago).
+        - alert: NewApiSuccessfulTrafficStopped
+          expr: >-
+            (cnpg_newapi_successful_calls_15m_count < 300)
+            or
+            (
+              cnpg_newapi_successful_calls_15m_count < 0.25 * (cnpg_newapi_successful_calls_15m_count offset 1h)
+              and
+              cnpg_newapi_successful_calls_15m_count < 0.25 * (cnpg_newapi_successful_calls_15m_count offset 7d)
+            )
+          for: 10m
+          labels: { page: "true", severity: critical, burn_in: "until-2026-10-11" }
+          annotations:
+            summary: "successful API calls fell to {{ $value }} per 15m: customers are not getting answers"
+        - alert: NewApiSuccessfulTrafficMissing
+          expr: absent(cnpg_newapi_successful_calls_15m_count)
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "the successful-calls metric is gone: NewApiSuccessfulTrafficStopped cannot fire"
         - alert: TunnelRequestErrorsHigh
           # Needs the cloudflared PodMonitor (metrics :2000). Clients hanging up on stalled
           # responses is often the ONLY signal users see 524s: the origin still answers
