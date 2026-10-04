@@ -118,6 +118,11 @@ data:
       <!-- the cgroup figure counts reclaimable page cache: 2.2 GiB of it pushed the tracker past
            the cap and inserts were refused (2026-10-04); jemalloc's own figure is the real usage -->
       <memory_worker_use_cgroup>0</memory_worker_use_cgroup>
+      <!-- defaults are 5 GiB each, sized for a big host: the gateway's token lookups filled them
+           past the server cap and the overcommit tracker stopped inserts (2026-10-04) -->
+      <mark_cache_size>536870912</mark_cache_size>
+      <index_mark_cache_size>134217728</index_mark_cache_size>
+      <uncompressed_cache_size>0</uncompressed_cache_size>
       <!-- one replica only: an acknowledged insert must be on disk, not in the page cache -->
       <merge_tree>
         <fsync_after_insert>1</fsync_after_insert>
@@ -164,6 +169,12 @@ data:
   users.xml: |
     <clickhouse>
       <profiles>
+        <!-- one part every 2 s instead of every 200 ms: about 4 parts a second kept 1,000+
+             merges running every 5 minutes; 2 s fits in the gateway's 10 s write timeout -->
+        <gateway>
+          <async_insert_use_adaptive_busy_timeout>0</async_insert_use_adaptive_busy_timeout>
+          <async_insert_busy_timeout_max_ms>2000</async_insert_busy_timeout_max_ms>
+        </gateway>
         <reader>
           <readonly>2</readonly>
           <max_execution_time>120</max_execution_time>
@@ -180,7 +191,7 @@ data:
         <gateway>
           <password from_env="CH_GATEWAY_PASSWORD"/>
           <networks><ip>::/0</ip></networks>
-          <profile>default</profile>
+          <profile>gateway</profile>
           <quota>default</quota>
           <!-- append-only like the Postgres audit_logs guard (protect-audit-logs.sql): no ALTER,
                so no DELETE, UPDATE, TTL or partition drop on either table. The tables already
