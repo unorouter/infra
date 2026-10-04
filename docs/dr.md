@@ -80,6 +80,32 @@ image older than `c7cb25598`, it maps that column.
   the label, `tctl create -f --force`) and the reconciler goes quiet.
 - `unorouter-logs` is written by Vector under `vector/<source>/node=<node>/date=<day>/`, gzip
   ndjson, never overwritten.
+- `unorouter-clickhouse`: ClickHouse's cold tier, written directly (not through the gateway),
+  unlocked and unversioned because merges delete replaced parts. Objects are ClickHouse
+  `encrypted` disk ciphertext under `prod/` with random names; they are only readable through
+  the pod's local metadata and the key in OpenBao `secret/clickhouse` `cold_key_hex`. Never
+  restore from this bucket: restore from the backups below.
+
+### ClickHouse
+
+`clickhouse-backup` (05:15 UTC, `infra/databases/clickhouse.yaml`) writes
+`unorouter-backups/clickhouse/new_api_logs/<ISO week>/full` on the first night of a week
+and an incremental `<day>` on that full every other night, so no chain outlives the 31 day
+expiry. It goes through the gateway (rclone crypt like every other backup) and stores cold
+parts decrypted, so a restore needs neither the cold tier key nor the old pod.
+
+```sql
+-- as admin, in the pod; latest day of the newest week, or <week>/full
+RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<day>')
+-- if the gateway already created empty tables:
+--   ... SETTINGS allow_non_empty_tables = true
+```
+
+Then re-apply `infra/databases/clickhouse-security.sql` (dictionaries and the exporter user,
+password hash from `secret/clickhouse-security-exporter`). The skip indexes come back with
+the tables. The cold tier key matters only for a pod whose volume survived: lose the key and
+the moved parts are gone, restore from the backup instead. Restored on 2026-10-04 into a
+scratch table, cold parts included.
 
 ### Rules
 
@@ -136,12 +162,15 @@ in free disk (`local-path` does not enforce it).
 Talos snapshot on Hetzner (`talos/README.md` rebuilds it), git and its sops files, the
 break-glass age key (VeraCrypt plus Bitwarden), Cloudflare DNS, the tunnel token in the vault
 snapshot. **Dies**: nodes, etcd, every local-path PV (PGDATA, OpenBao raft, Teleport SQLite,
-ArgoCD, monitoring), every pod.
+ClickHouse, ArgoCD, monitoring), every pod. The `unorouter-clickhouse` objects survive but are
+unreadable without the pod's metadata: ClickHouse comes back from its backup.
 
 0. **Pre-destroy on a live cluster**: writers to 0 (new-api master and slaves, bot, unorouter,
    mcp, uno-import), sync and archive CronJobs suspended, `SELECT pg_switch_wal()` and confirm
    the segment archived, a fresh OpenBao snapshot
-   (`kubectl -n openbao create job --from=cronjob/openbao-raft-snapshot ...`), the lineage bump
+   (`kubectl -n openbao create job --from=cronjob/openbao-raft-snapshot ...`), a ClickHouse
+   backup after the writers stopped
+   (`kubectl -n databases create job --from=cronjob/clickhouse-backup ...`), the lineage bump
    (step 2) pushed, then destroy. Skipping the WAL flush loses the last five minutes.
 1. **Recreate**: `./scripts/dr.sh talosconfig`, `./scripts/dr.sh apply` (servers boot the
    snapshot with their config as user data), `./scripts/dr.sh bootstrap` (`talosctl bootstrap`
@@ -164,9 +193,13 @@ ArgoCD, monitoring), every pod.
    keys are in Bitwarden.
 4. **Hand steps git does not carry**:
    - `psql -U postgres -d newapi -f infra/databases/quota-audit.sql`,
-     `reader-least-privilege.sql` and `ip-retention-least-privilege.sql` after a cluster built
+     `reader-least-privilege.sql`, `ip-retention-least-privilege.sql`,
+     `clickhouse-dict-least-privilege.sql` and `protect-audit-logs.sql` after a cluster built
      from `initdb` (a physical restore keeps
      roles, triggers and RLS; an initdb cluster lets `reader` read every PAT and password hash).
+   - ClickHouse before new-api writes: the image creates `new_api_logs` only on its very first
+     start, so `CREATE DATABASE IF NOT EXISTS new_api_logs` as admin, then the restore under
+     "ClickHouse" above.
    - OpenBao OIDC role is a runtime write, every field:
      ```sh
      bao write auth/oidc/role/admin \

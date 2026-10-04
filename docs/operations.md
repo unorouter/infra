@@ -42,6 +42,32 @@ rendered manifests and the Delete reclaim policy takes the data with it (Telepor
 2026-09-16). Set the PV to Retain first, or keep the claim outside the chart from the start
 (`grafana-data`, `teleport`).
 
+## Log store (ClickHouse)
+
+The gateway writes `logs` and `audit_logs` to ClickHouse since 2026-10-04 (`LOG_SQL_DSN` and
+the two `LOG_SQL_CLICKHOUSE_*` settings in OpenBao `secret/newapi-env`);
+`infra/databases/clickhouse.yaml`. One pod, `databases/clickhouse-0`, on node11's local-path
+volume. Parts older than 30 days move to the `unorouter-clickhouse` bucket through an
+`encrypted` disk (AES-256-CTR, key OpenBao `secret/clickhouse` `cold_key_hex`, no other copy);
+recent parts and the metadata of the moved ones stay local. Postgres keeps everything else.
+
+- Accounts: `admin` (DDL, backups), `gateway` (SELECT, INSERT and CREATE TABLE on the two
+  tables only: no ALTER, so no DELETE, UPDATE, TTL change, partition drop, TRUNCATE or DROP,
+  the same guarantee as `protect-audit-logs.sql`), `reader`, and `security_exporter`
+  (`infra/databases/clickhouse-security.sql`). Passwords in `secret/clickhouse` and
+  `secret/clickhouse-security-exporter`. The dictionaries read newapi-pg as `clickhouse_dict`
+  (`clickhouse-dict-least-privilege.sql`).
+- Schema changes are admin's, by hand: the gateway's startup migration finds the tables
+  already matching its DDL and issues no ALTER; a changed `LOG_SQL_CLICKHOUSE_*` value is only
+  logged as a failure. Skip indexes: `infra/databases/clickhouse-logs-indexes.sql`.
+- A restart drops log rows: the gateway gives each write 10 s and does not retry, and
+  ClickHouse takes 20 to 40 s to come back. The config is subPath mounted, so every ConfigMap
+  change needs one. Do it in a quiet hour.
+- Query it: `kubectl -n databases exec -it clickhouse-0 -- clickhouse-client --user reader
+  --password "$CH_READER_PASSWORD"` (the variable is in the pod), or
+  `kubectl -n databases port-forward clickhouse-0 8123` for HTTP.
+- Backup and restore: `docs/dr.md` "ClickHouse".
+
 ## Encryption at rest
 
 `EPHEMERAL` (etcd, images, logs), `s-swap` and `u-local-path-provisioner` (every PVC) carry
@@ -62,6 +88,9 @@ window, rehearsed on a spare 2026-09-17):
    primaries known, etcd and OpenBao snapshots fresh, a Velero backup that lists the
    node-pinned local claims to keep (`uno-import-profile`, `data-openbao-0`, anything else
    not rebuildable; hostPath claims must first be recreated as `local`, see Node disk).
+   `data-clickhouse-0` (node11) is not in Velero: run the `clickhouse-backup` job right
+   before and restore from it after (`docs/dr.md` "ClickHouse"); rows written while it is
+   gone are lost.
 2. Cordon, `kubectl cnpg promote` any primary away, evict the singletons one by one, drain,
    delete the node-pinned PVCs (replicas reclone, caches refill, Velero-covered ones come
    back by restore).

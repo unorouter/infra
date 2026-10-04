@@ -2,8 +2,8 @@
 
 unorouter revenue stack. Three Talos Linux control planes on Hetzner (node11, node12, node13,
 nbg1, cx43) on their own WireGuard mesh, no provider network, no SSH; Cilium without kube-proxy,
-ArgoCD app-of-apps, CloudNativePG with PITR to Hetzner Object Storage, OpenBao, ESO, cloudflared,
-kube-prometheus-stack, Loki, Vector, Tetragon.
+ArgoCD app-of-apps, CloudNativePG with PITR to Hetzner Object Storage, ClickHouse for the gateway
+logs, OpenBao, ESO, cloudflared, kube-prometheus-stack, Loki, Vector, Tetragon.
 
 Everything enters through the Cloudflare tunnel. Two firewalls in series allow Tailscale, the
 WireGuard mesh and ICMP, nothing else: Hetzner's in front of the NIC and Talos's own on the
