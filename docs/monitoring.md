@@ -9,7 +9,7 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
 - **Rules**: `alerting/rules-unorouter.yaml` (platform, each from a real incident) and
   `alerting/rules-security.yaml` (account takeover, card testing, chargebacks, guest abuse), fed by
   SQL over the gateway's Postgres tables in `scrape/cnpg-security-queries.yaml` and over its
-  ClickHouse logs and audit trail in `infra/databases/clickhouse-security-exporter.yaml`.
+  ClickHouse logs and audit trail in `infra/databases/clickhouse/security-exporter.yaml`.
 - **Audit canary**: `pollers/audit-canary.yaml` sends one refused request an hour (fake bearer
   token, user agent `uno-audit-canary/1`) and `cnpg_newapi_audit_canary_count` counts its
   audit rows over 3 h. `SecurityAuditCanarySilent` pages at zero: a security metric that reads
@@ -59,23 +59,18 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
 - **Routing is drop-by-default**: root receiver `null`; critical and warning reach Discord
   through `alerting/ntfy-bridge.yaml` (severity-coloured embeds, one log line per delivery),
   critical also pages the phone via ntfy. Test with `amtool alert add` in the alertmanager pod.
-- **Logs**: Vector (DaemonSet, `infra/loki/values-vector.yaml`) tails `/var/log/pods`, the
-  apiserver audit files and the Hubble export; Tetragon's process records arrive as the pod log
-  of its `export-stdout` container, with key shaped arguments already redacted by Tetragon.
-  Raw lines go to Loki (`infra/loki/values-loki.yaml`),
-  chunks and index through the s3-gateway in `unorouter-loki`, 90 d, which is also the PII
-  retention (gateway logs carry IPs and emails; Grafana behind Teleport is the only reader). A
-  sanitized subset goes write-once into the locked `unorouter-logs`, encrypted by the
-  s3-gateway on the way (read it directly with the rclone crypt remote in `docs/dr.md`): per
-  pod family a field allowlist in the `pods_archive` transform (openbao, gateway and bot
-  `security.` events, postgres audit, teleport, netcup, talos, tetragon), the audit log, the
-  Hubble flows, and every other pod line as family `app` with bearer tokens, key, token and
-  password values and key shaped strings replaced by `*****` (raw postgres server lines stay
-  out). The archive is the complete record for 90 days: Loki or any other search layer can be
-  refilled from it. Labels are only
-  `namespace, pod, container, node, app, stream` (audit: `job="k8s-audit", node`), everything
-  else is a query-time parser: `{namespace="services"}`, `{job="k8s-audit"} | json |
-  verb="create"`. Vector health is `infra/loki/rules.yaml`.
+- **Logs**: Vector (`infra/loki/values-vector.yaml`) ships pod logs, the apiserver audit files,
+  the Hubble export and Tetragon's records (the pod log of its `export-stdout` container, key
+  shaped arguments redacted). Raw lines go to Loki (`values-loki.yaml`), stored through the
+  s3-gateway in `unorouter-loki` for 90 d, which is also the PII retention (gateway logs carry
+  IPs and emails; Grafana behind Teleport is the only reader). A sanitized copy goes write-once
+  into the locked `unorouter-logs` (read it with the rclone crypt remote in `docs/dr.md`): a
+  field allowlist per pod family (`pods_archive` transform), the audit log, the Hubble flows,
+  and every other line as family `app` with tokens, keys and passwords replaced by `*****`
+  (raw postgres server lines stay out). It is the complete 90 day record and can refill Loki.
+  Labels are only `namespace, pod, container, node, app, stream` (audit: `job="k8s-audit",
+  node`); everything else is parsed at query time (`{job="k8s-audit"} | json |
+  verb="create"`). Vector health: `infra/loki/rules.yaml`.
 - etcd targets come from node discovery (`scrape/etcd.yaml`, port 2381 on the mesh address).
   Backup freshness reads the `Backup` CRs via kube-state-metrics (the plugin's own metric is 0).
 - dex clients, blackbox config and the ConfigMap code of ntfy-bridge and edge-mode are read
@@ -98,5 +93,5 @@ per-IP auto-ban catches single-source floods. Details: `incidents/2026-09-03-l7-
 - **After every rule change**: allowlist checks from the incident report, then `./mitigations.py
   <hours>`. A webhook sender, CLI client or OPTIONS preflight in that list is a false positive.
 - Header-name checks must use `lower(http.request.headers.names[*])`.
-- 504s with origin status 0 and UA "…early hints" are Cloudflare synthetics, filter them out
+- 504s with origin status 0 and a UA containing "early hints" are Cloudflare synthetics, filter them out
   before reading any 5xx rate.

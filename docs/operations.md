@@ -33,51 +33,36 @@ Images are the only reclaimable chunk; the rest is live local-path data on the u
 `talosctl -n <node> get volumestatus` shows partitions, `image ls` the images.
 `NodeDiskFillingUp` at 75 % means GC already ran and the growth is real data.
 
-local-path creates `local` PVs (StorageClass annotation `defaultVolumeType`, 2026-09-16):
-Velero's node-agent refuses hostPath-backed claims in every mode and reports the backup
-Completed anyway, so a hostPath claim is silently never backed up. Claims from before that
-date are hostPath until recreated. A chart-owned claim must never be swapped by pointing
-the chart at another claim: ArgoCD prunes the chart's claim the moment it leaves the
-rendered manifests and the Delete reclaim policy takes the data with it (Teleport auth,
-2026-09-16). Set the PV to Retain first, or keep the claim outside the chart from the start
-(`grafana-data`, `teleport`).
+local-path makes `local` PVs (StorageClass annotation `defaultVolumeType`): Velero's node-agent
+skips hostPath claims yet reports the backup Completed. Never swap a chart-owned claim by
+pointing the chart at another one: ArgoCD prunes the old claim and the Delete policy takes its
+data (Teleport auth, 2026-09-16). Set the PV to Retain first, or keep the claim outside the
+chart (`grafana-data`, `teleport`).
 
 ## Log store (ClickHouse)
 
-The gateway writes `logs` and `audit_logs` to ClickHouse since 2026-10-04 (`LOG_SQL_DSN` and
-the two `LOG_SQL_CLICKHOUSE_*` settings in OpenBao `secret/newapi-env`);
-`infra/databases/clickhouse.yaml`. Three replicas, `clickhouse-0..2`, one per node on local-path,
-coordinated by three ClickHouse Keeper members (`clickhouse-keeper.yaml`, one per node, Raft
-majority two). Every replica accepts writes and fetches the others' parts within seconds; there
-is no primary and nothing to promote. The `clickhouse` Service only routes to replicas whose two
-replicated tables exist, reach Keeper and are under 5 minutes behind. Without a Keeper majority
-the tables turn read only and every replica drops out of the Service: rows then wait in the
-spool. Parts older than 30 days move to the `unorouter-clickhouse` bucket through an
-`encrypted` disk (AES-256-CTR, key OpenBao `secret/clickhouse` `cold_key_hex`, no other copy),
-each replica its own copy; recent parts and the metadata of the moved ones stay local.
-Postgres keeps everything else.
+Gateway `logs` and `audit_logs` live in ClickHouse since 2026-10-04 (`LOG_SQL_*` in OpenBao
+`secret/newapi-env`; `infra/databases/clickhouse/clickhouse.yaml`, `clickhouse-keeper.yaml`). Three
+replicas and three Keeper members, one of each per node. Every replica accepts writes and
+fetches the others' parts within seconds; there is no primary. The `clickhouse` Service routes
+only to a replica whose two tables exist, reach Keeper and are under 5 minutes behind; without
+a Keeper majority all drop out and rows wait in the spool. Parts older than 30 days move to
+`unorouter-clickhouse` through an `encrypted` disk (key OpenBao `secret/clickhouse`
+`cold_key_hex`, no other copy).
 
-- Accounts: `admin` (DDL, backups), `gateway` (SELECT, INSERT and CREATE TABLE on the two
-  tables only: no ALTER, so no DELETE, UPDATE, TTL change, partition drop, TRUNCATE or DROP,
-  the same guarantee as `protect-audit-logs.sql`), `reader`, and `security_exporter`
-  (`infra/databases/clickhouse-security.sql`). Passwords in `secret/clickhouse` and
-  `secret/clickhouse-security-exporter`. The dictionaries read newapi-pg as `clickhouse_dict`
-  (`clickhouse-dict-least-privilege.sql`).
-- Schema changes are admin's, by hand: the gateway's startup migration finds the tables
-  already matching its DDL and issues no ALTER; a changed `LOG_SQL_CLICKHOUSE_*` value is only
-  logged as a failure. Skip indexes: `infra/databases/clickhouse-logs-indexes.sql`.
-- A failed ClickHouse write (restart, refusal, timeout) goes to Postgres `log_spool` on the
-  main database instead; the master drains it every 5 s with a synchronous insert and skips
-  rows ClickHouse already has (audit rows by `event_id`, log rows by a content hash). Only a
-  row that cannot be spooled either logs `failed to write <table> row` (`GatewayLogRowsLost`);
-  a spool that stays non-empty for 15 minutes fires `GatewayLogSpoolBacklog`.
-- `system.metric_log` stays off: on 25.8 its 1,435 columns make a merge reserve about 5 GiB,
-  and the overcommit tracker then stops inserts. The config is subPath mounted: a ConfigMap
-  change needs a rolling restart.
-- Query it: `kubectl -n databases exec -it clickhouse-0 -- clickhouse-client --user reader
-  --password "$CH_READER_PASSWORD"` (the variable is in the pod), or
-  `kubectl -n databases port-forward clickhouse-0 8123` for HTTP.
-- Backup and restore: `docs/dr.md` "ClickHouse".
+- Accounts: `admin`; `gateway` may only SELECT, INSERT and CREATE TABLE on the two tables
+  (append only, like `protect-audit-logs.sql`); `reader`; `security_exporter`
+  (`clickhouse-security.sql`). The dictionaries read newapi-pg as `clickhouse_dict`.
+- Schema, TTL and index changes are admin's, by hand (`clickhouse-logs-indexes.sql`); the
+  gateway issues no ALTER.
+- A failed write goes to Postgres `log_spool`; the master drains it every 5 s, skipping rows
+  ClickHouse already has. `GatewayLogRowsLost`: a row reached neither. `GatewayLogSpoolBacklog`:
+  the spool stayed non-empty 15 minutes.
+- `system.metric_log` stays off (on 25.8 a merge of its 1,435 columns reserves about 5 GiB).
+  The config is subPath mounted: a ConfigMap change needs a rolling restart.
+- Query: `kubectl -n databases exec -it clickhouse-0 -- clickhouse-client --user reader
+  --password "$CH_READER_PASSWORD"`, or the Teleport app `clickhouse` (`tsh proxy app
+  clickhouse --port 18123`). Backup and restore: `docs/dr.md` "ClickHouse".
 
 ## Encryption at rest
 
@@ -120,13 +105,11 @@ in `docs/dr.md` "Encrypted volumes".
   answers NodePort and LoadBalancer in BPF before the chain: the node firewall cannot guard
   those, so the cluster has none. Change it with `apply-config --mode=try --timeout=6m` first.
 - PriorityClasses (`infra/services/priorityclasses.yaml`): `serving` for the revenue path
-  (cloudflared, unorouter, new-api, redis, newapi-pg), `batch` for deferrable jobs
-  (new-api-sync, uno-import, dr-drill). The kubelet evicts by usage over request first, then
-  by class, so every serving pod also carries a memory request. Every container carries a
-  memory request (7 day median, requests only, no limits); Cilium's are in
-  `infra/cilium/values.yaml` and travel with the hand `helm upgrade`. CNPG does not roll pods for a
-  class change; it lands when an instance is next recreated (`kubectl cnpg restart <cluster>
-  <instance>` one replica at a time, then `kubectl cnpg promote`, then the old primary).
+  (cloudflared, unorouter, new-api, redis, newapi-pg), `batch` for deferrable jobs. The kubelet
+  evicts by usage over request first, then by class, so every container carries a memory
+  request (7 day median); Cilium's live in `infra/cilium/values.yaml` and travel with the hand
+  `helm upgrade`. CNPG applies a class change only to a recreated instance (`kubectl cnpg
+  restart`, replicas first, then promote, then the old primary).
 - Kubelet reserves 1Gi/500m for the system (etcd, apid, containerd, tailscaled) and
   512Mi/250m for itself (`talos/patches/machine.yaml`); allocatable is 13.4Gi per node.
 - Org hardening: base repo permission `none`, member repo creation OFF (the ApplicationSet deploys

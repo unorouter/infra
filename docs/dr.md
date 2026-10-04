@@ -62,23 +62,21 @@ image older than `c7cb25598`, it maps that column.
 - `unorouter-loki`: unlocked and unversioned on purpose, the compactor deletes and rewrites.
   Retention is Loki's 90 d (`infra/loki/values-loki.yaml`); the 120 d lifecycle only catches a
   dead compactor.
-- `unorouter-velero`: unlocked (Kopia must delete and rewrite, velero-io/velero#8686), versioning
-  is its protection. Velero backs up no Secrets (ESO, cert-manager and CNPG recreate them, the
-  pg-s3 pairs have `secrets/k8s.sops.yaml`) and only PVs annotated
-  `backup.velero.io/backup-volumes` (Teleport auth data, Grafana storage, the uno-import browser profile). Restoring one
-  claim (2026-09-16): pause `automated` on `root` and the owning app first, or ArgoCD prunes
-  the restored claim within seconds (it carries the tracking annotation); include
-  `persistentvolumes` in `includedResources` or the claim keeps its dead `volumeName`; never
-  pre-create the claim, Velero then skips the data. Strip the tracking annotation from the
-  restored claim before sync resumes. Delete the Deployment first (ArgoCD paused): the
-  restored pod carries the ReplicaSet owner reference, the ReplicaSet counts it as surplus
-  and kills it before the data lands, while the Deployment's own pod grabs the empty claim
-  and mints a fresh cluster identity (2026-09-17, twice). Velero runs one restore at a time;
-  a stuck InProgress one needs its finalizer removed before the next starts. An identity
-  change on the auth server needs a fresh `tsh login` and the agent state Secret deleted.
-  After the restore the operator may log `unowned Resource '<role>' already exists` for the
-  git-managed roles: label them `teleport.dev/origin: kubernetes` (`tctl get roles/<r>`, add
-  the label, `tctl create -f --force`) and the reconciler goes quiet.
+- `unorouter-velero`: unlocked (Kopia rewrites, velero-io/velero#8686), versioned. Velero backs
+  up no Secrets (ESO, cert-manager and CNPG recreate them; the pg-s3 pairs are in
+  `secrets/k8s.sops.yaml`) and only PVs annotated `backup.velero.io/backup-volumes` (Teleport
+  auth, Grafana, the uno-import browser profile). Restoring one claim:
+  1. Pause `automated` on `root` and the owning app, and delete the Deployment. Otherwise
+     ArgoCD prunes the restored claim, or the ReplicaSet kills the restored pod while its own
+     pod takes an empty claim and mints a fresh identity (2026-09-17, twice).
+  2. Restore with `persistentvolumes` in `includedResources` (else the claim keeps its dead
+     `volumeName`). Never pre-create the claim: Velero then skips the data.
+  3. Strip the ArgoCD tracking annotation from the claim, resume sync.
+
+  One restore runs at a time; a stuck InProgress one needs its finalizer removed. Teleport auth
+  after a restore: fresh `tsh login`, delete the agent state Secret, and label the git-managed
+  roles `teleport.dev/origin: kubernetes` (`tctl get roles/<r>`, `tctl create -f --force`) if
+  the operator logs `unowned Resource '<role>' already exists`.
 - `unorouter-logs` is written by Vector under `vector/<source>/node=<node>/date=<day>/`, gzip
   ndjson, never overwritten.
 - `unorouter-clickhouse`: ClickHouse's cold tier, written directly (not through the gateway),
@@ -93,7 +91,7 @@ image older than `c7cb25598`, it maps that column.
 it stays out of the Service. As admin in that pod: `CREATE DATABASE IF NOT EXISTS
 new_api_logs`, then each table's `SHOW CREATE TABLE ... FORMAT TSVRaw` from a healthy replica
 run as is (the engine path uses `{database}`, `{table}`, `{replica}`), then
-`infra/databases/clickhouse-security.sql` (dictionaries and the exporter user are per node).
+`infra/databases/clickhouse/sql/security.sql` (dictionaries and the exporter user are per node).
 It fetches everything from the others and turns Ready. A replica whose Keeper metadata is gone
 but whose data survived: `SYSTEM RESTORE REPLICA new_api_logs.<table>`. Keeper lost all three
 members: the tables stay read only until Keeper is back; recreate it empty, then `SYSTEM
@@ -102,7 +100,7 @@ RESTORE REPLICA` on every replica.
 **Everything lost**: restore from the backups below into one replica, set up the other two as
 above, they fetch from it.
 
-`clickhouse-backup` (hourly at :15, `infra/databases/clickhouse.yaml`) writes
+`clickhouse-backup` (hourly at :15, `infra/databases/clickhouse/clickhouse.yaml`) writes
 `unorouter-backups/clickhouse/new_api_logs/<ISO week>/<timestamp>`: the first run of a week is
 full, every other run is incremental on the previous one (found in `system.backup_log`), a
 few MB an hour. A lost volume costs at most the last hour; no chain outlives the 31 day
@@ -117,7 +115,7 @@ RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<timesta
 --   ... SETTINGS allow_non_empty_tables = true
 ```
 
-Then re-apply `infra/databases/clickhouse-security.sql` (dictionaries and the exporter user,
+Then re-apply `infra/databases/clickhouse/sql/security.sql` (dictionaries and the exporter user,
 password hash from `secret/clickhouse-security-exporter`). The skip indexes come back with
 the tables. The cold tier key matters only for a pod whose volume survived: lose the key and
 the moved parts are gone, restore from the backup instead. Restored on 2026-10-04 into a
@@ -136,7 +134,7 @@ scratch table, cold parts included.
   old pair until the lifecycle expires them (31 d). Objects from before 2026-09-09 (`*-pg-v5`,
   `*-pg-v6`, `unorouter-evidence`) are unreadable noise until 2026-10-09; plaintext copies of
   everything as of that date are under `~/backups/` on the operator machine (LUKS, not synced).
-- Restore drill: `infra/databases/dr-drill.yaml` restores bot-pg into a scratch cluster on the 1st of
+- Restore drill: `infra/databases/postgres/dr-drill.yaml` restores bot-pg into a scratch cluster on the 1st of
   each month and counts populated tables; `DRDrillStale` warns after 35 d. By hand:
   `kubectl -n databases create job --from=cronjob/dr-drill dr-drill-manual`.
 - `kubectl -n velero get backup` hits CNPG's CRD; use `get backup.velero.io`.
@@ -196,7 +194,7 @@ unreadable without the pod's metadata: ClickHouse comes back from its backup.
    archives to the path it restored from. In the app repos (`unorouter/new-api`,
    `unorouter/unorouter-bot`, `k8s/pg.yaml`): `plugins[].serverName` to v{N+1},
    `externalClusters[<x>-origin].serverName` to v{N} (v8 since 2026-09-12), drop the `replica`
-   block, `LINEAGE` in `infra/databases/dr-drill.yaml` to v{N}, push before the apply. Never set
+   block, `LINEAGE` in `infra/databases/postgres/dr-drill.yaml` to v{N}, push before the apply. Never set
    `cnpg.io/skipEmptyWalArchiveCheck` (corrupts the source). PITR:
    `bootstrap.recovery.recoveryTarget.targetTime` before the apply, removed after. Recovery jobs
    fail until ESO delivers the S3 secret and the s3-gateway answers (monitoring app), and need
@@ -208,7 +206,7 @@ unreadable without the pod's metadata: ClickHouse comes back from its backup.
    force-sync every ExternalSecret, `tsh login` again (new Teleport CA). Age key lost: unseal
    keys are in Bitwarden.
 4. **Hand steps git does not carry**:
-   - `psql -U postgres -d newapi -f infra/databases/quota-audit.sql`,
+   - `psql -U postgres -d newapi -f infra/databases/postgres/sql/quota-audit.sql`,
      `reader-least-privilege.sql`, `ip-retention-least-privilege.sql`,
      `clickhouse-dict-least-privilege.sql` and `protect-audit-logs.sql` after a cluster built
      from `initdb` (a physical restore keeps
