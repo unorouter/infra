@@ -115,6 +115,11 @@ data:
         <console>1</console>
       </logger>
       <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
+      <!-- one replica only: an acknowledged insert must be on disk, not in the page cache -->
+      <merge_tree>
+        <fsync_after_insert>1</fsync_after_insert>
+        <fsync_part_directory>1</fsync_part_directory>
+      </merge_tree>
       <!-- ZSTD over the default LZ4: the log text compresses about 11x instead of 7x -->
       <compression>
         <case>
@@ -280,10 +285,11 @@ spec:
         resources:
           requests: { storage: 30Gi }
 ---
-# Nightly backup through the s3-gateway into the locked unorouter-backups bucket (crypt there,
-# 30 day lock, 31 day expiry). The first run of each ISO week writes a full backup; the other
-# nights are incremental on that week's full, so no chain outlives the bucket's expiry.
-# Restore: RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<day or full>').
+# Hourly backup through the s3-gateway into the locked unorouter-backups bucket (crypt there,
+# 30 day lock, 31 day expiry). The first run of each ISO week writes a full backup, every other
+# run is incremental on the previous one of that week (system.backup_log), so an hour of rows is
+# the most a lost volume costs and no chain outlives the bucket's expiry. RESTORE follows the
+# chain by itself: RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<hour>').
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -291,14 +297,14 @@ metadata:
   namespace: databases
 spec:
   # after the newapi-pg base backup (03:00, about 90 min) has left the gateway
-  schedule: "15 5 * * *"
+  schedule: "15 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 10800
+      activeDeadlineSeconds: 3000
       template:
         metadata:
           labels: { app: clickhouse-backup }
@@ -322,15 +328,16 @@ spec:
                 - |
                   set -euo pipefail
                   q() { clickhouse-client --host clickhouse --user admin --password "$CLICKHOUSE_PASSWORD" --query "$1"; }
-                  week=new_api_logs/$(date -u +%G-W%V); day=$(date -u +%F)
+                  week=new_api_logs/$(date -u +%G-W%V); hour=$(date -u +%FT%H)
                   # cold parts are stored decrypted: a restore must not depend on the cold tier key
                   plain="decrypt_files_from_encrypted_disks = 1"
-                  # an incremental needs this week's full; the first night of a week has none yet
-                  if q "BACKUP DATABASE new_api_logs TO Disk('backups', '$week/$day') SETTINGS $plain, base_backup = Disk('backups', '$week/full')"; then
-                    echo "incremental $week/$day done"
+                  base=$(q "SELECT name FROM system.backup_log WHERE status = 'BACKUP_CREATED' AND startsWith(name, 'Disk(''backups'', ''$week/') ORDER BY event_time_microseconds DESC LIMIT 1 FORMAT TSVRaw")
+                  if [ -n "$base" ]; then
+                    q "BACKUP DATABASE new_api_logs TO Disk('backups', '$week/$hour') SETTINGS $plain, base_backup = $base"
+                    echo "incremental $week/$hour on $base done"
                   else
-                    q "BACKUP DATABASE new_api_logs TO Disk('backups', '$week/full') SETTINGS $plain"
-                    echo "full $week/full done"
+                    q "BACKUP DATABASE new_api_logs TO Disk('backups', '$week/$hour') SETTINGS $plain"
+                    echo "full $week/$hour done"
                   fi
               securityContext:
                 allowPrivilegeEscalation: false

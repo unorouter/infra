@@ -256,12 +256,12 @@ spec:
             summary: "a ClickHouse partition holds {{ $value }} parts: inserts are outrunning merges (async_insert off, or merges failing on the cold disk); at 3000 inserts are refused"
         - alert: ClickHouseBackupStale
           expr: >
-            (time() - max(kube_cronjob_status_last_successful_time{namespace="databases", cronjob="clickhouse-backup"})) > 2 * 86400
+            (time() - max(kube_cronjob_status_last_successful_time{namespace="databases", cronjob="clickhouse-backup"})) > 3 * 3600
             or absent(kube_cronjob_status_last_successful_time{namespace="databases", cronjob="clickhouse-backup"})
           for: 1h
           labels: { severity: warning }
           annotations:
-            summary: "no successful ClickHouse backup in 2 days: kubectl -n databases create job --from=cronjob/clickhouse-backup clickhouse-backup-manual"
+            summary: "no successful ClickHouse backup in 3 hours: kubectl -n databases create job --from=cronjob/clickhouse-backup clickhouse-backup-manual"
         - alert: ClickHouseBackupFailed
           expr: kube_job_status_failed{namespace="databases", job_name=~"clickhouse-backup-.*"} > 0
           for: 5m
