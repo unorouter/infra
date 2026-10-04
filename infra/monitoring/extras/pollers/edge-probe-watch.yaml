@@ -110,6 +110,32 @@ data:
             p["samples"][(host, x["clientRequestHTTPMethodName"], (path + qs)[:160], st)] += c
         return by
 
+    # Teleport sees only cloudflared and proxy pod addresses, so the client address of a sign-in
+    # comes from here. Markers: the SSO callback, the tsh login landing page, and a session check
+    # that only answers 200 with a valid session (web UI). The dataset drops some single requests,
+    # so any one marker per client is enough.
+    SIGNIN = """{AND:[{clientRequestHTTPHost:"teleport.unorouter.com"},{OR:[
+        {clientRequestPath:"/v1/webapi/github/callback"},{clientRequestPath:"/web/msg/info/login_success"},
+        {AND:[{clientRequestPath:"/v1/webapi/user/status"},{edgeResponseStatus:200}]}]}]}"""
+
+    def signins(start, end):
+        zone = next((z for z, name in ZONES if name == "unorouter.com"), None)
+        if not zone:
+            return []
+        d = query(zone, start, end, SIGNIN, "clientIP clientAsn clientASNDescription clientCountryName userAgent clientRequestPath")
+        if d.get("errors"):
+            print(json.dumps({"kind": "teleport-signin-error", "errors": d["errors"]})[:500], flush=True)
+            return []
+        by = {}
+        for r in d["data"]["viewer"]["zones"][0]["httpRequestsAdaptiveGroups"]:
+            x = r["dimensions"]
+            p = by.setdefault(x["clientIP"], {"kind": "teleport-signin", "window": start, "ip": x["clientIP"], "asn": x["clientAsn"],
+                                              "asn_name": x["clientASNDescription"], "country": x["clientCountryName"],
+                                              "user_agent": x["userAgent"][:120], "paths": []})
+            if x["clientRequestPath"] not in p["paths"]:
+                p["paths"].append(x["clientRequestPath"])
+        return list(by.values())
+
     CRAWLER = re.compile(r"Googlebot|bingbot|ClaudeBot|Claude-User|GPTBot|OAI-SearchBot|PerplexityBot|Applebot|DuckDuckBot|YandexBot|Baiduspider", re.I)
 
     def verdict(p):
@@ -153,7 +179,16 @@ data:
             notify.alert("EdgeProbeSweep", severity="warning", ttl=1800, summary="; ".join(
                 f"{r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:30]}): {r['requests']} req, {len(r['hosts'])} hosts, "
                 f"{r['payload']} payload, {r['tamper']} auth tampering, {r['unknown_host']} unknown host" for r in sweeps[:5]))
-        print(json.dumps({"kind": "edge-probe-run", "window": f(start), "recorded": len(found), "sweeps": len(sweeps)}), flush=True)
+        seen = signins(f(start), f(end))
+        for r in seen:
+            print(json.dumps(r, separators=(",", ":")), flush=True)
+        if seen:
+            import notify
+            for r in seen:
+                notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
+                    f"Teleport sign-in or web session from {r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:40]}), "
+                    f"{r['user_agent'][:60]}")
+        print(json.dumps({"kind": "edge-probe-run", "window": f(start), "recorded": len(found), "sweeps": len(sweeps), "signins": len(seen)}), flush=True)
 ---
 apiVersion: batch/v1
 kind: CronJob
