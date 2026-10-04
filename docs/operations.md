@@ -70,13 +70,10 @@ Postgres keeps everything else.
   main database instead; the master drains it every 5 s with a synchronous insert and skips
   rows ClickHouse already has (audit rows by `event_id`, log rows by a content hash). Only a
   row that cannot be spooled either logs `failed to write <table> row` (`GatewayLogRowsLost`);
-  a spool that stays non-empty for 15 minutes fires `GatewayLogSpoolBacklog`. Before the
-  spool (2026-10-04, 01:17 to 02:32 UTC) 608 rows were lost to restarts and memory refusals.
-- Memory: `system.metric_log` is disabled. On 25.8 its 1,435 columns make each merge reserve
-  about 5 GiB for a moment, and the overcommit tracker then stopped inserts. Caches are sized
-  for this pod, the gateway profile flushes async inserts every 2 s (one part per pod, not
-  one every 200 ms), and the server tracks memory from jemalloc, not the cgroup figure that
-  counts page cache. The config is subPath mounted: a ConfigMap change needs a restart.
+  a spool that stays non-empty for 15 minutes fires `GatewayLogSpoolBacklog`.
+- `system.metric_log` stays off: on 25.8 its 1,435 columns make a merge reserve about 5 GiB,
+  and the overcommit tracker then stops inserts. The config is subPath mounted: a ConfigMap
+  change needs a rolling restart.
 - Query it: `kubectl -n databases exec -it clickhouse-0 -- clickhouse-client --user reader
   --password "$CH_READER_PASSWORD"` (the variable is in the pod), or
   `kubectl -n databases port-forward clickhouse-0 8123` for HTTP.
@@ -84,102 +81,12 @@ Postgres keeps everything else.
 
 ## Encryption at rest
 
-`EPHEMERAL` (etcd, images, logs), `s-swap` and `u-local-path-provisioner` (every PVC) carry
-LUKS2 with a key derived from the VM UUID (`nodeID`, `talos/patches/volumes.yaml`,
-2026-09-17). That covers a disk read away from the VM: a decommissioned drive, a leaked
-snapshot, a rescue-mode copy. It does not cover the provider holding the VM (the UUID is
-theirs) or the running system. `STATE` (machine config, cluster secrets) can only be encrypted
-at install time, so on an existing node it lands with a reinstall in place: Hetzner's
-`rebuild` action takes `image` plus `user_data`, the server keeps its id, address, WireGuard
-peer and VM UUID (rehearsed on a spare 2026-09-17, steps under "STATE through a rebuild").
-All three nodes done 2026-09-17: every Talos volume on the cluster is `luks2`. `talosctl -n <node> get volumestatus`
-shows `luks2` in the encryption column; a volume without it has not been re-provisioned yet.
-
-The block is inert on a provisioned volume. Rolling one node (about an hour, one node per
-window, rehearsed on a spare 2026-09-17):
-
-1. Preflight as for a node swap (`docs/dr.md`): ArgoCD green, CNPG healthy, WAL archiving,
-   primaries known, etcd and OpenBao snapshots fresh, a Velero backup that lists the
-   node-pinned local claims to keep (`uno-import-profile`, `data-openbao-0`, anything else
-   not rebuildable; hostPath claims must first be recreated as `local`, see Node disk).
-   The node's ClickHouse replica (`data-clickhouse-N`) needs no Velero: delete its claim and
-   the fresh replica fetches everything from the other two once set up (`docs/dr.md`
-   "ClickHouse", "A replica lost its volume"). Rows meanwhile go to the other replicas.
-2. Cordon, `kubectl cnpg promote` any primary away, evict the singletons one by one, drain,
-   delete the node-pinned PVCs (replicas reclone, caches refill, Velero-covered ones come
-   back by restore).
-3. node11 only: apply a node patch `cluster.controlPlane.endpoint: https://10.200.0.12:6443`
-   so its rejoin does not dial itself; undo at the end.
-4. Apply the rendered config minus the `UserVolumeConfig` and `SwapVolumeConfig` documents,
-   wait until both leave `volumestatus`, then `talosctl wipe disk sda6 --drop-partition`
-   and `sda7` (check the partition numbers in `get discoveredvolumes` first).
-5. `talosctl apply-config --mode=staged -f <rendered config>` then
-   `talosctl reset --graceful --system-labels-to-wipe EPHEMERAL --reboot`. Graceful leaves
-   etcd, the other two keep quorum. The node is back with three `luks2` volumes in under a
-   minute and rejoins etcd on its own; images re-pull for about ten minutes.
-6. Uncordon, watch CNPG reclone, restore the preserved claims, `dr.sh unseal` on node13's
-   turn (`dr.sh restore` if the raft data did not come back), `tsh login` on node11's turn.
-   Never `--wipe-mode all` or a `STATE` wipe on a Hetzner node: it boots the old user data.
-
-Seen on node11 (2026-09-17): the user volume partition reports `mounted or in use` before
-the reboot even with the kubelet stopped, so the drop happens after the reboot instead: the
-volume comes up `failed: block dev type mismatch: xfs != luks` (harmless), then apply the
-config without the `UserVolumeConfig`, wipe, apply the full config, and it provisions
-encrypted in seconds. EPHEMERAL also holds the Tailscale state: the node rejoins the
-tailnet as a new device with a new address (`talconfig.yaml` `ipAddress`, the rendered
-talosconfig, `~/.claude/CLAUDE.md`, and the old device to delete in the console).
-node12 went the same way on 2026-09-17 (Grafana restored from Velero with the Deployment
-deleted for the restore, Prometheus history dropped, Loki and Alertmanager re-provisioned).
-node13 (2026-09-17): OpenBao's PodDisruptionBudget blocks the kubectl drain, the graceful
-reset evicts it anyway after the timeout; the fresh claim came back with `dr.sh restore`
-(snapshot taken minutes before) and `dr.sh unseal`, both need the VeraCrypt volume with the
-break-glass age key mounted before the drain, not after. All three nodes are encrypted;
-every PV on the cluster is now local-type.
-
-### STATE through a rebuild
-
-Same evacuation as above, then a reinstall instead of the EPHEMERAL reset (node11,
-2026-09-17, about 25 minutes from power off to four `luks2` volumes and Teleport back):
-
-1. A `newapi-pg` switchover is never free: about ten seconds of `failed to connect` in
-   new-api and 130 to 230 requests answered 500 by day (17:44:38 and 17:09:17 on
-   2026-09-17, promote before or after the cordon makes no difference; by night it hides
-   inside a 5xx share gate). Spend it once: park the primary on a node that is already done
-   and leave it there for the remaining rolls. `bot-pg` only affects the bot.
-2. Evict the serving pods one by one behind the gate, drain, delete the Teleport auth
-   Deployment with ArgoCD automation paused on `root` and `teleport` (node11).
-   With Teleport down the Grafana tunnels are gone: gate on
-   `curl https://api.unorouter.com/api/status` plus `kubectl logs` of the new-api pods.
-   By day the 503 share is upstream channel noise (5 to 15 %): gate on 500/502/504 and on
-   `failed to connect|SQLSTATE` lines instead.
-3. `talosctl reset --graceful --reboot=false` (leaves etcd, powers off), wait for `off`.
-4. `POST /servers/<id>/actions/rebuild` with `{"image": "<os=talos snapshot id>",
-   "user_data": "<rendered config>"}` on stdin. Send the config WITHOUT the
-   `UserVolumeConfig` document: on a fresh disk the growing user volume takes all free
-   space before swap gets its partition (`s-swap failed: not enough space`), and a mounted
-   user volume cannot be dropped without a reboot. Once `s-swap` is ready, apply the full
-   config and the user volume provisions behind it.
-5. node11 only: the rebuild config carries `cluster.controlPlane.endpoint:
-   https://10.200.0.12:6443` so the fresh install does not dial itself. Talos derives
-   `--service-account-issuer` from the endpoint, so that apiserver rejects every cluster
-   token (`invalid bearer token`, Velero restore `asked for the client to provide
-   credentials`) until the normal config is applied again. Do that the moment the node shows
-   up in `etcd members`, not at the end.
-6. Uncordon before deleting the node-pinned claims (CNPG replicas, caches). Both Postgres
-   clusters carry `podAntiAffinityType: required` since node13's turn (with `preferred` a
-   new replica landed next to another instance twice), so a replacement stays Pending until
-   its node is back. Changing `affinity` rolls every instance, the primary included:
-   `newapi-pg` runs `primaryUpdateStrategy: supervised`, a spec change waits in `Waiting for
-   user action` (ArgoCD shows `new-api` Degraded) until someone runs `kubectl cnpg promote
-   newapi-pg <replica> -n databases` at a quiet moment. A PV left `Released` (Retain, or
-   Delete with its node gone) blocks a Velero restore of the same claim: delete it first.
-   Singletons cost a few seconds each when they move (`newapi-redis`: 12 s of redis
-   connect errors, about 45 requests); move each one once, onto a node that is already done.
-7. A Teleport auth restore rolls the bot certificate generation back: the operator then
-   crash loops on `lock targeting JoinToken:"teleport-operator" is in force ... certificate
-   generation mismatch`. `tctl get locks`, `tctl rm lock/<id>`, delete the operator pod.
-8. Restore the Velero claims (`docs/dr.md`), restart the Teleport proxies and
-   `teleport-app-access-0`, resume ArgoCD automation, new tailnet address as in the notes above.
+Every Talos volume (`STATE`, `EPHEMERAL`, swap, the local-path volume) is LUKS2 with a key derived
+from the VM UUID (`nodeID`, `talos/patches/volumes.yaml`), on every node since 2026-09-17 and on
+a new node from its first boot. It covers a disk read away from the VM (a decommissioned drive,
+a leaked snapshot, a rescue-mode copy), not the provider holding the VM or the running system.
+`talosctl -n <node> get volumestatus` shows `luks2` per volume; a node that refuses its key is
+in `docs/dr.md` "Encrypted volumes".
 
 ## Gotchas
 
@@ -226,6 +133,27 @@ Same evacuation as above, then a reinstall instead of the EPHEMERAL reset (node1
   any org repo with `k8s/`), contributions via fork PRs, two org owners.
 - Vector keeps checkpoints and disk buffers under `/var/lib/vector`; a rebuilt node starts from
   the end of every file.
+- A `newapi-pg` switchover is never free: about ten seconds of `failed to connect` in new-api,
+  120 to 230 extra 500s (2026-09-17 by day, 2026-09-29 by night). Rolling several nodes, park
+  the primary once on a node that is already done. Watch with an endpoint that needs the
+  database; `/api/status` and `/api/pricing` answer from cache.
+- Both Postgres clusters run `podAntiAffinityType: required`, so a replacement replica stays
+  Pending until its node is back. `newapi-pg` runs `primaryUpdateStrategy: supervised`: a spec
+  change waits in `Waiting for user action` (ArgoCD shows `new-api` Degraded) until `kubectl
+  cnpg promote newapi-pg <replica> -n databases`.
+- A PV left `Released` blocks a Velero restore of the same claim: delete it first.
+- Reinstalling node11: its config needs `cluster.controlPlane.endpoint:
+  https://10.200.0.12:6443` so it does not dial itself. Talos derives
+  `--service-account-issuer` from it, so that apiserver rejects every token until the normal
+  config is back: apply it the moment the node shows in `etcd members`.
+- A Hetzner `rebuild` (same server, id, address and VM UUID) takes `image` plus `user_data`.
+  Send the config without the `UserVolumeConfig` document and apply the full one once `s-swap`
+  is ready, or the user volume takes the swap's space. Never `--wipe-mode all` or a `STATE`
+  wipe on a Hetzner node: it boots the old user data.
+- A wiped `EPHEMERAL` holds the Tailscale state: the node rejoins as a new device with a new
+  address (`talconfig.yaml` `ipAddress`, the rendered talosconfig, the old device to delete).
+- OpenBao's PodDisruptionBudget blocks a drain; `dr.sh restore` and `dr.sh unseal` need the
+  VeraCrypt volume mounted before the drain, not after.
 
 ## Deploying a service
 
@@ -301,9 +229,6 @@ laptop, apply, shred the render. Order and traps from the 2026-09-29 rotation:
   reports etcd unhealthy and withdraws the apiserver, which on 2026-09-29 took the kube API
   away on all three nodes for about ten minutes until each node was rebooted. Isolation
   check back on at the end.
-- A CNPG switchover by night still costs about ten seconds of `failed to connect` in new-api
-  (2026-09-29 23:28: about 120 extra 500s). Watch with an endpoint that needs the database;
-  `/api/status` and `/api/pricing` answer from cache.
 
 ## Upgrading
 

@@ -70,6 +70,8 @@ revokes it, which `system:masters` never allowed.
   (`incorrect_client_credentials`). Rebuild from `resources/github-connector.yaml` plus OpenBao
   `secret/teleport-github`.
 - Role changes land in the cert: `tsh logout && tsh login`.
+- After an auth restore the operator crash loops on `lock targeting JoinToken:"teleport-operator"
+  ... certificate generation mismatch`: `tctl get locks`, `tctl rm lock/<id>`, delete the pod.
 - DB access needs the Teleport db-client CA inside CNPG's `clientCASecret` bundle (OpenBao
   `secret/newapi-pg-client-ca`, own CA first, `ca.key` kept). Refresh after any auth rebuild;
   symptom `FATAL: connection requires a valid client certificate`.

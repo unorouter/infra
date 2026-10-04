@@ -10,7 +10,8 @@ Rendering needs git plus the break-glass age key (`talos/README.md`). Access pat
 
 Stateful placement: Prometheus, Alertmanager, Grafana and Loki on node12 (label
 `unorouter.com/monitoring`); OpenBao, ArgoCD and Teleport wherever their PV landed; CNPG
-newapi-pg 3 instances and bot-pg 2 on local-path PVs. Losing a node loses those PVs.
+newapi-pg 3 instances and bot-pg 2, ClickHouse 3 replicas and its Keeper 3 members, one per
+node, all on local-path PVs. Losing a node loses those PVs.
 
 ## Rules that hold in every scenario
 
@@ -18,8 +19,8 @@ newapi-pg 3 instances and bot-pg 2 on local-path PVs. Losing a node loses those 
   of database writes on 2026-07-23.
 - `kubectl -n databases get cluster` for the primaries before any node surgery. A raw
   `status.targetPrimary` patch is never the tool (`kubectl cnpg reload` was, 2026-09-02).
-- Memory limits only on the revenue services, none on Postgres, Prometheus, etcd and the
-  platform. Nodes carry 4 GiB host swap that pods cannot use (`failSwapOn: false`, kubelet
+- Memory limits only on the revenue services and ClickHouse (which caps itself at 75 % of its
+  limit), none on Postgres, Prometheus, etcd and the platform. Nodes carry 4 GiB host swap that pods cannot use (`failSwapOn: false`, kubelet
   `NoSwap`).
 - Liveness probes are `tcpSocket` only; killing a pod never fixes a slow dependency.
 - Node names are cattle: the next number in `talconfig.yaml`, never reused.
@@ -241,8 +242,8 @@ unreadable without the pod's metadata: ClickHouse comes back from its backup.
 
 ## Encrypted volumes
 
-`STATE` (after the node's rebuild), `EPHEMERAL`, swap and the local-path volume are LUKS2 with a key derived from the VM UUID
-(`docs/operations.md` "Encryption at rest"). A Hetzner snapshot booted on another server, a
+Every Talos volume is LUKS2 with a key derived from the VM UUID (`docs/operations.md`
+"Encryption at rest"). A Hetzner snapshot booted on another server, a
 rescue-mode copy or a pulled disk is refused with `encryption key rejected` and the node
 stays in maintenance; that is the intended outcome, not a fault. Recovery of such a node is
 the normal path: fresh server, config as user data, etcd from the snapshot bucket, CNPG from
