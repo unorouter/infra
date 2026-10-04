@@ -46,10 +46,16 @@ rendered manifests and the Delete reclaim policy takes the data with it (Telepor
 
 The gateway writes `logs` and `audit_logs` to ClickHouse since 2026-10-04 (`LOG_SQL_DSN` and
 the two `LOG_SQL_CLICKHOUSE_*` settings in OpenBao `secret/newapi-env`);
-`infra/databases/clickhouse.yaml`. One pod, `databases/clickhouse-0`, on node11's local-path
-volume. Parts older than 30 days move to the `unorouter-clickhouse` bucket through an
-`encrypted` disk (AES-256-CTR, key OpenBao `secret/clickhouse` `cold_key_hex`, no other copy);
-recent parts and the metadata of the moved ones stay local. Postgres keeps everything else.
+`infra/databases/clickhouse.yaml`. Three replicas, `clickhouse-0..2`, one per node on local-path,
+coordinated by three ClickHouse Keeper members (`clickhouse-keeper.yaml`, one per node, Raft
+majority two). Every replica accepts writes and fetches the others' parts within seconds; there
+is no primary and nothing to promote. The `clickhouse` Service only routes to replicas whose two
+replicated tables exist, reach Keeper and are under 5 minutes behind. Without a Keeper majority
+the tables turn read only and every replica drops out of the Service: rows then wait in the
+spool. Parts older than 30 days move to the `unorouter-clickhouse` bucket through an
+`encrypted` disk (AES-256-CTR, key OpenBao `secret/clickhouse` `cold_key_hex`, no other copy),
+each replica its own copy; recent parts and the metadata of the moved ones stay local.
+Postgres keeps everything else.
 
 - Accounts: `admin` (DDL, backups), `gateway` (SELECT, INSERT and CREATE TABLE on the two
   tables only: no ALTER, so no DELETE, UPDATE, TTL change, partition drop, TRUNCATE or DROP,
@@ -96,9 +102,9 @@ window, rehearsed on a spare 2026-09-17):
    primaries known, etcd and OpenBao snapshots fresh, a Velero backup that lists the
    node-pinned local claims to keep (`uno-import-profile`, `data-openbao-0`, anything else
    not rebuildable; hostPath claims must first be recreated as `local`, see Node disk).
-   `data-clickhouse-0` (node11) is not in Velero: run the `clickhouse-backup` job right
-   before and restore from it after (`docs/dr.md` "ClickHouse"); rows written while it is
-   gone are lost.
+   The node's ClickHouse replica (`data-clickhouse-N`) needs no Velero: delete its claim and
+   the fresh replica fetches everything from the other two once set up (`docs/dr.md`
+   "ClickHouse", "A replica lost its volume"). Rows meanwhile go to the other replicas.
 2. Cordon, `kubectl cnpg promote` any primary away, evict the singletons one by one, drain,
    delete the node-pinned PVCs (replicas reclone, caches refill, Velero-covered ones come
    back by restore).

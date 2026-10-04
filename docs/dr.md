@@ -88,6 +88,19 @@ image older than `c7cb25598`, it maps that column.
 
 ### ClickHouse
 
+**A replica lost its volume** (node swap, deleted claim): the StatefulSet starts it empty and
+it stays out of the Service. As admin in that pod: `CREATE DATABASE IF NOT EXISTS
+new_api_logs`, then each table's `SHOW CREATE TABLE ... FORMAT TSVRaw` from a healthy replica
+run as is (the engine path uses `{database}`, `{table}`, `{replica}`), then
+`infra/databases/clickhouse-security.sql` (dictionaries and the exporter user are per node).
+It fetches everything from the others and turns Ready. A replica whose Keeper metadata is gone
+but whose data survived: `SYSTEM RESTORE REPLICA new_api_logs.<table>`. Keeper lost all three
+members: the tables stay read only until Keeper is back; recreate it empty, then `SYSTEM
+RESTORE REPLICA` on every replica.
+
+**Everything lost**: restore from the backups below into one replica, set up the other two as
+above, they fetch from it.
+
 `clickhouse-backup` (hourly at :15, `infra/databases/clickhouse.yaml`) writes
 `unorouter-backups/clickhouse/new_api_logs/<ISO week>/<timestamp>`: the first run of a week is
 full, every other run is incremental on the previous one (found in `system.backup_log`), a
