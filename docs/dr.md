@@ -88,15 +88,17 @@ image older than `c7cb25598`, it maps that column.
 
 ### ClickHouse
 
-`clickhouse-backup` (05:15 UTC, `infra/databases/clickhouse.yaml`) writes
-`unorouter-backups/clickhouse/new_api_logs/<ISO week>/full` on the first night of a week
-and an incremental `<day>` on that full every other night, so no chain outlives the 31 day
+`clickhouse-backup` (hourly at :15, `infra/databases/clickhouse.yaml`) writes
+`unorouter-backups/clickhouse/new_api_logs/<ISO week>/<timestamp>`: the first run of a week is
+full, every other run is incremental on the previous one (found in `system.backup_log`), a
+few MB an hour. A lost volume costs at most the last hour; no chain outlives the 31 day
 expiry. It goes through the gateway (rclone crypt like every other backup) and stores cold
-parts decrypted, so a restore needs neither the cold tier key nor the old pod.
+parts decrypted, so a restore needs neither the cold tier key nor the old pod. Inserts are
+fsynced (`fsync_after_insert`): a crash keeps every acknowledged row.
 
 ```sql
--- as admin, in the pod; latest day of the newest week, or <week>/full
-RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<day>')
+-- as admin, in the pod; the newest backup, RESTORE follows its chain
+RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<timestamp>')
 -- if the gateway already created empty tables:
 --   ... SETTINGS allow_non_empty_tables = true
 ```
