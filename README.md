@@ -23,3 +23,5 @@ kubectl get nodes
 | [DR runbook](docs/dr.md) | backups, rebuild from nothing, node swap, quorum loss, switchover |
 | [Nodes](talos/README.md) | machine configs, image, adding a node |
 | [incidents/](incidents/) | post-mortems |
+
+After cloning: `git config core.hooksPath .githooks` (gitleaks, sops encryption check, alert routing snapshot on every commit).

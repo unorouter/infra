@@ -1,0 +1,11 @@
+#!/bin/sh
+# Versioned hooks for this public repo; enable once per clone: git config core.hooksPath .githooks
+set -e
+# plaintext secrets anywhere in the staged diff
+gitleaks protect --staged --verbose
+# every staged *.sops.yaml fully encrypted, nothing but *.sops.yaml under secrets/
+python3 scripts/check-sops-encrypted.py
+# an alerting change must not move any alert to other receivers unless the snapshot says so
+if git diff --cached --name-only | grep -qE '^infra/(monitoring/extras/(alerting|pollers)|loki)/|^scripts/alert-routing'; then
+  python3 scripts/check-alert-routing.py
+fi
