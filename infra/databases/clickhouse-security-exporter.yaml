@@ -1,0 +1,749 @@
+# The new-api security metrics over the gateway's `logs` and `audit_logs`, read from
+# ClickHouse (LOG_SQL_DSN). CNPG custom queries only ever run inside Postgres, so these
+# move to burningalchemist/sql_exporter with its clickhouse driver. Every metric keeps
+# the name CNPG gave it (`cnpg_` + query key + column), its labels and its help text, so
+# rules-security.yaml and SecurityMetricsMissing work unchanged. It runs in `databases`
+# so the series keep namespace="databases", which alertmanager groups on.
+#
+# NOT in kustomization.yaml until the cutover, in this order:
+#   1. ClickHouse side, as admin: clickhouse-security.sql (dictionaries, user).
+#      Postgres side, as dbadmin: clickhouse-dict-least-privilege.sql.
+#   2. OpenBao secret/clickhouse-security-exporter {dsn} (already in the ESO allowlist
+#      in loki/logql-rules.yaml).
+#   3. Add this file to kustomization.yaml AND, in the same commit, delete the queries
+#      it replaces from monitoring/extras/scrape/cnpg-security-queries.yaml. Both
+#      running at once doubles every series and every `> 0` alert pages twice.
+#
+# Each query is the Postgres one from cnpg-security-queries.yaml, one for one. `other`
+# is a native JSON column: a key is read as a subcolumn (other.op.params.path.:String),
+# never by matching the serialized text, which ClickHouse prints with sorted keys and
+# escaped slashes. Correlated subqueries become joins or per-group aggregates, and the
+# Postgres `log/(?!self)` is spelled out because RE2 has no lookahead.
+#
+# Windows are bounded by created_at, the first column of both sort keys, so every query
+# reads only the parts of the window it asks for.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: clickhouse-security-exporter
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}
+  target: {name: clickhouse-security-exporter, creationPolicy: Owner}
+  data:
+    # clickhouse://security_exporter:<urlencoded password>@clickhouse.databases.svc:9000/new_api_logs
+    - secretKey: dsn
+      remoteRef: {key: clickhouse-security-exporter, property: dsn}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-security-exporter
+  namespace: databases
+data:
+  sql_exporter.yml: |
+    global:
+      scrape_timeout: 20s
+      scrape_timeout_offset: 500ms
+      min_interval: 0s
+      max_connections: 2
+      max_idle_connections: 2
+      max_connection_lifetime: 10m
+    target:
+      # Placeholder: the target is validated before the environment is read, and
+      # SQLEXPORTER_TARGET_DSN (the Secret above) then replaces it.
+      data_source_name: "clickhouse://from-env"
+      collectors: [newapi_security]
+    collector_files:
+      - "/etc/sql_exporter/*.collector.yml"
+
+  newapi-security.collector.yml: |
+    collector_name: newapi_security
+
+    # ClickHouse has no prepared statements, so every query is sent as text.
+    queries:
+      - query_name: admin_actions
+        no_prepared_statement: true
+        query: |
+          SELECT addr AS ip, toFloat64(n) AS count
+          FROM (
+            SELECT if(ip = '', 'unknown', ip) AS addr, count() AS n
+            FROM audit_logs
+            WHERE category IN ('operation', 'security')
+              AND created_at > toUnixTimestamp(now()) - 300
+            GROUP BY addr
+          )
+
+      - query_name: admin_user_edits
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count,
+                 toFloat64(uniqExactIf(toString(other.op.params.id), other.op.params.id IS NOT NULL)) AS distinct_targets
+          FROM audit_logs
+          WHERE action = 'user.update'
+            AND created_at > toUnixTimestamp(now()) - 300
+
+      - query_name: channel_key_reads
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count
+          FROM audit_logs
+          WHERE action = 'channel.key_view'
+            AND created_at > toUnixTimestamp(now()) - 300
+
+      - query_name: token_key_reveals
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS pat_count,
+                 toFloat64(uniqExact(user_id)) AS pat_distinct_users
+          FROM (
+            SELECT user_id, toUInt64OrZero(toString(other.op.params.id)) AS token_id
+            FROM audit_logs
+            WHERE action = 'token.key_view'
+              AND created_at > toUnixTimestamp(now()) - 300
+              AND auth_method = 'access_token'
+              AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+          )
+          -- A key read by an account that does not own it: no legitimate caller does
+          -- that. dictHas keeps the inner join's meaning, so a token missing from the
+          -- dictionary drops out instead of comparing against owner 0.
+          WHERE dictHas('newapi_token_owner', token_id)
+            AND dictGet('newapi_token_owner', 'user_id', token_id) != user_id
+
+      - query_name: twofa_changes
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count
+          FROM audit_logs
+          WHERE created_at > toUnixTimestamp(now()) - 300
+            AND action IN ('user.2fa_setup', 'user.2fa_enable', 'user.2fa_disable', 'user.2fa_disable_self')
+
+      - query_name: security_setting_changes
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count
+          FROM audit_logs
+          WHERE action = 'option.update'
+            AND created_at > toUnixTimestamp(now()) - 300
+            AND other.op.params.key.:String IN
+                ('TurnstileCheckEnabled', 'PasswordLoginEnabled', 'RegisterEnabled', 'EmailVerificationEnabled')
+
+      - query_name: admin_logins_total
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count
+          FROM audit_logs
+          WHERE category = 'login'
+            AND created_at > toUnixTimestamp(now()) - 300
+            AND user_id = 1
+
+      - query_name: channel_key_denials
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count,
+                 toFloat64(uniqExact(if(ip = '', 'unknown', ip))) AS distinct_ips
+          FROM audit_logs
+          WHERE action LIKE 'security.%'
+            AND created_at > toUnixTimestamp(now()) - 300
+            AND other.op.params.path.:String LIKE '/api/channel/%key%'
+            AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+            AND ip NOT LIKE '10.42.%'
+
+      - query_name: denials_from_new_ip
+        no_prepared_statement: true
+        query: |
+          WITH den AS (
+            SELECT ip, count() AS c, min(created_at) AS mn
+            FROM audit_logs
+            WHERE created_at > toUnixTimestamp(now()) - 300
+              -- Security denials are written with status 200 before the abort; a refused
+              -- PAT request is the only row that records the 403 itself.
+              AND (action LIKE 'security.%' OR (status = 403 AND success = 0))
+              AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+              AND ip NOT LIKE '10.42.%'
+            GROUP BY ip
+            HAVING c >= 3
+          ),
+          -- History is relay traffic (`logs`) or any session, login or admin row. The
+          -- count guard folds to a constant, so an idle window reads no history at all.
+          known AS (
+            SELECT s.ip AS ip
+            FROM (
+              SELECT ip, created_at FROM logs
+              WHERE created_at > toUnixTimestamp(now()) - 300 - 604800
+                AND (SELECT count() FROM den) > 0
+                AND ip IN (SELECT ip FROM den)
+              UNION ALL
+              SELECT ip, created_at FROM audit_logs
+              WHERE created_at > toUnixTimestamp(now()) - 300 - 604800
+                AND (SELECT count() FROM den) > 0
+                AND ip IN (SELECT ip FROM den)
+            ) AS s
+            INNER JOIN den AS d ON s.ip = d.ip
+            WHERE s.created_at < d.mn - 300
+              AND s.created_at > d.mn - 604800
+          )
+          SELECT toFloat64(max(c)) AS max_denials,
+                 toFloat64(count()) AS offending_ips
+          FROM den
+          WHERE ip NOT IN (SELECT ip FROM known)
+
+      - query_name: privilege_probes
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(countIf(content LIKE '%PAT_NOT_ALLOWED%')) AS pat_route_count,
+                 toFloat64(countIf(content LIKE '%INSUFFICIENT_PRIVILEGE%')) AS privilege_count,
+                 toFloat64(uniqExact(if(ip = '', 'unknown', ip))) AS distinct_ips
+          FROM audit_logs
+          WHERE action = 'security.permission_denied'
+            AND created_at > toUnixTimestamp(now()) - 300
+            AND (content LIKE '%PAT_NOT_ALLOWED%' OR content LIKE '%INSUFFICIENT_PRIVILEGE%')
+            AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+            AND ip NOT LIKE '10.42.%'
+
+      - query_name: denial_account_spread
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(max(users)) AS max_accounts_per_ip
+          FROM (
+            SELECT ip, uniqExact(user_id) AS users
+            FROM audit_logs
+            WHERE action LIKE 'security.%'
+              AND created_at > toUnixTimestamp(now()) - 300
+              AND user_id > 0
+              AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+              AND ip NOT LIKE '10.42.%'
+            GROUP BY ip
+          )
+
+      - query_name: root_pat_from_new_network
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(sum(c)) AS count,
+                 toFloat64(count()) AS networks
+          FROM (
+            SELECT pfx,
+                   countIf(created_at > toUnixTimestamp(now()) - 300) AS c,
+                   minIf(created_at, created_at > toUnixTimestamp(now()) - 300) AS mn,
+                   min(created_at) AS first
+            FROM (
+              SELECT if(position(ip, ':') > 0,
+                        concat(splitByChar(':', ip)[1], ':', splitByChar(':', ip)[2], ':', left(splitByChar(':', ip)[3], 2)),
+                        concat(splitByChar('.', ip)[1], '.', splitByChar('.', ip)[2])) AS pfx,
+                     created_at
+              FROM audit_logs
+              WHERE user_id = 1 AND actor_role = 100
+                AND auth_method = 'access_token'
+                AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+                AND ip NOT LIKE '10.42.%'
+                AND created_at > toUnixTimestamp(now()) - 2592000
+            )
+            GROUP BY pfx
+          )
+          -- The prefix has history when its oldest row in 30d predates the window's
+          -- first row by more than 5m.
+          WHERE c > 0
+            AND first >= mn - 300
+
+      - query_name: invalid_credentials_via_own_nodes
+        no_prepared_statement: true
+        query: |
+          SELECT extract(ifNull(other.op.params.credential_fingerprint.:String, ''), '^([0-9a-f]{12})$') AS fingerprint,
+                 ifNull(other.op.params.path.:String, '') AS path,
+                 toFloat64(count()) AS count
+          FROM audit_logs
+          WHERE action LIKE 'security.%'
+            AND created_at > toUnixTimestamp(now()) - 300
+            AND other.op.params.credential_fingerprint.:String IS NOT NULL
+            AND ip LIKE '10.42.%'
+          GROUP BY fingerprint, path
+
+      - query_name: invalid_credentials
+        no_prepared_statement: true
+        query: |
+          SELECT extract(ifNull(other.op.params.credential_fingerprint.:String, ''), '^([0-9a-f]{12})$') AS fingerprint,
+                 ip,
+                 toFloat64(count()) AS count
+          FROM audit_logs
+          WHERE action LIKE 'security.%'
+            AND created_at > toUnixTimestamp(now()) - 300
+            AND other.op.params.credential_fingerprint.:String IS NOT NULL
+            AND other.op.params.trusted_network.:Bool = false
+          GROUP BY fingerprint, ip
+
+      - query_name: invalid_credentials_spread
+        no_prepared_statement: true
+        query: |
+          WITH h AS (
+            -- 24h history: the labels come from here so they stay STABLE while an episode
+            -- lasts (a changing label set is a new alert to Prometheus and the same
+            -- fingerprint then repeats in Discord with every window).
+            SELECT extract(ifNull(other.op.params.credential_fingerprint.:String, ''), '^([0-9a-f]{12})$') AS fingerprint,
+                   ip,
+                   if(match(ifNull(other.op.params.country.:String, ''), '^[A-Z0-9]{1,2}$'),
+                      ifNull(other.op.params.country.:String, ''), '?') AS country,
+                   ifNull(other.op.params.path.:String, '') AS path,
+                   created_at
+            FROM audit_logs
+            WHERE action LIKE 'security.%'
+              AND created_at > toUnixTimestamp(now()) - 86400
+              AND other.op.params.credential_fingerprint.:String IS NOT NULL
+          ),
+          day AS (
+            SELECT fingerprint,
+                   uniqExact(ip) AS ips_24h,
+                   argMin(concat(ip, ' ', country), created_at) AS first_seen
+            FROM h
+            GROUP BY fingerprint
+          ),
+          top AS (
+            -- Most rows first, then a missing path last, then by path, as Postgres sorts.
+            SELECT fingerprint, argMin(path, (-n, path = '', path)) AS top_path
+            FROM (SELECT fingerprint, path, count() AS n FROM h GROUP BY fingerprint, path)
+            GROUP BY fingerprint
+          ),
+          w AS (
+            SELECT fingerprint,
+                   count() AS c,
+                   uniqExact(ip) AS ips,
+                   countIf(match(path, '^/api/(channel|option|group|redemption|token/search|user/(search|manage|topup/complete|[0-9]+)|user/?$)')
+                           OR (startsWith(path, '/api/log/') AND NOT startsWith(path, '/api/log/self'))) AS admin
+            FROM h
+            WHERE created_at > toUnixTimestamp(now()) - 900
+            GROUP BY fingerprint
+          )
+          SELECT w.fingerprint AS fingerprint,
+                 toFloat64(w.c) AS count,
+                 toFloat64(w.ips) AS distinct_ips,
+                 toFloat64(w.admin) AS admin_paths,
+                 toFloat64(day.ips_24h) AS ips_24h,
+                 day.first_seen AS first_seen,
+                 top.top_path AS top_path
+          FROM w
+          LEFT JOIN day ON day.fingerprint = w.fingerprint
+          LEFT JOIN top ON top.fingerprint = w.fingerprint
+
+      - query_name: checkout_refused
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count,
+                 arrayStringConcat(arraySort(groupUniqArrayIf(reason, reason != '')), ',') AS reasons
+          FROM (
+            SELECT extract(ifNull(other.op.params.reason.:String, ''), '^([a-z_]+)$') AS reason
+            FROM audit_logs
+            WHERE action = 'payment.checkout_refused'
+              AND created_at > toUnixTimestamp(now()) - 900
+          )
+
+      - query_name: security_denials_total
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count,
+                 toFloat64(uniqExact(if(ip = '', 'unknown', ip))) AS distinct_ips
+          FROM audit_logs
+          WHERE action LIKE 'security.%'
+            AND created_at > toUnixTimestamp(now()) - 300
+            AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
+            AND ip NOT LIKE '10.42.%'
+
+      - query_name: quota_grants
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS large_count,
+                 toFloat64(max(usd)) AS max_usd
+          FROM (
+            SELECT toFloat64OrZero(extract(content, '[0-9]+\\.[0-9]+')) AS usd
+            FROM logs
+            WHERE type = 3
+              AND created_at > toUnixTimestamp(now()) - 300
+              AND content LIKE '%granted quota%'
+          )
+          -- The Discord bot grants $0.01-$0.50 hundreds of times a day, so volume alone
+          -- says nothing. Size does: anything at or above $5 is outside every grant this
+          -- platform has ever issued automatically.
+          WHERE usd >= 5
+
+      - query_name: partner_actions
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count,
+                 toFloat64(uniqExact(user_id)) AS distinct_actors,
+                 ifNull(max(toFloat64OrNull(toString(other.op.params.quota))), 0) / 500000 AS max_usd,
+                 toFloat64(countIf(action = 'partner.grant')) AS grants
+          FROM audit_logs
+          WHERE action LIKE 'partner.%'
+            AND created_at > toUnixTimestamp(now()) - 300
+
+      - query_name: creem_reversals
+        no_prepared_statement: true
+        query: |
+          SELECT username,
+                 toFloat64(countIf(content LIKE 'Creem dispute:%' OR content LIKE 'Stripe dispute:%')) AS disputes,
+                 toFloat64(countIf(content LIKE 'Creem refund:%' OR content LIKE 'Stripe refund:%')) AS refunds
+          FROM logs
+          WHERE type = 6
+            AND created_at > toUnixTimestamp(now()) - 300
+            AND (content LIKE 'Creem dispute:%' OR content LIKE 'Stripe dispute:%'
+                 OR content LIKE 'Creem refund:%' OR content LIKE 'Stripe refund:%')
+          GROUP BY username
+
+      - query_name: guest_error_rows
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count
+          FROM logs
+          WHERE type = 5
+            AND token_name = 'UnoRouter Web'
+            AND created_at > toUnixTimestamp(now()) - 300
+
+      - query_name: abuse
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS accounts_5m,
+                 toFloat64(sum(req)) AS requests_5m
+          FROM (
+            SELECT toUInt64(user_id) AS uid,
+                   count() AS req,
+                   countIf(type = 5) AS errs
+            FROM logs
+            WHERE created_at > toUnixTimestamp(now()) - 300
+              AND type IN (2, 5)
+            GROUP BY user_id
+            HAVING req >= 5
+          )
+          -- users from newapi-pg: zero balance and no third-party identity. dictHas
+          -- keeps the inner join's meaning for an account newer than the last refresh.
+          WHERE dictHas('newapi_user_standing', uid)
+            AND dictGet('newapi_user_standing', 'quota', uid) <= 0
+            AND dictGet('newapi_user_standing', 'has_identity', uid) = 0
+            AND errs * 100 >= req * 80
+
+    metrics:
+      - metric_name: cnpg_newapi_admin_actions_count
+        type: gauge
+        help: "Admin and security audit actions in the last 5 minutes, by source IP"
+        key_labels: [ip]
+        values: [count]
+        query_ref: admin_actions
+
+      - metric_name: cnpg_newapi_admin_user_edits_count
+        type: gauge
+        help: "User-record edits in the last 5 minutes"
+        values: [count]
+        query_ref: admin_user_edits
+      - metric_name: cnpg_newapi_admin_user_edits_distinct_targets
+        type: gauge
+        help: "Distinct accounts edited in the last 5 minutes."
+        values: [distinct_targets]
+        query_ref: admin_user_edits
+
+      - metric_name: cnpg_newapi_channel_key_reads_count
+        type: gauge
+        help: "Upstream channel key reveals in the last 5 minutes. There is no benign baseline."
+        values: [count]
+        query_ref: channel_key_reads
+
+      - metric_name: cnpg_newapi_token_key_reveals_pat_count
+        type: gauge
+        help: "User API-key reveals via access token in 5m. Real users reveal their own keys from a browser session; a PAT doing it is automation or a stolen credential."
+        values: [pat_count]
+        query_ref: token_key_reveals
+      - metric_name: cnpg_newapi_token_key_reveals_pat_distinct_users
+        type: gauge
+        help: "Distinct accounts whose API keys were revealed via access token in 5m."
+        values: [pat_distinct_users]
+        query_ref: token_key_reveals
+
+      - metric_name: cnpg_newapi_twofa_changes_count
+        type: gauge
+        help: "2FA enrol/disable events in the last 5 minutes. A real user enrols once."
+        values: [count]
+        query_ref: twofa_changes
+
+      - metric_name: cnpg_newapi_security_setting_changes_count
+        type: gauge
+        help: "Auth-hardening toggles changed in the last 5 minutes."
+        values: [count]
+        query_ref: security_setting_changes
+
+      # No label, so the series exists even when nobody has logged in.
+      - metric_name: cnpg_newapi_admin_logins_total_count
+        type: gauge
+        help: "Root admin logins in 5m. Always emits, including zero, so an absent series means the collector is broken rather than quiet."
+        values: [count]
+        query_ref: admin_logins_total
+
+      - metric_name: cnpg_newapi_channel_key_denials_count
+        type: gauge
+        help: "Refused upstream channel-key reads in 5m from an external client. Nobody but the operator has ever been refused here."
+        values: [count]
+        query_ref: channel_key_denials
+      - metric_name: cnpg_newapi_channel_key_denials_distinct_ips
+        type: gauge
+        help: "Distinct external IPs refused on the channel-key route in 5m."
+        values: [distinct_ips]
+        query_ref: channel_key_denials
+
+      - metric_name: cnpg_newapi_denials_from_new_ip_max_denials
+        type: gauge
+        help: "Largest 5m refusal burst from an address with no prior 7-day history. Nothing legitimate scores above 0."
+        values: [max_denials]
+        query_ref: denials_from_new_ip
+      - metric_name: cnpg_newapi_denials_from_new_ip_offending_ips
+        type: gauge
+        help: "Count of previously-unseen addresses producing 3 or more refusals in 5m."
+        values: [offending_ips]
+        query_ref: denials_from_new_ip
+
+      - metric_name: cnpg_newapi_privilege_probes_pat_route_count
+        type: gauge
+        help: "Refusals in 5m where a PAT was used on a session-only route."
+        values: [pat_route_count]
+        query_ref: privilege_probes
+      - metric_name: cnpg_newapi_privilege_probes_privilege_count
+        type: gauge
+        help: "Refusals in 5m where a caller reached above their role."
+        values: [privilege_count]
+        query_ref: privilege_probes
+      - metric_name: cnpg_newapi_privilege_probes_distinct_ips
+        type: gauge
+        help: "Distinct external addresses producing those refusals in 5m."
+        values: [distinct_ips]
+        query_ref: privilege_probes
+
+      - metric_name: cnpg_newapi_denial_account_spread_max_accounts_per_ip
+        type: gauge
+        help: "Most distinct accounts a single external address was refused against in 5m. Observed max is 2 over 7 days."
+        values: [max_accounts_per_ip]
+        query_ref: denial_account_spread
+
+      - metric_name: cnpg_newapi_root_pat_from_new_network_count
+        type: gauge
+        help: "Root PAT actions in 5m from a network with no root history in 30d. The operator's rotating home prefix does not score here."
+        values: [count]
+        query_ref: root_pat_from_new_network
+      - metric_name: cnpg_newapi_root_pat_from_new_network_networks
+        type: gauge
+        help: "Distinct never-seen networks that used root's PAT in 5m."
+        values: [networks]
+        query_ref: root_pat_from_new_network
+
+      - metric_name: cnpg_newapi_invalid_credentials_via_own_nodes_count
+        type: gauge
+        help: "Rejections in the last 5 minutes that arrived from a node or pod address"
+        key_labels: [fingerprint, path]
+        values: [count]
+        query_ref: invalid_credentials_via_own_nodes
+
+      - metric_name: cnpg_newapi_invalid_credentials_count
+        type: gauge
+        help: "Rejections of this credential from this address in 5m, from outside TRUSTED_NETWORKS."
+        key_labels: [fingerprint, ip]
+        values: [count]
+        query_ref: invalid_credentials
+
+      - metric_name: cnpg_newapi_invalid_credentials_spread_count
+        type: gauge
+        help: "Rejections of this credential in 15m, any network (the frontend forwards from node IPs)."
+        key_labels: [fingerprint, first_seen, top_path]
+        values: [count]
+        query_ref: invalid_credentials_spread
+      - metric_name: cnpg_newapi_invalid_credentials_spread_distinct_ips
+        type: gauge
+        help: "Addresses that presented it in 15m. Two or more is a token being replayed, not an expired session."
+        key_labels: [fingerprint, first_seen, top_path]
+        values: [distinct_ips]
+        query_ref: invalid_credentials_spread
+      - metric_name: cnpg_newapi_invalid_credentials_spread_admin_paths
+        type: gauge
+        help: "Rejections on admin routes in 15m. An expired user session never asks for channels, options or other users."
+        key_labels: [fingerprint, first_seen, top_path]
+        values: [admin_paths]
+        query_ref: invalid_credentials_spread
+      - metric_name: cnpg_newapi_invalid_credentials_spread_ips_24h
+        type: gauge
+        help: "Distinct addresses that presented it in the last 24h."
+        key_labels: [fingerprint, first_seen, top_path]
+        values: [ips_24h]
+        query_ref: invalid_credentials_spread
+
+      - metric_name: cnpg_newapi_checkout_refused_count
+        type: gauge
+        help: "Card checkouts the gateway refused to settle in 15m: paid less than the order price, or no request_id. Zero on a normal day."
+        key_labels: [reasons]
+        values: [count]
+        query_ref: checkout_refused
+
+      - metric_name: cnpg_newapi_security_denials_total_count
+        type: gauge
+        help: "External security-check refusals in 5m. Always emits, including zero, so an absent series means the collector is broken rather than quiet."
+        values: [count]
+        query_ref: security_denials_total
+      - metric_name: cnpg_newapi_security_denials_total_distinct_ips
+        type: gauge
+        help: "Distinct external IPs refused in 5m."
+        values: [distinct_ips]
+        query_ref: security_denials_total
+
+      - metric_name: cnpg_newapi_quota_grants_large_count
+        type: gauge
+        help: "Quota grants of $5 or more in 5m. Routine bot grants are $0.01-$0.50; a grant this size is an operator action or someone paying themselves."
+        values: [large_count]
+        query_ref: quota_grants
+      - metric_name: cnpg_newapi_quota_grants_max_usd
+        type: gauge
+        help: "Largest single quota grant in USD in the last 5 minutes."
+        values: [max_usd]
+        query_ref: quota_grants
+
+      - metric_name: cnpg_newapi_partner_actions_count
+        type: gauge
+        help: "Partner mint/void/grant actions in 5m. Only accounts with a negotiated top-up bonus can call these."
+        values: [count]
+        query_ref: partner_actions
+      - metric_name: cnpg_newapi_partner_actions_distinct_actors
+        type: gauge
+        help: "Distinct partner accounts acting in 5m."
+        values: [distinct_actors]
+        query_ref: partner_actions
+      - metric_name: cnpg_newapi_partner_actions_max_usd
+        type: gauge
+        help: "Largest single partner action in USD in the last 5 minutes."
+        values: [max_usd]
+        query_ref: partner_actions
+      - metric_name: cnpg_newapi_partner_actions_grants
+        type: gauge
+        help: "Irreversible balance grants to other accounts in 5m."
+        values: [grants]
+        query_ref: partner_actions
+
+      - metric_name: cnpg_newapi_creem_reversals_disputes
+        type: gauge
+        help: "Card chargebacks (Creem or Stripe) applied in the last 5 minutes (quota reversed, account disabled)."
+        key_labels: [username]
+        values: [disputes]
+        query_ref: creem_reversals
+      - metric_name: cnpg_newapi_creem_reversals_refunds
+        type: gauge
+        help: "Card one-time refunds (Creem or Stripe) applied in the last 5 minutes (quota reversed)."
+        key_labels: [username]
+        values: [refunds]
+        query_ref: creem_reversals
+
+      - metric_name: cnpg_newapi_guest_error_rows_count
+        type: gauge
+        help: "Error rows written under the shared guest chat key in the last 5 minutes."
+        values: [count]
+        query_ref: guest_error_rows
+
+      - metric_name: cnpg_newapi_abuse_accounts_5m
+        type: gauge
+        help: "Zero-balance accounts with no identity, 5+ requests and 80%+ errors in the last 5 minutes."
+        values: [accounts_5m]
+        query_ref: abuse
+      - metric_name: cnpg_newapi_abuse_requests_5m
+        type: gauge
+        help: "Requests those accounts made in the last 5 minutes."
+        values: [requests_5m]
+        query_ref: abuse
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse-security-exporter
+  namespace: databases
+  labels: {app: clickhouse-security-exporter}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: clickhouse-security-exporter}
+  template:
+    metadata:
+      labels: {app: clickhouse-security-exporter}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: sql-exporter
+          image: burningalchemist/sql_exporter:0.24.9@sha256:6c554722faccd4b54342ccd765f87b26e8e65fba2a8cddc60bec6de336ecf2e0
+          args: ["-config.file=/etc/sql_exporter/sql_exporter.yml"]
+          env:
+            - name: SQLEXPORTER_TARGET_DSN
+              valueFrom: {secretKeyRef: {name: clickhouse-security-exporter, key: dsn}}
+          ports:
+            - {name: metrics, containerPort: 9399}
+          readinessProbe:
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 30
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/sql_exporter, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: clickhouse-security-exporter}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: clickhouse-security-exporter
+  namespace: databases
+spec:
+  selector:
+    matchLabels: {app: clickhouse-security-exporter}
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+      scrapeTimeout: 25s
+---
+# exporter -> DNS and ClickHouse's native port, nothing else
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: clickhouse-security-exporter
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: {app: clickhouse-security-exporter}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus}
+      toPorts:
+        - ports: [{port: "9399", protocol: TCP}]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{port: "9399", protocol: TCP}]
+  egress:
+    - toEndpoints:
+        - matchLabels: {io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns}
+      toPorts:
+        - ports: [{port: "53", protocol: UDP}, {port: "53", protocol: TCP}]
+    - toEndpoints:
+        - matchLabels: {app: clickhouse}
+      toPorts:
+        - ports: [{port: "9000", protocol: TCP}]
+---
+# ClickHouse <- the exporter. Its own object so the clickhouse policy itself stays untouched.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: clickhouse-security-exporter-ingress
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: {app: clickhouse}
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {app: clickhouse-security-exporter}
+      toPorts:
+        - ports: [{port: "9000", protocol: TCP}]

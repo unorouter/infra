@@ -67,6 +67,11 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: databases, app: clickhouse }
       toPorts:
         - ports: [{ port: "9363", protocol: TCP }]
+    # new-api security metrics over the gateway logs (databases/clickhouse-security-exporter.yaml)
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, app: clickhouse-security-exporter }
+      toPorts:
+        - ports: [{ port: "9399", protocol: TCP }]
     - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
       toPorts:
