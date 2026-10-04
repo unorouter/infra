@@ -60,9 +60,17 @@ recent parts and the metadata of the moved ones stay local. Postgres keeps every
 - Schema changes are admin's, by hand: the gateway's startup migration finds the tables
   already matching its DDL and issues no ALTER; a changed `LOG_SQL_CLICKHOUSE_*` value is only
   logged as a failure. Skip indexes: `infra/databases/clickhouse-logs-indexes.sql`.
-- A restart drops log rows: the gateway gives each write 10 s and does not retry, and
-  ClickHouse takes 20 to 40 s to come back. The config is subPath mounted, so every ConfigMap
-  change needs one. Do it in a quiet hour.
+- A failed ClickHouse write (restart, refusal, timeout) goes to Postgres `log_spool` on the
+  main database instead; the master drains it every 5 s with a synchronous insert and skips
+  rows ClickHouse already has (audit rows by `event_id`, log rows by a content hash). Only a
+  row that cannot be spooled either logs `failed to write <table> row` (`GatewayLogRowsLost`);
+  a spool that stays non-empty for 15 minutes fires `GatewayLogSpoolBacklog`. Before the
+  spool (2026-10-04, 01:17 to 02:32 UTC) 608 rows were lost to restarts and memory refusals.
+- Memory: `system.metric_log` is disabled. On 25.8 its 1,435 columns make each merge reserve
+  about 5 GiB for a moment, and the overcommit tracker then stopped inserts. Caches are sized
+  for this pod, the gateway profile flushes async inserts every 2 s (one part per pod, not
+  one every 200 ms), and the server tracks memory from jemalloc, not the cgroup figure that
+  counts page cache. The config is subPath mounted: a ConfigMap change needs a restart.
 - Query it: `kubectl -n databases exec -it clickhouse-0 -- clickhouse-client --user reader
   --password "$CH_READER_PASSWORD"` (the variable is in the pod), or
   `kubectl -n databases port-forward clickhouse-0 8123` for HTTP.
