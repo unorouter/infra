@@ -293,7 +293,7 @@ metadata:
   namespace: databases
 spec:
   serviceName: clickhouse-headless
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels: { app: clickhouse }
   template:
@@ -336,13 +336,15 @@ spec:
             - { name: http, containerPort: 8123 }
             - { name: metrics, containerPort: 9363 }
             - { name: interserver, containerPort: 9009 }
-          # a replica that lost Keeper still answers /ping but refuses every insert
+          # ready = both replicated tables exist, Keeper reachable, under 5 minutes behind: a
+          # replica that lost Keeper still answers /ping but refuses every insert, and a new one
+          # would serve a half fetched history
           readinessProbe:
             exec:
               command:
                 - bash
                 - -c
-                - clickhouse-client --user admin --password "$CLICKHOUSE_PASSWORD" -q "SELECT count() FROM system.replicas WHERE is_readonly OR is_session_expired" | grep -qx 0
+                - clickhouse-client --user admin --password "$CLICKHOUSE_PASSWORD" -q "SELECT (SELECT count() FROM system.replicas WHERE database = 'new_api_logs' AND table IN ('logs', 'audit_logs') AND NOT is_readonly AND NOT is_session_expired AND absolute_delay < 300) = 2" | grep -qx 1
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
