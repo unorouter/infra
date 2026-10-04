@@ -33,6 +33,7 @@ spec:
     - { secretKey: CH_BACKUP_ACCESS_KEY_ID, remoteRef: { key: s3gw, property: ACCESS_KEY_ID } }
     - { secretKey: CH_BACKUP_SECRET_ACCESS_KEY, remoteRef: { key: s3gw, property: ACCESS_SECRET_KEY } }
     - { secretKey: NEWAPI_PG_DICT_PASSWORD, remoteRef: { key: newapi-pg-clickhouse-dict, property: password } }
+    - { secretKey: CH_INTERSERVER_PASSWORD, remoteRef: { key: clickhouse, property: interserver_password } }
 ---
 # Password of the clickhouse_dict Postgres role (new-api/k8s/pg.yaml managed.roles).
 apiVersion: external-secrets.io/v1
@@ -168,6 +169,39 @@ data:
       <latency_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></latency_log>
       <backup_log><ttl>event_date + INTERVAL 90 DAY DELETE</ttl></backup_log>
     </clickhouse>
+  replication.xml: |
+    <clickhouse>
+      <zookeeper>
+        <node><host>clickhouse-keeper-0.clickhouse-keeper.databases.svc.cluster.local</host><port>9181</port></node>
+        <node><host>clickhouse-keeper-1.clickhouse-keeper.databases.svc.cluster.local</host><port>9181</port></node>
+        <node><host>clickhouse-keeper-2.clickhouse-keeper.databases.svc.cluster.local</host><port>9181</port></node>
+        <session_timeout_ms>30000</session_timeout_ms>
+      </zookeeper>
+      <macros>
+        <shard>1</shard>
+        <replica from_env="HOSTNAME"/>
+      </macros>
+      <default_replica_path>/clickhouse/tables/{database}/{table}</default_replica_path>
+      <default_replica_name>{replica}</default_replica_name>
+      <!-- replicas fetch parts from each other here, by pod name through the headless Service -->
+      <interserver_http_host from_env="CH_INTERSERVER_HOST"/>
+      <interserver_http_port>9009</interserver_http_port>
+      <interserver_http_credentials>
+        <user>interserver</user>
+        <password from_env="CH_INTERSERVER_PASSWORD"/>
+      </interserver_http_credentials>
+      <!-- for clusterAllReplicas (the backup chain lookup) and ON CLUSTER DDL -->
+      <remote_servers>
+        <logs>
+          <shard>
+            <internal_replication>true</internal_replication>
+            <replica><host>clickhouse-0.clickhouse-headless.databases.svc.cluster.local</host><port>9000</port><user>admin</user><password from_env="CLICKHOUSE_PASSWORD"/></replica>
+            <replica><host>clickhouse-1.clickhouse-headless.databases.svc.cluster.local</host><port>9000</port><user>admin</user><password from_env="CLICKHOUSE_PASSWORD"/></replica>
+            <replica><host>clickhouse-2.clickhouse-headless.databases.svc.cluster.local</host><port>9000</port><user>admin</user><password from_env="CLICKHOUSE_PASSWORD"/></replica>
+          </shard>
+        </logs>
+      </remote_servers>
+    </clickhouse>
   users.xml: |
     <clickhouse>
       <profiles>
@@ -228,13 +262,37 @@ spec:
     - { name: http, port: 8123, targetPort: 8123 }
     - { name: metrics, port: 9363, targetPort: 9363 }
 ---
+# Governing Service: stable pod names for the interserver fetches and the cluster definition.
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-headless
+  namespace: databases
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: { app: clickhouse }
+  ports:
+    - { name: native, port: 9000 }
+    - { name: interserver, port: 9009 }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: clickhouse
+  namespace: databases
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: clickhouse }
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: clickhouse
   namespace: databases
 spec:
-  serviceName: clickhouse
+  serviceName: clickhouse-headless
   replicas: 1
   selector:
     matchLabels: { app: clickhouse }
@@ -246,8 +304,13 @@ spec:
         backup.velero.io/backup-volumes-excludes: data
     spec:
       automountServiceAccountToken: false
-      # the volume is local-path: the first schedule pins it to this node for good
-      nodeSelector: { kubernetes.io/hostname: unorouter-node11 }
+      # one replica per node; each local-path volume pins its pod to the node it was made on
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: { app: clickhouse }
       terminationGracePeriodSeconds: 120
       securityContext:
         runAsUser: 101
@@ -258,6 +321,10 @@ spec:
       containers:
         - name: clickhouse
           image: clickhouse/clickhouse-server:25.8.33.6
+          command:
+            - bash
+            - -c
+            - export CH_INTERSERVER_HOST="$HOSTNAME.clickhouse-headless.databases.svc.cluster.local"; exec /entrypoint.sh
           env:
             - { name: CLICKHOUSE_USER, value: admin }
             - { name: CLICKHOUSE_DB, value: new_api_logs }
@@ -268,9 +335,16 @@ spec:
             - { name: native, containerPort: 9000 }
             - { name: http, containerPort: 8123 }
             - { name: metrics, containerPort: 9363 }
+            - { name: interserver, containerPort: 9009 }
+          # a replica that lost Keeper still answers /ping but refuses every insert
           readinessProbe:
-            httpGet: { path: /ping, port: 8123 }
+            exec:
+              command:
+                - bash
+                - -c
+                - clickhouse-client --user admin --password "$CLICKHOUSE_PASSWORD" -q "SELECT count() FROM system.replicas WHERE is_readonly OR is_session_expired" | grep -qx 0
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet: { path: /ping, port: 8123 }
             initialDelaySeconds: 60
@@ -288,6 +362,7 @@ spec:
             - { name: data, mountPath: /var/lib/clickhouse }
             - { name: config, mountPath: /etc/clickhouse-server/config.d/storage.xml, subPath: storage.xml }
             - { name: config, mountPath: /etc/clickhouse-server/config.d/server.xml, subPath: server.xml }
+            - { name: config, mountPath: /etc/clickhouse-server/config.d/replication.xml, subPath: replication.xml }
             - { name: config, mountPath: /etc/clickhouse-server/users.d/users.xml, subPath: users.xml }
       volumes:
         - name: config
@@ -349,7 +424,7 @@ spec:
                   week=new_api_logs/$(date -u +%G-W%V); hour=$(date -u +%FT%H%M)
                   # cold parts are stored decrypted: a restore must not depend on the cold tier key
                   plain="decrypt_files_from_encrypted_disks = 1"
-                  base=$(q "SELECT name FROM system.backup_log WHERE status = 'BACKUP_CREATED' AND startsWith(name, 'Disk(''backups'', ''$week/') ORDER BY event_time_microseconds DESC LIMIT 1 FORMAT TSVRaw")
+                  base=$(q "SELECT name FROM clusterAllReplicas('logs', system.backup_log) WHERE status = 'BACKUP_CREATED' AND startsWith(name, 'Disk(''backups'', ''$week/') ORDER BY event_time_microseconds DESC LIMIT 1 SETTINGS skip_unavailable_shards = 1 FORMAT TSVRaw")
                   if [ -n "$base" ]; then
                     q "BACKUP DATABASE new_api_logs TO Disk('backups', '$week/$hour') SETTINGS $plain, base_backup = $base"
                     echo "incremental $week/$hour on $base done"
@@ -376,8 +451,13 @@ spec:
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api }
         - matchLabels: { io.kubernetes.pod.namespace: databases, app: clickhouse-backup }
+        - matchLabels: { io.kubernetes.pod.namespace: databases, app: clickhouse }
       toPorts:
         - ports: [{ port: "9000", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, app: clickhouse }
+      toPorts:
+        - ports: [{ port: "9009", protocol: TCP }]
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
       toPorts:
@@ -403,6 +483,16 @@ spec:
         - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
       toPorts:
         - ports: [{ port: "5432", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { app: clickhouse }
+      toPorts:
+        - ports:
+            - { port: "9000", protocol: TCP }
+            - { port: "9009", protocol: TCP }
+    - toEndpoints:
+        - matchLabels: { app: clickhouse-keeper }
+      toPorts:
+        - ports: [{ port: "9181", protocol: TCP }]
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
