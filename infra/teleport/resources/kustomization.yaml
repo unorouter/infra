@@ -8,6 +8,7 @@ resources:
   - grafana-viewer-role.yaml
   - kube-admin-role.yaml
   - kube-admin-rbac.yaml
+  - kube-agent-token.yaml
   - kube-viewer-role.yaml
   - kube-viewer-binding.yaml
   - kube-debugger-role.yaml

@@ -1,7 +1,7 @@
 # teleport-kube-agent -- App + DB + Kube access. Enrolls the internal web UIs, the newapi-pg
 # DB, AND the cluster itself for kubectl (tsh kube login) behind Teleport SSO. Reaches the
-# proxy at its public ACME address (multiplex/ALPN). Joins with the static app token from
-# OpenBao (via ESO secret teleport-app-join, key auth-token).
+# proxy at its public ACME address (multiplex/ALPN). Joins with its ServiceAccount token
+# (Kubernetes join method, provision token kube-agent in infra/teleport/resources).
 roles: app,db,kube
 # requests only (7 day median), no limits
 resources: { requests: { cpu: 20m, memory: 128Mi } }
@@ -9,12 +9,11 @@ proxyAddr: teleport.unorouter.com:443
 # registers THIS cluster as a Teleport kube_cluster; `tsh kube login unorouter` targets it.
 # The agent's ServiceAccount reaches the in-cluster kube API; the chart binds it cluster-admin
 # so the user's kubernetes_groups (teleport-admins, from the kube-admin role) are honored via
-# impersonation. Requires the join token to also permit `kube` (auth_service tokens = app,db,kube).
+# impersonation. Requires the provision token to permit `Kube` as well.
 kubeClusterName: unorouter
-# join token comes from an EXTERNAL secret (ESO -> OpenBao); chart reads key `auth-token`.
-joinTokenSecret:
-  create: false
-  name: teleport-kube-agent-join-token
+joinParams:
+  method: kubernetes
+  tokenName: kube-agent
 
 # DB access: tsh db connect newapi-pg --db-user=reader (RLS-masked role). Teleport signs a
 # per-session client cert (CN=reader); postgres trusts it via the client-CA bundle on the

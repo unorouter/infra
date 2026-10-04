@@ -1,0 +1,15 @@
+# The in-cluster agent (infra/teleport-app-access) joins by presenting its own ServiceAccount
+# token, which the auth server checks with a TokenReview. Nothing to steal and replay from
+# outside the cluster, unlike a static join token.
+apiVersion: resources.teleport.dev/v2
+kind: TeleportProvisionToken
+metadata:
+  namespace: teleport
+  name: kube-agent
+spec:
+  roles: [App, Db, Kube]
+  join_method: kubernetes
+  kubernetes:
+    type: in_cluster
+    allow:
+      - service_account: "teleport-agent:teleport-app-access"
