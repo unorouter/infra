@@ -360,6 +360,11 @@ spec:
     - fromEntities: [host]
       toPorts:
         - ports: [{ port: "8123", protocol: TCP }]
+    # Teleport app `clickhouse`: operators and the laptop reconcile, as ClickHouse's reader
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
+      toPorts:
+        - ports: [{ port: "8123", protocol: TCP }]
   egress:
     # Hetzner Object Storage for the cold tier; no FQDN rules on this cluster (DNS proxy)
     - toEntities: [world]

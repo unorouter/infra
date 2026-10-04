@@ -51,6 +51,10 @@ spec:
       toPorts:
         - ports: [{ port: "5432", protocol: TCP }]
     - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, app: clickhouse }
+      toPorts:
+        - ports: [{ port: "8123", protocol: TCP }]
+    - toEndpoints:
         - matchLabels: { app: jwt-echo }
       toPorts:
         - ports: [{ port: "8080", protocol: TCP }]

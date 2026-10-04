@@ -68,6 +68,13 @@ apps:
     rewrite:
       redirect:
         - monitoring-grafana.monitoring.svc.cluster.local
+  # The gateway's log store over HTTP for runbook SQL and the laptop's new-api-sync reconcile
+  # (`tsh proxy app clickhouse --port 18123`, then ClickHouse's own `reader` login). No DNS
+  # record, like openbao-jwt.
+  - name: clickhouse
+    uri: http://clickhouse.databases.svc.cluster.local:8123
+    public_addr: clickhouse.unorouter.com
+    labels: { env: internal }
   # Header echo: `tsh proxy app openbao-jwt` returns the Teleport-signed JWT the proxy adds
   # to every app request, which scripts/bao.sh login trades for an OpenBao token
   # (auth/jwt-teleport, bound to aud openbao-jwt.unorouter.com). No DNS record on purpose.
