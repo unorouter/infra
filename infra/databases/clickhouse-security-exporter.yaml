@@ -71,6 +71,7 @@ data:
           FROM audit_logs
           WHERE action LIKE 'security.%'
             AND user_agent = 'uno-audit-canary/1'
+            AND ip LIKE '10.42.%'
             AND created_at > toUnixTimestamp(now()) - 10800
 
       - query_name: admin_actions
@@ -300,7 +301,7 @@ data:
             WHERE action LIKE 'security.%'
               AND created_at > toUnixTimestamp(now()) - 86400
               AND other.op.params.credential_fingerprint.:String IS NOT NULL
-              AND user_agent != 'uno-audit-canary/1'
+              AND NOT (user_agent = 'uno-audit-canary/1' AND ip LIKE '10.42.%')
           ),
           day AS (
             SELECT fingerprint,
