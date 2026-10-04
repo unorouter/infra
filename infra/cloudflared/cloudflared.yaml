@@ -97,8 +97,12 @@ data:
         service: http://unorouter.services.svc.cluster.local:3000
       - hostname: mcp.unorouter.com
         service: http://unorouter-mcp.services.svc.cluster.local:3000
+      # Only the top.gg vote webhook; /tag and /rewards were public and nothing outside calls them.
       - hostname: bot.unorouter.com
+        path: ^/webhook/topgg$
         service: http://unorouter-bot.services.svc.cluster.local:4000
+      - hostname: bot.unorouter.com
+        service: http_status:404
       - service: http_status:404
 ---
 apiVersion: apps/v1
