@@ -174,8 +174,13 @@ data:
           <networks><ip>::/0</ip></networks>
           <profile>default</profile>
           <quota>default</quota>
+          <!-- append-only like the Postgres audit_logs guard (protect-audit-logs.sql): no ALTER,
+               so no DELETE, UPDATE, TTL or partition drop on either table. The tables already
+               match the gateway's DDL, so its startup migration issues no ALTER; TTL or policy
+               changes are made by admin. -->
           <grants>
-            <query>GRANT SELECT, INSERT, CREATE TABLE, ALTER, OPTIMIZE ON new_api_logs.*</query>
+            <query>GRANT SELECT, INSERT, CREATE TABLE ON new_api_logs.logs</query>
+            <query>GRANT SELECT, INSERT, CREATE TABLE ON new_api_logs.audit_logs</query>
           </grants>
         </gateway>
         <reader>
