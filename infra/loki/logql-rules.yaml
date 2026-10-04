@@ -418,6 +418,89 @@ data:
             labels: { severity: critical, source: k8s-audit-watch }
             annotations:
               summary: "client certificate {{ $labels.actor }} used the kube API from {{ $labels.src }} x{{ $value }}"
+          # A service account changing RBAC, webhooks or admission policies, or exec, attach,
+          # port-forward or an ephemeral container into a pod. The rules above skip system:
+          # actors, so a stolen service account token was invisible to them. The allowlist pairs
+          # each controller with the objects it touches in normal operation (7-day replay clean).
+          - alert: K8sServiceAccountPrivilegedChange
+            expr: >-
+              sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
+                count_over_time(
+                  {job="k8s-audit"} |= "system:serviceaccount:"
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
+                    | actor=~"system:serviceaccount:.*"
+                    | verb=~"create|update|patch|delete|deletecollection"
+                    | objectRef_resource=~"^(roles|rolebindings|clusterroles|clusterrolebindings|mutatingwebhookconfigurations|validatingwebhookconfigurations|validatingadmissionpolicies|validatingadmissionpolicybindings)$" or objectRef_subresource=~"^(exec|attach|ephemeralcontainers|portforward)$"
+                    | actor!~"system:serviceaccount:(argocd:argocd-application-controller|kube-system:.*)"
+                    | label_format pair=`{{ .actor }} {{ .objectRef_resource }}`
+                    | pair!~"system:serviceaccount:cnpg-system:(cnpg-manager|plugin-barman-cloud) (roles|rolebindings)|system:serviceaccount:(monitoring:kps-admission|cert-manager:cert-manager-cainjector) (mutating|validating)webhookconfigurations|system:serviceaccount:teleport-agent:teleport-app-access (roles|rolebindings|clusterroles|clusterrolebindings)"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
+            annotations:
+              summary: "{{ $labels.actor }} {{ $labels.verb }} {{ $labels.objectRef_resource }}/{{ $labels.objectRef_subresource }} {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
+          # Listing secrets returns every value at once; the get-based rules above skip list.
+          # Controllers that list as part of their job are allowlisted (7-day replay); the owner
+          # gets an info line, anyone else (break-glass admin included) is critical.
+          - alert: K8sSecretList
+            expr: >-
+              sum by (actor, ns, src) (
+                count_over_time(
+                  {job="k8s-audit"} |= "\"secrets\"" |= "\"list\""
+                    | json
+                    | stage="ResponseComplete"
+                    | verb="list"
+                    | objectRef_resource="secrets"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`, ns=`{{ or .objectRef_namespace "all namespaces" }}`
+                    | actor!~"system:serviceaccount:(external-secrets:external-secrets|argocd:.*|monitoring:(image-secret-scan|monitoring-grafana|monitoring-kube-state-metrics)|velero:velero-server|kube-system:.*)|system:node:.*|system:kube-controller-manager"
+                    | actor!="0-don"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
+            annotations:
+              summary: "{{ $labels.actor }} listed every secret in {{ $labels.ns }} from {{ $labels.src }} x{{ $value }}"
+          - alert: K8sSecretList
+            expr: >-
+              sum by (actor, ns, src) (
+                count_over_time(
+                  {job="k8s-audit"} |= "\"secrets\"" |= "\"list\""
+                    | json
+                    | stage="ResponseComplete"
+                    | verb="list"
+                    | objectRef_resource="secrets"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`, ns=`{{ or .objectRef_namespace "all namespaces" }}`
+                    | actor!~"system:serviceaccount:(external-secrets:external-secrets|argocd:.*|monitoring:(image-secret-scan|monitoring-grafana|monitoring-kube-state-metrics)|velero:velero-server|kube-system:.*)|system:node:.*|system:kube-controller-manager"
+                    | actor="0-don"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: info, source: k8s-audit-watch }
+            annotations:
+              summary: "{{ $labels.actor }} listed every secret in {{ $labels.ns }} from {{ $labels.src }} x{{ $value }}"
+          # In-cluster clients and kubectl identify as client-go or kubectl; a curl, python or wget
+          # user agent on the kube API was seen only once in 7 days: the 2026-09-29 intruder.
+          - alert: K8sScriptingClient
+            expr: >-
+              sum by (actor, ua, src) (
+                count_over_time(
+                  {job="k8s-audit"} |~ `"userAgent":"(curl|[Pp]ython|[Ww]get|httpie|PostmanRuntime)`
+                    | json
+                    | stage=~"ResponseComplete|ResponseStarted|Panic"
+                    | regexp `"sourceIPs":\["(?P<src>[^"]+)"`
+                    | label_format actor=`{{ or .impersonatedUser_username .user_username }}`, ua=`{{ .userAgent }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
+            annotations:
+              summary: "{{ $labels.actor }} used the kube API with {{ $labels.ua }} from {{ $labels.src }} x{{ $value }}"
           # A system:masters client cert from anywhere but the node mesh, the nodes themselves
           # (Hetzner prefixes, loopback) or the operator laptop. Also catches a cert that
           # borrows a known name. Teleport traffic carries no client cert and is not matched.

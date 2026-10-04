@@ -65,7 +65,7 @@ spec:
             value: k8s-audit-watch
           - name: alertname
             matchType: "=~"
-            value: "^(K8sSecretRead|K8sPodExec|K8sUnknownClientCert|K8sMastersFromUnknownSource|K8sImpersonatedMasters)$"
+            value: "^(K8sSecretRead|K8sPodExec|K8sUnknownClientCert|K8sMastersFromUnknownSource|K8sImpersonatedMasters|K8sServiceAccountPrivilegedChange|K8sSecretList|K8sScriptingClient)$"
         groupWait: 10s
         repeatInterval: 1h
         continue: true
