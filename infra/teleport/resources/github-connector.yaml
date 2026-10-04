@@ -35,7 +35,10 @@ spec:
   teams_to_roles:
     - organization: unorouter
       team: admins
-      roles: ["access", "editor", "auditor", "newapi-db-reader", "newapi-db-admin", "kube-admin"]
+      # No `editor`: it rewrites roles, users and this connector through the Teleport API.
+      # Those come from git through the operator; a hand edit goes through kubectl exec into
+      # the auth pod (tctl), which the kube audit records.
+      roles: ["access", "auditor", "newapi-db-reader", "newapi-db-admin", "kube-admin"]
     # Read-only debugging tier: kube view via kube-viewer (k8s Secrets excluded by the
     # `view` ClusterRole), DB reader with secret columns withheld by grant
     # (databases/reader-least-privilege.sql), full audit log view.
