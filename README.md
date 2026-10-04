@@ -24,4 +24,4 @@ kubectl get nodes
 | [Nodes](talos/README.md) | machine configs, image, adding a node |
 | [incidents/](incidents/) | post-mortems |
 
-After cloning: `git config core.hooksPath .githooks` (gitleaks, sops encryption check, alert routing snapshot on every commit).
+After cloning: `git config core.hooksPath .githooks` (gitleaks, sops encryption check and an alert routing check on every commit).

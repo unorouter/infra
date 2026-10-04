@@ -1,11 +1,82 @@
 #!/bin/sh
 # Versioned hooks for this public repo; enable once per clone: git config core.hooksPath .githooks
 set -e
-# plaintext secrets anywhere in the staged diff
 gitleaks protect --staged --verbose
-# every staged *.sops.yaml fully encrypted, nothing but *.sops.yaml under secrets/
-python3 scripts/check-sops-encrypted.py
-# an alerting change must not move any alert to other receivers unless the snapshot says so
-if git diff --cached --name-only | grep -qE '^infra/(monitoring/extras/(alerting|pollers)|loki)/|^scripts/alert-routing'; then
-  python3 scripts/check-alert-routing.py
-fi
+
+# Every staged *.sops.yaml must be encrypted as its .sops.yaml rule says; nothing else under secrets/.
+python3 - <<'PY'
+import os, re, subprocess, sys, yaml
+rules = yaml.safe_load(open(".sops.yaml"))["creation_rules"]
+staged = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"], capture_output=True, text=True).stdout.split()
+def leaks(node, enc, inside, trail=""):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if not (trail == "" and k == "sops"):
+                yield from leaks(v, enc, inside or (enc is not None and re.search(enc, str(k))), f"{trail}.{k}")
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from leaks(v, enc, inside, f"{trail}[{i}]")
+    elif (enc is None or inside) and node not in (None, "") and not str(node).startswith("ENC["):
+        yield trail
+bad = []
+for p in staged:
+    if p.startswith("secrets/") and not p.endswith(".sops.yaml"):
+        bad.append(f"{p}: only *.sops.yaml belongs under secrets/")
+    if not p.endswith(".sops.yaml") or os.path.basename(p) == ".sops.yaml":
+        continue
+    enc = next((r.get("encrypted_regex") for r in rules if re.search(r["path_regex"], p)), None)
+    text = subprocess.run(["git", "show", f":{p}"], capture_output=True, text=True).stdout
+    for doc in filter(None, yaml.safe_load_all(text)):
+        if "mac" not in (doc.get("sops") or {}):
+            bad.append(f"{p}: not encrypted")
+        elif found := list(leaks(doc, enc, False)):
+            bad.append(f"{p}: plaintext at {', '.join(found[:5])}")
+for b in bad:
+    print("sops check:", b, file=sys.stderr)
+sys.exit(1 if bad else 0)
+PY
+
+# Paging is the page label on a rule: with it (and no burn_in) an alert must reach the phone,
+# without it, or during burn_in, it must not.
+python3 - <<'PY'
+import glob, re, sys, yaml
+cfg = next(d for d in yaml.safe_load_all(open("infra/monitoring/extras/alerting/alertmanager-config.yaml")) if d and d.get("kind") == "AlertmanagerConfig")
+routes = cfg["spec"]["route"]["routes"]
+def match(r, l):
+    return all({"=": lambda v, w: v == w, "!=": lambda v, w: v != w, "=~": lambda v, w: re.fullmatch(w, v), "!~": lambda v, w: not re.fullmatch(w, v)}
+               [m.get("matchType", "=")](l.get(m["name"], ""), m["value"]) for m in r.get("matchers", []))
+def phone(l):
+    for r in routes:
+        if match(r, l):
+            if r["receiver"].startswith("ntfy"):
+                return True
+            if not r.get("continue"):
+                return False
+    return False
+found = []
+def walk(o):
+    if isinstance(o, dict):
+        if "alert" in o:
+            found.append(dict({k: str(v) for k, v in (o.get("labels") or {}).items()}, alertname=o["alert"]))
+        for v in o.values():
+            walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+    elif isinstance(o, str) and "alert:" in o:
+        try:
+            walk(yaml.safe_load(o))
+        except yaml.YAMLError:
+            pass
+for f in glob.glob("infra/**/*.yaml", recursive=True):
+    try:
+        for d in yaml.safe_load_all(open(f)):
+            walk(d)
+    except yaml.YAMLError:
+        pass
+bad = [f"{l['alertname']} ({l.get('severity')}): page label {'set but no phone route' if l.get('page') == 'true' and not l.get('burn_in') else 'missing but it pages'}"
+       for l in found if phone(l) != (l.get("page") == "true" and not l.get("burn_in"))]
+for b in sorted(set(bad)):
+    print("alert routing:", b, file=sys.stderr)
+sys.exit(1 if bad else 0)
+PY
