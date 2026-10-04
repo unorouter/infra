@@ -98,28 +98,41 @@ members: the tables stay read only until Keeper is back; recreate it empty, then
 RESTORE REPLICA` on every replica.
 
 **Everything lost**: restore from the backups below into one replica, set up the other two as
-above, they fetch from it.
+above, they fetch from it. The gateway starts and serves without ClickHouse (rows wait in
+Postgres `log_spool`), so the order against new-api does not matter.
 
 `clickhouse-backup` (hourly at :15, `infra/databases/clickhouse/clickhouse.yaml`) writes
 `unorouter-backups/clickhouse/new_api_logs/<ISO week>/<timestamp>`: the first run of a week is
-full, every other run is incremental on the previous one (found in `system.backup_log`), a
+full, every other run is incremental on the previous one (any replica's `system.backup_log`), a
 few MB an hour. A lost volume costs at most the last hour; no chain outlives the 31 day
 expiry. It goes through the gateway (rclone crypt like every other backup) and stores cold
 parts decrypted, so a restore needs neither the cold tier key nor the old pod. Inserts are
 fsynced (`fsync_after_insert`): a crash keeps every acknowledged row.
 
 ```sql
--- as admin, in the pod; the newest backup, RESTORE follows its chain
+-- as admin, in one replica; the newest backup, RESTORE follows its chain
 RESTORE DATABASE new_api_logs FROM Disk('backups', 'new_api_logs/<week>/<timestamp>')
--- if the gateway already created empty tables:
---   ... SETTINGS allow_non_empty_tables = true
+```
+
+A replica without tables is never Ready, so the gateway cannot create plain tables first. The
+backup stores each table with its Keeper path filled in: RESTORE under the original names needs
+those tables gone. To pull rows back next to the live tables, restore into pre-created scratch
+tables (2026-10-04: 22.4M rows in 76 s, counts equal up to the backup's last second, which may
+be incomplete):
+
+```sql
+CREATE DATABASE restore_check; CREATE TABLE restore_check.logs AS new_api_logs.logs;
+RESTORE TABLE new_api_logs.logs AS restore_check.logs FROM Disk('backups', '<path>')
+  SETTINGS create_table = 0, allow_non_empty_tables = 1, allow_different_table_def = 1;
+DROP DATABASE restore_check SYNC;
+-- then in a Keeper pod:
+-- clickhouse-keeper-client -h 127.0.0.1 -p 9181 -q "rmr '/clickhouse/tables/restore_check'"
 ```
 
 Then re-apply `infra/databases/clickhouse/sql/security.sql` (dictionaries and the exporter user,
 password hash from `secret/clickhouse-security-exporter`). The skip indexes come back with
 the tables. The cold tier key matters only for a pod whose volume survived: lose the key and
-the moved parts are gone, restore from the backup instead. Restored on 2026-10-04 into a
-scratch table, cold parts included.
+the moved parts are gone, restore from the backup instead.
 
 ### Rules
 
@@ -162,6 +175,8 @@ rclone copy cr:unorouter-logs/teleport-recordings/<sid>.tar ./ && tsh play --for
 rclone copy hz:unorouter-velero/velero/backups/<latest>/ ./vb/ && tar -tzf ./vb/<latest>.tar.gz | grep -c secrets/   # 0
 rclone copyto hz:unorouter-backups/openbao-snapshots/latest.snap ./latest.snap && gzip -t ./latest.snap
 ```
+
+ClickHouse: restore the newest backup into scratch tables (under "ClickHouse") and compare counts.
 
 Every `cr:` GET repeated through `hz:` must be ciphertext. Cluster side: restore the postgres
 base backup into a scratch cluster through the gateway (`bootstrap.recovery` from
