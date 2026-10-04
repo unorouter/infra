@@ -26,9 +26,6 @@ persistence:
   existingClaimName: teleport   # local-type PV (Velero can read it), restored 2026-09-16, not in git: never let the chart own it again
 
 # session recordings -> S3 (node-independent, survives node loss). Audit events stay on SQLite.
-# static app-join token (file-based) lets the in-cluster teleport-kube-agent (App Access) join
-# without a short-lived tctl step -- reproducible on every DR. Secret value from OpenBao via ESO,
-# mounted into the auth pod; same value reaches the agent as its authToken (single source).
 auth:
   # Velero reads the auth backend volume (users, roles, tokens, the recording index); it is the
   # one Teleport state worth restoring.
@@ -51,8 +48,6 @@ auth:
         # the GitHub username and source address, to Discord within five minutes.
         audit_events_uri: ["file:///var/lib/teleport/log", "stdout://"]
     auth_service:
-      tokens:
-        - "app,db,kube:/etc/teleport-join/token"
       # GitHub SSO only: hide local username/password/passkey from the login UI. Everyone
       # signs in via the org-gated GitHub connector. Break-glass = tctl on the auth pod
       # (kubectl exec), which bypasses UI auth entirely, so no local user is needed.
@@ -60,14 +55,6 @@ auth:
         type: github
         connector_name: github
         local_auth: false
-  extraVolumes:
-    - name: app-join-token
-      secret:
-        secretName: teleport-app-join
-  extraVolumeMounts:
-    - name: app-join-token
-      mountPath: /etc/teleport-join
-      readOnly: true
   # S3 creds for session-recording uploads (ESO secret teleport-s3)
   extraEnv:
     - name: AWS_ACCESS_KEY_ID
