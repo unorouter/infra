@@ -76,3 +76,12 @@ revokes it, which `system:masters` never allowed.
 - The proxy cert comes from cert-manager and Teleport does not reload it: `rollout restart
   deploy/teleport-proxy` after renewal. The agent identity is Secret
   `teleport-app-access-0-state`: after an auth rebuild scale to 0, delete it, scale to 1.
+
+## Workload secrets
+
+ESO has two stores. `vault-platform` (OpenBao role `eso`, all of `secret/*`) serves every
+namespace except `services` and `uno-import`. Those two take ExternalSecrets from app repos and
+get `vault-backend` (role `eso-apps`, policy `eso-apps-read`), which reads only the paths that
+policy lists. A new app secret path goes into `eso-apps-read` first (`./scripts/bao.sh login
+admin`, `bao policy write`), or its ExternalSecret answers permission denied. In `databases`
+an app repo may create only CNPG kinds (`infra/databases/app-scope.yaml`).

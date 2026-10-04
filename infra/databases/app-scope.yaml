@@ -1,0 +1,40 @@
+# App repos deploy their CNPG clusters here (project `apps` allows databases as a destination),
+# but this namespace also holds the platform's Secrets: superusers, the CNPG CA key, S3 keys.
+# A Deployment, CronJob or ExternalSecret from an app repo could mount or fetch any of them, so
+# from anything but the infra apps that own objects here only the CNPG kinds are admitted.
+# ArgoCD writes its own tracking id on every object it applies; objects without one (CNPG's
+# pods and Secrets, operators, kubectl) pass. A new infra app that writes here joins the list.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: databases-argocd-scope
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: databases }
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: ["*"]
+        scope: Namespaced
+  matchConditions:
+    - name: argocd-tracked-in-databases
+      expression: >-
+        object.metadata.namespace == 'databases' && has(object.metadata.annotations) &&
+        'argocd.argoproj.io/tracking-id' in object.metadata.annotations
+  validations:
+    - expression: >-
+        object.metadata.annotations['argocd.argoproj.io/tracking-id'].split(':')[0] in ['databases', 'monitoring'] ||
+        object.apiVersion.split('/')[0] in ['postgresql.cnpg.io', 'barmancloud.cnpg.io']
+      messageExpression: >-
+        'databases admits only CNPG kinds from ' + object.metadata.annotations['argocd.argoproj.io/tracking-id'].split(':')[0] + ', not ' + object.kind
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: databases-argocd-scope
+spec:
+  policyName: databases-argocd-scope
+  validationActions: [Deny]

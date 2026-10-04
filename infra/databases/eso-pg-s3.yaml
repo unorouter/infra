@@ -1,10 +1,38 @@
-# ESO: pull S3 creds from Vault -> create newapi-pg-s3 / bot-pg-s3 k8s Secrets.
-# Replaces hand-applied secrets. On DR, ESO recreates these once Vault is up.
+# Two stores. App repos (ApplicationSet `services`, project `apps`) may create ExternalSecrets
+# in services and uno-import, and they name `vault-backend`: that store serves only those two
+# namespaces and logs in as OpenBao role eso-apps, which reads only the paths they use. Every
+# other namespace uses `vault-platform` (role eso, all of secret/*), which refuses services and
+# uno-import. An app repo cannot reach it from databases either: databases-argocd-scope
+# (databases/app-scope.yaml) admits nothing but CNPG kinds from an app repo there.
 apiVersion: external-secrets.io/v1
 kind: ClusterSecretStore
 metadata:
   name: vault-backend
 spec:
+  conditions:
+    - namespaces: [services, uno-import]
+  provider:
+    vault:
+      server: http://openbao.openbao.svc:8200
+      path: secret
+      version: v2
+      auth:
+        kubernetes:
+          mountPath: kubernetes
+          role: eso-apps
+          serviceAccountRef:
+            name: external-secrets
+            namespace: external-secrets
+---
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: vault-platform
+spec:
+  conditions:
+    - namespaceSelector:
+        matchExpressions:
+          - { key: kubernetes.io/metadata.name, operator: NotIn, values: [services, uno-import] }
   provider:
     vault:
       server: http://openbao.openbao.svc:8200
@@ -26,7 +54,7 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: vault-backend
+    name: vault-platform
     kind: ClusterSecretStore
   target:
     name: newapi-pg-reader
@@ -47,7 +75,7 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: vault-backend
+    name: vault-platform
     kind: ClusterSecretStore
   target:
     name: newapi-pg-grafana-reader
@@ -66,7 +94,7 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: vault-backend
+    name: vault-platform
     kind: ClusterSecretStore
   target:
     name: newapi-pg-client-ca
@@ -89,7 +117,7 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: vault-backend
+    name: vault-platform
     kind: ClusterSecretStore
   target:
     name: s3gw

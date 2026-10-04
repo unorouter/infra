@@ -28,7 +28,7 @@ metadata:
   namespace: databases
 spec:
   refreshInterval: 1h
-  secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}
+  secretStoreRef: {name: vault-platform, kind: ClusterSecretStore}
   target: {name: clickhouse-security-exporter, creationPolicy: Owner}
   data:
     # clickhouse://security_exporter:<urlencoded password>@clickhouse.databases.svc:9000/new_api_logs

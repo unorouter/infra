@@ -6,6 +6,7 @@ kind: Kustomization
 resources:
   - networkpolicies.yaml
   - eso-pg-s3.yaml
+  - app-scope.yaml
   - dr-drill.yaml
   - ip-retention.yaml
   - clickhouse.yaml

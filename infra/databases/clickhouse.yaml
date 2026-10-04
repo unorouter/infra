@@ -18,7 +18,7 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: vault-backend
+    name: vault-platform
     kind: ClusterSecretStore
   target:
     name: clickhouse
@@ -44,7 +44,7 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: vault-backend
+    name: vault-platform
     kind: ClusterSecretStore
   target:
     name: newapi-pg-clickhouse-dict

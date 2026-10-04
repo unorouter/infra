@@ -32,7 +32,7 @@ metadata:
   namespace: databases
 spec:
   refreshInterval: 1h
-  secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}
+  secretStoreRef: {name: vault-platform, kind: ClusterSecretStore}
   target: {name: newapi-pg-ip-retention, creationPolicy: Owner}
   dataFrom:
     - extract: {key: newapi-pg-ip-retention}

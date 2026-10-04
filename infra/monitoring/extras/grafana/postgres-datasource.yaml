@@ -19,7 +19,7 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: vault-backend
+    name: vault-platform
     kind: ClusterSecretStore
   target:
     name: grafana-pg-reader
