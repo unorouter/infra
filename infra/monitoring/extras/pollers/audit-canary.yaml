@@ -1,5 +1,5 @@
-# Proves the security alerts can see. Hourly, one unauthenticated request to the gateway with
-# the user agent uno-audit-canary/1. The gateway refuses it and writes a security.auth_rejected
+# Proves the security alerts can see. Hourly, one request with a fake bearer token (the gateway
+# audits a refusal only when a credential was presented) and the user agent uno-audit-canary/1. The gateway refuses it and writes a security.auth_rejected
 # row to audit_logs like any other refusal; cnpg_newapi_audit_canary_count counts those rows
 # through the same table, grants and exporter as every security query, and
 # SecurityAuditCanarySilent pages when it reads zero. A log store move, a lost grant, a broken
@@ -41,7 +41,8 @@ spec:
                 - |
                   import json, urllib.request, urllib.error
                   req = urllib.request.Request("http://new-api.services.svc.cluster.local:3000/api/user/self",
-                                               headers={"User-Agent": "uno-audit-canary/1"})
+                                               headers={"User-Agent": "uno-audit-canary/1",
+                                                        "Authorization": "Bearer uno-audit-canary-not-a-key"})
                   try:
                       status = urllib.request.urlopen(req, timeout=20).status
                   except urllib.error.HTTPError as e:

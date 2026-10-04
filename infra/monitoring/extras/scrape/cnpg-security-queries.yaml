@@ -404,6 +404,7 @@ data:
           AND created_at > extract(epoch from now())::bigint - 300
           AND other::text LIKE '%"credential_fingerprint":"%'
           AND ip LIKE '10.42.%'
+          AND user_agent <> 'uno-audit-canary/1'
         GROUP BY 1, 2
       primary: true
       target_databases:
@@ -459,6 +460,7 @@ data:
           WHERE action LIKE 'security.%'
             AND created_at > extract(epoch from now())::bigint - 86400
             AND other::text LIKE '%"credential_fingerprint":"%'
+            AND user_agent <> 'uno-audit-canary/1'
         ), w AS (
           SELECT fingerprint, ip, path,
                  path ~ '^/api/(channel|option|group|redemption|token/search|log/(?!self)|user/(search|manage|topup/complete|[0-9]+)|user/?$)' AS is_admin
