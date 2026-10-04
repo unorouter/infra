@@ -548,12 +548,29 @@ data:
                 count_over_time(
                   {job="hubble"} |= "169.254.169.254"
                     | json ns="flow.source.namespace", pod="flow.source.pod_name", verdict="flow.verdict"
+                    | ns!="teleport-agent" or verdict!="DROPPED"
                   [5m]
                 )
               ) > 0
             labels: { severity: critical, source: hubble }
             annotations:
               summary: "{{ $labels.ns }}/{{ $labels.pod }} tried the metadata service ({{ $labels.verdict }}) x{{ $value }}"
+          # The Teleport agent probes the AWS, GCP and Azure metadata services on every start to
+          # detect its cloud (lib/inventory/metadata, no switch to turn it off). Dropped, so a
+          # Discord line instead of a page; a forwarded attempt still pages above.
+          - alert: TeleportAgentMetadataProbe
+            expr: >-
+              sum by (pod) (
+                count_over_time(
+                  {job="hubble"} |= "169.254.169.254" |= "teleport-agent"
+                    | json ns="flow.source.namespace", pod="flow.source.pod_name", verdict="flow.verdict"
+                    | ns="teleport-agent" and verdict="DROPPED"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: warning, source: hubble }
+            annotations:
+              summary: "{{ $labels.pod }} probed the metadata service at start (dropped) x{{ $value }}"
 
       # Talos API calls as apid logs them (kube-system/talos-apid-log, infra/talos/apid-log.yaml).
       # Each call is logged twice, once per proxy hop; the hop with talos-role carries the role.
