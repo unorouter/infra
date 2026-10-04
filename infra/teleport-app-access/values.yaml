@@ -8,7 +8,7 @@ resources: { requests: { cpu: 20m, memory: 128Mi } }
 proxyAddr: teleport.unorouter.com:443
 # registers THIS cluster as a Teleport kube_cluster; `tsh kube login unorouter` targets it.
 # The agent's ServiceAccount reaches the in-cluster kube API; the chart binds it cluster-admin
-# so the user's kubernetes_groups (system:masters, from the kube-admin role) are honored via
+# so the user's kubernetes_groups (teleport-admins, from the kube-admin role) are honored via
 # impersonation. Requires the join token to also permit `kube` (auth_service tokens = app,db,kube).
 kubeClusterName: unorouter
 # join token comes from an EXTERNAL secret (ESO -> OpenBao); chart reads key `auth-token`.
