@@ -1,7 +1,8 @@
 # Pages within ten minutes on GitHub changes that open a path into the cluster or the
 # images: a repository ruleset that is not active, a deploy key or webhook, an org member,
 # outside collaborator or installed app nobody expects, a commit on a deploy repo's main by
-# an unexpected account (the authenticated pusher, not the commit metadata). Actions secret changes go to the Discord digest. ArgoCD deploys
+# an unexpected account (the authenticated pusher, not the commit metadata), a remote manifest
+# that no longer matches its pinned sha256. Actions secret changes go to the Discord digest. ArgoCD deploys
 # whatever lands on infra main, so that branch is the cluster.
 # Credentials: the read-only GitHub App "unorouter-github-watch" (OpenBao
 # secret/github-watch: app_id, installation_id, private_key). No personal token involved.
@@ -33,7 +34,7 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import base64, hashlib, json, os, time, urllib.error, urllib.request
+    import base64, hashlib, json, os, re, time, urllib.error, urllib.request
     from datetime import datetime, timedelta, timezone
     import notify
 
@@ -135,6 +136,23 @@ data:
                 elif recent(ev["created_at"]):
                     c = call(f"/repos/{ORG}/{name}/commits/{head}", token, missing={})
                     info.append(line + ": " + (c.get("commit", {}).get("message", "").splitlines() or [""])[0][:80])
+
+    # Manifests ArgoCD fetches from a release URL carry their sha256 in a trailing comment
+    # (kustomization.yaml). ArgoCD cannot check a hash, so a swapped release asset pages here,
+    # once an hour.
+    if datetime.now(timezone.utc).minute < 10:
+        tree = call(f"/repos/{ORG}/infra/git/trees/main?recursive=1", token)["tree"]
+        for f in [t["path"] for t in tree if t["path"].endswith("kustomization.yaml")]:
+            text = base64.b64decode(call(f"/repos/{ORG}/infra/contents/{f}", token)["content"]).decode()
+            for url, want in re.findall(r"(https://\S+) # sha256:([0-9a-f]{64})", text):
+                try:
+                    with urllib.request.urlopen(url, timeout=60) as r:
+                        got = hashlib.sha256(r.read()).hexdigest()
+                except Exception as e:
+                    info.append(f"{f}: {url} unreachable: {e}"[:200])
+                    continue
+                if got != want:
+                    add("RemoteManifestChanged", f"{f}: {url} serves sha256 {got[:12]}, pinned {want[:12]}")
 
     for name, lines in critical.items():
         notify.alert(name, "github: " + "; ".join(lines[:10]))

@@ -5,7 +5,7 @@ kind: Kustomization
 # self-signed certificates unless a serving-cert approver is installed (hardening item).
 namespace: kube-system
 resources:
-  - https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+  - https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml # sha256:f103539a54ed72efe66616afc74a8bfaed651703cb3918797599046af5617441
 patches:
   - target:
       kind: Deployment

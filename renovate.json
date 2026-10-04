@@ -105,7 +105,7 @@
     {
       "description": "Operators from release manifests: patch merges, minor and major wait",
       "matchDatasources": [
-        "github-releases"
+        "github-release-attachments"
       ],
       "matchPackageNames": [
         "cert-manager/cert-manager",
@@ -113,7 +113,8 @@
         "cloudnative-pg/plugin-barman-cloud"
       ],
       "matchUpdateTypes": [
-        "patch"
+        "patch",
+        "digest"
       ],
       "dependencyDashboardApproval": false
     },
@@ -194,18 +195,6 @@
       "datasourceTemplate": "github-releases"
     },
     {
-      "description": "local-path-provisioner manifest pinned by release URL",
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^infra/local-path/kustomization\\.yaml$/"
-      ],
-      "matchStrings": [
-        "rancher/local-path-provisioner/(?<currentValue>v[\\d.]+)/"
-      ],
-      "depNameTemplate": "rancher/local-path-provisioner",
-      "datasourceTemplate": "github-releases"
-    },
-    {
       "description": "DR fallback Cilium in scripts/dr.sh",
       "customType": "regex",
       "managerFilePatterns": [
@@ -219,44 +208,6 @@
       "datasourceTemplate": "helm"
     },
     {
-      "description": "Operator manifests pinned by release URL (version once in the URL)",
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^infra/(cert-manager|cnpg-operator)/kustomization\\.yaml$/"
-      ],
-      "matchStrings": [
-        "https://github\\.com/(?<depName>cert-manager/cert-manager|cloudnative-pg/plugin-barman-cloud)/releases/download/(?<currentValue>v[\\d.]+)/"
-      ],
-      "datasourceTemplate": "github-releases",
-      "versioningTemplate": "semver-coerced"
-    },
-    {
-      "description": "CNPG operator manifest, the version appears twice in the URL",
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^infra/cnpg-operator/kustomization\\.yaml$/"
-      ],
-      "matchStrings": [
-        "https://github\\.com/(?<depName>cloudnative-pg/cloudnative-pg)/releases/download/(?<currentValue>v[\\d.]+)/cnpg-[\\d.]+\\.yaml"
-      ],
-      "autoReplaceStringTemplate": "https://github.com/{{{depName}}}/releases/download/{{{newValue}}}/cnpg-{{{newVersion}}}.yaml",
-      "datasourceTemplate": "github-releases",
-      "versioningTemplate": "semver-coerced"
-    },
-    {
-      "description": "ArgoCD install manifest for the DR bootstrap",
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^argocd/kustomization\\.yaml$/"
-      ],
-      "matchStrings": [
-        "raw\\.githubusercontent\\.com/argoproj/argo-cd/(?<currentValue>v[\\d.]+)/"
-      ],
-      "depNameTemplate": "argoproj/argo-cd",
-      "datasourceTemplate": "github-releases",
-      "versioningTemplate": "semver-coerced"
-    },
-    {
       "description": "CNPG Cluster imageName",
       "customType": "regex",
       "managerFilePatterns": [
@@ -266,6 +217,43 @@
         "imageName: (?<depName>[^:\\s]+):(?<currentValue>[^\\s]+)"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "description": "Upstream manifests pinned to the tag's commit (a raw URL by commit cannot change), version in the trailing comment",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)kustomization\\.yaml$/"
+      ],
+      "matchStrings": [
+        "raw\\.githubusercontent\\.com/(?<depName>[^/]+/[^/]+)/(?<currentDigest>[a-f0-9]{40})/\\S+ # (?<currentValue>v[\\d.]+)"
+      ],
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "description": "Release asset manifests with their sha256 in the trailing comment; github-watch pages when the served file stops matching it",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)kustomization\\.yaml$/"
+      ],
+      "matchStrings": [
+        "https://github\\.com/(?<depName>[^/]+/[^/]+)/releases/download/(?<currentValue>v[\\d.]+)/[a-z][a-z-]*\\.yaml # sha256:(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "description": "CNPG operator release asset, the version appears twice in the URL",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^infra/cnpg-operator/kustomization\\.yaml$/"
+      ],
+      "matchStrings": [
+        "https://github\\.com/(?<depName>cloudnative-pg/cloudnative-pg)/releases/download/(?<currentValue>v[\\d.]+)/cnpg-[\\d.]+\\.yaml # sha256:(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "autoReplaceStringTemplate": "https://github.com/{{{depName}}}/releases/download/{{{newValue}}}/cnpg-{{{replace '^v' '' newValue}}}.yaml # sha256:{{{newDigest}}}",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver-coerced"
     }
   ]
 }

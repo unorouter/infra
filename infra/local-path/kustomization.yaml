@@ -5,7 +5,7 @@ kind: Kustomization
 # StorageClass is the default so manifests may omit storageClassName. Installed by
 # scripts/dr.sh bootstrap before ArgoCD exists, owned by ArgoCD afterwards. Pinned.
 resources:
-  - https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.37/deploy/local-path-storage.yaml
+  - https://raw.githubusercontent.com/rancher/local-path-provisioner/49b2be8e26d6d34c9afaa21fa33108d2e82f8955/deploy/local-path-storage.yaml # v0.0.37
 patches:
   - path: config.yaml
   - target: { kind: Deployment, name: local-path-provisioner }
