@@ -1,7 +1,7 @@
 # Pages within ten minutes on GitHub changes that open a path into the cluster or the
 # images: a repository ruleset that is not active, a deploy key or webhook, an org member,
 # outside collaborator or installed app nobody expects, a commit on a deploy repo's main by
-# an unexpected account. Actions secret changes go to the Discord digest. ArgoCD deploys
+# an unexpected account (the authenticated pusher, not the commit metadata). Actions secret changes go to the Discord digest. ArgoCD deploys
 # whatever lands on infra main, so that branch is the cluster.
 # Credentials: the read-only GitHub App "unorouter-github-watch" (OpenBao
 # secret/github-watch: app_id, installation_id, private_key). No personal token involved.
@@ -40,8 +40,11 @@ data:
     ORG = os.environ.get("GH_ORG", "unorouter")
     SINCE = int(os.environ.get("SINCE_SECONDS", "660"))
     split = lambda k: {x.strip() for x in os.environ.get(k, "").split(",") if x.strip()}
-    MEMBERS, APPS, COMMITTERS, DEPLOY_REPOS = split("EXPECTED_MEMBERS"), split("EXPECTED_APPS"), split("EXPECTED_COMMITTERS"), split("DEPLOY_REPOS")
+    MEMBERS, APPS, PUSHERS, DEPLOY_REPOS = split("EXPECTED_MEMBERS"), split("EXPECTED_APPS"), split("EXPECTED_PUSHERS"), split("DEPLOY_REPOS")
     since = datetime.now(timezone.utc) - timedelta(seconds=SINCE)
+    # the events API can deliver a push hours late; an unexpected pusher is checked over this
+    # window and keeps firing while it is inside it
+    push_since = datetime.now(timezone.utc) - timedelta(hours=6)
 
     def der_ints(b):
         # PKCS#1 RSAPrivateKey: SEQUENCE of INTEGERs; only n (1) and d (3) are needed
@@ -84,13 +87,8 @@ data:
             raise
 
     token = call(f"/app/installations/{os.environ['GH_INSTALLATION_ID']}/access_tokens", app_jwt(), "POST")["token"]
-    # forks pull upstream history in, with upstream authors and committers: a commit that
-    # exists in the upstream repository is theirs, not a push to ours
-    UPSTREAM = dict(x.split("=", 1) for x in split("FORK_UPSTREAMS"))
-    def in_upstream(repo, sha):
-        up = UPSTREAM.get(repo)
-        return bool(up) and bool(call(f"/repos/{up}/commits/{sha}", token, missing={}))
-    recent = lambda ts: bool(ts) and datetime.fromisoformat(ts.replace("Z", "+00:00")) >= since
+    at = lambda ts: datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    recent = lambda ts: bool(ts) and at(ts) >= since
     critical, info = {}, []
     add = lambda name, line: critical.setdefault(name, []).append(line)
 
@@ -124,18 +122,19 @@ data:
             if recent(s.get("updated_at")):
                 info.append(f"{name}: Actions secret {s['name']} changed {s['updated_at'][11:19]}Z")
         if name in DEPLOY_REPOS:
-            branch = repo.get("default_branch", "main")
-            for c in call(f"/repos/{ORG}/{name}/commits?sha={branch}&since={since.strftime('%Y-%m-%dT%H:%M:%SZ')}&per_page=100", token):
-                # whoever put the commit on the branch: the committer. Upstream authors of merged
-                # fork commits do not count; web-flow means the web UI, where the author pushed.
-                committer = (c.get("committer") or {}).get("login") or c["commit"]["committer"]["name"]
-                if committer == "web-flow":
-                    committer = (c.get("author") or {}).get("login") or c["commit"]["author"]["name"]
-                line = f"{name}@{branch} {c['sha'][:7]} by {committer}: {c['commit']['message'].splitlines()[0][:80]}"
-                if committer not in COMMITTERS and not in_upstream(name, c["sha"]):
+            # The push event names the account that authenticated the push. Commit author and
+            # committer are whatever the pusher's git config says, so they prove nothing.
+            ref = "refs/heads/" + repo.get("default_branch", "main")
+            for ev in call(f"/repos/{ORG}/{name}/events?per_page=100", token, missing=[]):
+                if ev.get("type") != "PushEvent" or ev["payload"].get("ref") != ref or at(ev["created_at"]) < push_since:
+                    continue
+                pusher, head = ev["actor"]["login"], ev["payload"].get("head", "")
+                line = f"{name}@{ref[11:]} {head[:7]} pushed by {pusher}"
+                if pusher not in PUSHERS:
                     add("GitHubUnexpectedCommit", line)
-                else:
-                    info.append(line)
+                elif recent(ev["created_at"]):
+                    c = call(f"/repos/{ORG}/{name}/commits/{head}", token, missing={})
+                    info.append(line + ": " + (c.get("commit", {}).get("message", "").splitlines() or [""])[0][:80])
 
     for name, lines in critical.items():
         notify.alert(name, "github: " + "; ".join(lines[:10]))
@@ -181,10 +180,9 @@ spec:
                 # commits on these repos' default branch deploy through ArgoCD or the image workflow
                 - name: DEPLOY_REPOS
                   value: infra,unorouter,new-api,new-api-sync,unorouter-bot,uno-import
-                - name: EXPECTED_COMMITTERS
-                  value: 0-don,unorouter-ci,renovate[bot],github-actions[bot]
-                - name: FORK_UPSTREAMS
-                  value: new-api=QuantumNous/new-api
+                # github-actions[bot] is the image workflow committing its pin with GITHUB_TOKEN
+                - name: EXPECTED_PUSHERS
+                  value: 0-don,renovate[bot],github-actions[bot]
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { memory: 128Mi }
