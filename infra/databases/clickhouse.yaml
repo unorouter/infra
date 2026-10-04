@@ -264,8 +264,10 @@ spec:
             periodSeconds: 30
             failureThreshold: 6
           resources:
-            requests: { cpu: 250m, memory: 1Gi }
-            limits: { memory: 4Gi }
+            # 4Gi (3 GiB server cap) refused inserts while a merge of the current month and the
+            # gateway's token lookups overlapped (2026-10-04)
+            requests: { cpu: 250m, memory: 2Gi }
+            limits: { memory: 6Gi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
