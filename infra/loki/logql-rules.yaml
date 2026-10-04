@@ -672,8 +672,10 @@ data:
         interval: 1m
         rules:
           # Hubble exports drops and internet egress; the longest normal gap is about 2.5h.
+          # The ruler read 0 bytes for 5 minutes on 2026-10-04 while lines existed.
           - alert: HubbleExportSilent
             expr: absent_over_time({job="hubble"}[6h])
+            for: 15m
             labels: { severity: warning, source: loki }
             annotations:
               summary: "no Hubble flow lines for 6h: metadata and egress alerts are blind"
