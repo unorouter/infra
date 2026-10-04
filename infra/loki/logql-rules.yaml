@@ -905,6 +905,20 @@ data:
             labels: { severity: warning, source: loki }
             annotations:
               summary: "{{ $value }} gateway {{ $labels.table }} rows failed to reach ClickHouse in 5 minutes and are lost; the error is in the new-api log line"
+          # Rows ClickHouse refused wait in Postgres log_spool; the master logs the depth once a
+          # minute while it is not empty. A quarter hour of it means ClickHouse keeps refusing.
+          - alert: GatewayLogSpoolBacklog
+            expr: >-
+              sum(
+                count_over_time(
+                  {namespace="services", app="new-api"}
+                    |= "log spool depth:"
+                  [15m]
+                )
+              ) >= 12
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "gateway log rows have waited in Postgres log_spool for 15 minutes: ClickHouse is down or refusing inserts (nothing lost yet, they drain when it recovers)"
           # Free lanes answering 429 keep this at 500 to 1,500 an hour (Sep 28 to 30: median
           # 815, max 1,527), so only a jump well past that means something broke.
           - alert: GatewayDisableStorm
