@@ -243,11 +243,41 @@ spec:
             summary: "ip retention job {{ $labels.job_name }} failed: kubectl -n databases logs job/{{ $labels.job_name }}, its privacy.ip_retention line must show usersRemaining 0"
         # infra/databases/clickhouse.yaml: the gateway's log store and its nightly backup
         - alert: ClickHouseDown
-          expr: up{namespace="databases", pod=~"clickhouse-.*"} == 0 or absent(up{namespace="databases", pod=~"clickhouse-.*"})
-          for: 10m
+          expr: (count(up{namespace="databases", pod=~"clickhouse-[0-9]+"} == 1) or vector(0)) == 0
+          for: 5m
           labels: { severity: critical }
           annotations:
-            summary: "ClickHouse is not scrapeable: gateway requests still succeed but their log rows are dropped after 10s"
+            summary: "no ClickHouse replica is scrapeable: gateway log rows pile up in Postgres log_spool until one is back"
+        - alert: ClickHouseReplicaDown
+          expr: up{namespace="databases", pod=~"clickhouse-[0-9]+"} == 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "ClickHouse replica {{ $labels.pod }} is down; the other replicas take the writes"
+        - alert: ClickHouseReplicaReadonly
+          expr: ClickHouseMetrics_ReadonlyReplica{namespace="databases"} > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} has {{ $value }} read only replicated tables: it lost Keeper and refuses inserts (it is out of the Service until it recovers)"
+        - alert: ClickHouseReplicationLag
+          expr: ClickHouseAsyncMetrics_ReplicasMaxAbsoluteDelay{namespace="databases"} > 300
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} is {{ $value }} s behind the other replicas: check system.replication_queue there"
+        - alert: ClickHouseKeeperDown
+          expr: up{namespace="databases", pod=~"clickhouse-keeper-[0-9]+"} == 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Keeper member {{ $labels.pod }} is down; two of three keep the majority"
+        - alert: ClickHouseKeeperNoLeader
+          expr: (sum(ClickHouseAsyncMetrics_KeeperIsLeader{namespace="databases"}) or vector(0)) == 0
+          for: 3m
+          labels: { severity: critical }
+          annotations:
+            summary: "ClickHouse Keeper has no leader: every replicated table is read only and gateway log rows go to Postgres log_spool"
         - alert: ClickHouseTooManyParts
           expr: ClickHouseAsyncMetrics_MaxPartCountForPartition{namespace="databases"} > 300
           for: 30m
