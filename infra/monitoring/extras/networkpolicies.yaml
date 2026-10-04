@@ -128,7 +128,9 @@ spec:
         - matchLabels: { app.kubernetes.io/name: prometheus }
         - matchLabels: { app.kubernetes.io/name: grafana }
         - matchLabels: { io.cilium.k8s.policy.serviceaccount: image-secret-scan }
-        - matchLabels: { io.cilium.k8s.policy.serviceaccount: default }
+        - matchLabels: { io.cilium.k8s.policy.serviceaccount: poller }
+        # reads silences for the heartbeat
+        - matchLabels: { app: ntfy-bridge }
       toPorts:
         - ports:
             - { port: "9093", protocol: TCP }
@@ -232,8 +234,8 @@ spec:
             - { port: "8080", protocol: TCP }
             - { port: "8081", protocol: TCP }
 ---
-# Everything under the default ServiceAccount: blackbox, ntfy-bridge, edge-mode and the
-# poller CronJobs without their own account.
+# Everything under the default ServiceAccount: blackbox, ntfy-bridge, edge-mode, netcup-journal
+# and the CronJobs that raise no alerts. None of them reaches Alertmanager.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -257,10 +259,6 @@ spec:
             - { port: "8080", protocol: TCP }
   egress:
     - toEndpoints:
-        - matchLabels: { app.kubernetes.io/name: alertmanager }
-      toPorts:
-        - ports: [{ port: "9093", protocol: TCP }]
-    - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: openbao, app.kubernetes.io/name: openbao, component: server }
       toPorts:
         - ports: [{ port: "8200", protocol: TCP }]
@@ -268,8 +266,8 @@ spec:
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
 ---
-# Watchers with their own ServiceAccount: they read pod logs through the API server and
-# raise alerts through alertmanager; image-secret-scan also pulls layers from the internet.
+# Watchers that raise alerts through alertmanager and call out to the internet: the pollers
+# (poller account) and image-secret-scan, which also pulls layers.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -280,7 +278,7 @@ spec:
     matchExpressions:
       - key: io.cilium.k8s.policy.serviceaccount
         operator: In
-        values: [image-secret-scan]
+        values: [image-secret-scan, poller]
   egress:
     - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: alertmanager }
@@ -292,3 +290,18 @@ spec:
 # The kube-prometheus-stack admission hook Jobs (kps-admission-create/patch) run under their
 # own ServiceAccount and need only DNS and the API server, both granted by the clusterwide
 # policies; the namespace default-deny closes everything else, so they carry no policy.
+---
+# ntfy-bridge withholds the heartbeat while a silence is active, so it reads them.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ntfy-bridge-silences
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app: ntfy-bridge }
+  egress:
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports: [{ port: "9093", protocol: TCP }]

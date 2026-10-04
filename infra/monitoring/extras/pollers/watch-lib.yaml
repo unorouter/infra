@@ -45,3 +45,12 @@ data:
 
     def digest(alertname, header, lines, ttl=600):
         alert(alertname, "\n".join([header] + list(lines)), "info", ttl)
+---
+# The watchers that post alerts run under this account: Alertmanager admits it, not `default`.
+# They never call the Kubernetes API, so no token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: poller
+  namespace: monitoring
+automountServiceAccountToken: false

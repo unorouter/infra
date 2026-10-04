@@ -44,7 +44,10 @@ data:
 
     // The dead-man switch runs through here (Alertmanager posts Watchdog to /heartbeat), so the
     // external ping proves Prometheus, Alertmanager, this bridge and ntfy at once. It is withheld
-    // while ntfy is unreachable or the last page in the past 30 minutes failed to send.
+    // while ntfy is unreachable or the last page in the past 30 minutes failed to send, and any
+    // active silence turns it into a fail ping: Watchdog keeps firing under a silence, so
+    // without this one broad silence would mute every page behind a green heartbeat.
+    const alertmanagerUrl = process.env.ALERTMANAGER_URL ?? "http://kps-alertmanager.monitoring.svc:9093";
     const ntfyState = { lastOk: 0, lastFail: 0 };
     async function heartbeat() {
       if (!healthchecksUrl) return { ok: false, why: "no HEALTHCHECKS_URL" };
@@ -53,6 +56,14 @@ data:
         return { ok: false, why: "last page failed to send" };
       const probe = await fetch(`${ntfyUrl}/json?poll=1&since=1s`, { signal: AbortSignal.timeout(10e3) });
       if (!probe.ok) return { ok: false, why: `ntfy answered ${probe.status}` };
+      const sil = await fetch(`${alertmanagerUrl}/api/v2/silences`, { signal: AbortSignal.timeout(10e3) });
+      if (!sil.ok) return { ok: false, why: `alertmanager silences answered ${sil.status}` };
+      const active = (await sil.json()).filter((x) => x.status?.state === "active");
+      if (active.length) {
+        const text = active.map((x) => `${x.matchers.map((m) => `${m.name}${m.isEqual === false ? "!" : ""}${m.isRegex ? "=~" : "="}${m.value}`).join(",")} by ${x.createdBy} until ${x.endsAt}: ${x.comment}`).join("\n");
+        await fetch(`${healthchecksUrl}/fail`, { method: "POST", body: `active silences:\n${text}`.slice(0, 9000), signal: AbortSignal.timeout(10e3) });
+        return { ok: false, why: `${active.length} active silence(s)` };
+      }
       const ping = await fetch(healthchecksUrl, { method: "POST", signal: AbortSignal.timeout(10e3) });
       return { ok: ping.ok, why: `healthchecks answered ${ping.status}` };
     }
@@ -195,7 +206,10 @@ data:
     http.createServer((req, res) => {
       if (req.method !== "POST") { res.writeHead(200); res.end("ok"); return; }
       let body = "";
-      req.on("data", (c) => (body += c));
+      req.on("data", (c) => {
+        body += c;
+        if (body.length > 4e6) req.destroy();
+      });
       req.on("end", async () => {
         let p;
         try {
@@ -253,7 +267,7 @@ spec:
     metadata:
       labels: { app: ntfy-bridge }
       # node reads server.mjs once at start: bump with every ConfigMap change so ArgoCD rolls the pod
-      annotations: { config-rev: "3" }
+      annotations: { config-rev: "4" }
     spec:
       containers:
         - name: bridge
