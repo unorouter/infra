@@ -8,7 +8,8 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
 
 - **Rules**: `alerting/rules-unorouter.yaml` (platform, each from a real incident) and
   `alerting/rules-security.yaml` (account takeover, card testing, chargebacks, guest abuse), fed by
-  SQL over the gateway's tables in `scrape/cnpg-security-queries.yaml`.
+  SQL over the gateway's Postgres tables in `scrape/cnpg-security-queries.yaml` and over its
+  ClickHouse logs and audit trail in `infra/databases/clickhouse-security-exporter.yaml`.
 - **Log alerts** are LogQL rules in `infra/loki/logql-rules.yaml` (ConfigMaps labelled
   `loki_rule: "1"`, Loki's ruler, same Alertmanager). Groups: `pgaudit`, `openbao` (root policy
   in use pages), `teleport` (role, connector or user change pages), `dex`, `k8s-audit`

@@ -226,7 +226,7 @@ spec:
           labels: { severity: critical }
           annotations:
             summary: "restore drill {{ $labels.job_name }} failed: the base backup did not restore or the row check found nothing"
-        # infra/databases/ip-retention.yaml blanks logs.ip past 30 days, daily 03:15 UTC
+        # infra/databases/ip-retention.yaml blanks users.register_ip past 30 days, daily 03:15 UTC
         - alert: IPRetentionStale
           expr: >
             (time() - max(kube_cronjob_status_last_successful_time{namespace="databases", cronjob="ip-retention"})) > 2 * 86400
@@ -234,13 +234,13 @@ spec:
           for: 1h
           labels: { severity: warning }
           annotations:
-            summary: "logs.ip retention has not succeeded in 2 days, IPs older than 30 days are accumulating again: kubectl -n databases create job --from=cronjob/ip-retention ip-retention-manual"
+            summary: "register_ip retention has not succeeded in 2 days, IPs older than 30 days are accumulating again: kubectl -n databases create job --from=cronjob/ip-retention ip-retention-manual"
         - alert: IPRetentionFailed
           expr: kube_job_status_failed{namespace="databases", job_name=~"ip-retention-.*"} > 0
           for: 5m
           labels: { severity: warning }
           annotations:
-            summary: "ip retention job {{ $labels.job_name }} failed: kubectl -n databases logs job/{{ $labels.job_name }}, its privacy.ip_retention line must end with remaining 0"
+            summary: "ip retention job {{ $labels.job_name }} failed: kubectl -n databases logs job/{{ $labels.job_name }}, its privacy.ip_retention line must show usersRemaining 0"
         # infra/databases/clickhouse.yaml: the gateway's log store and its nightly backup
         - alert: ClickHouseDown
           expr: up{namespace="databases", pod=~"clickhouse-.*"} == 0 or absent(up{namespace="databases", pod=~"clickhouse-.*"})

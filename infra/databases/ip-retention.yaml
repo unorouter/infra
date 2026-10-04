@@ -1,16 +1,17 @@
-# Daily retention for newapi-pg: logs.ip and users.register_ip.
+# Daily retention for newapi-pg: users.register_ip.
 #
-# logs.ip is personal data (CJEU C-582/14 Breyer) and was kept for the life of the row:
-# 8 months and 4.3M rows when this was written. Its only consumer is
-# monitoring/extras/alerting/rules-security.yaml, whose nine queries look back 15 minutes
-# (eight) or one hour (one). 30 days is the forensic buffer on top of that and the period
-# declared in the Datenschutzerklärung. Art. 5(1)(e) GDPR: no longer than the purpose needs.
+# An address is personal data (CJEU C-582/14 Breyer). 30 days is the forensic buffer and
+# the period declared in the Datenschutzerklärung. Art. 5(1)(e) GDPR: no longer than the
+# purpose needs.
 #
-# It blanks one column and never deletes a row. logs also holds quota, prompt_tokens,
-# completion_tokens and model_name, the usage records behind every invoice, kept for the
-# § 147 AO period. The role it runs as (ip-retention-least-privilege.sql, hand-applied) has
-# UPDATE on ip only and no DELETE anywhere, so a bug here cannot lose a row. The built-in
-# new-api cleanup (DeleteOldLogBatch) deletes rows: never enable it.
+# logs.ip is no longer handled here: the gateway logs live in ClickHouse, where the ip
+# column carries a 30-day TTL that resets it to '' during merges. Until the Postgres
+# `logs` table is dropped, rows it still holds from before the cutover keep their
+# addresses for at most 30 days after it, so drop or blank it by then.
+#
+# It blanks one column and never deletes a row. The role it runs as
+# (ip-retention-least-privilege.sql, hand-applied) has UPDATE on register_ip only and no
+# DELETE anywhere, so a bug here cannot lose a row.
 #
 # First rollout, dependency before caller:
 #   1. OpenBao secret/newapi-pg-ip-retention {username: ip_retention, password: ...}, and the
@@ -19,10 +20,9 @@
 #   3. new-api/k8s/pg.yaml managed.roles ip_retention: CNPG creates the login
 #   4. as dbadmin: infra/databases/ip-retention-least-privilege.sql
 #   5. kubectl -n databases create job --from=cronjob/ip-retention ip-retention-manual,
-#      then read its privacy.ip_retention line: remaining must be 0
+#      then read its privacy.ip_retention line: usersRemaining must be 0
 #
-# users.register_ip was added later, same 30 days, same reasoning. It is guarded on
-# register_ip_hash being present (new-api writes both, common/register_ip_hash.go), so an
+# register_ip is guarded on register_ip_hash being present (new-api writes both, common/register_ip_hash.go), so an
 # address is never cleared before the marker the abuse caps compare on exists. Deploy
 # order there was: HMAC key into OpenBao, new-api backfills every row, only then this.
 apiVersion: external-secrets.io/v1
@@ -49,12 +49,9 @@ data:
 
     const RETENTION_DAYS = 30;
     const BATCH = 10_000;
-    const MAX_BATCHES = 300; // 3M rows; a day is ~140k. A ceiling that surfaces as remaining > 0.
+    const MAX_BATCHES = 300; // A ceiling that surfaces as usersRemaining > 0.
 
     const cutoff = Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86_400;
-    // Normal case: rows that crossed the cutoff since the last run. The read-back over the
-    // full range catches whatever a missed run left behind.
-    const recent = cutoff - 7 * 86_400;
 
     const db = new SQL({
       hostname: "newapi-pg-rw.databases.svc",
@@ -67,27 +64,8 @@ data:
       connectionTimeout: 10,
     });
 
-    async function blank(lowerBound: number | null): Promise<number> {
-      let total = 0;
-      for (let i = 0; i < MAX_BATCHES; i++) {
-        const r = lowerBound === null
-          ? await db`UPDATE public.logs SET ip = '' WHERE id IN (
-               SELECT id FROM public.logs
-               WHERE ip <> '' AND created_at < ${cutoff}
-               ORDER BY id LIMIT ${BATCH})`
-          : await db`UPDATE public.logs SET ip = '' WHERE id IN (
-               SELECT id FROM public.logs
-               WHERE ip <> '' AND created_at < ${cutoff} AND created_at >= ${lowerBound}
-               ORDER BY id LIMIT ${BATCH})`;
-        total += r.count;
-        if (r.count < BATCH) break;
-      }
-      return total;
-    }
-
-    // users.register_ip is the same rule on a different table: the per-IP registration
-    // cap and the Discord reward check compare register_ip_hash, so the address itself
-    // is no longer needed once it is past the window.
+    // The per-IP registration cap and the Discord reward check compare register_ip_hash,
+    // so the address itself is no longer needed once it is past the window.
     //
     // The hash guard is the safety interlock, not a filter. A row whose marker is not
     // written yet keeps its address, so a half-finished backfill can never cost the
@@ -108,12 +86,6 @@ data:
     }
 
     try {
-      const cleared = await blank(recent);
-      const [{ n: left }] = await db`SELECT count(*)::int AS n FROM public.logs
-                                     WHERE ip <> '' AND created_at < ${cutoff}`;
-      const stragglers = left > 0 ? await blank(null) : 0;
-      const [{ n: remaining }] = await db`SELECT count(*)::int AS n FROM public.logs
-                                          WHERE ip <> '' AND created_at < ${cutoff}`;
       const users = await blankRegisterIps();
       // Counted separately: rows waiting on a marker are not a failure, they are the
       // interlock doing its job, and they should not make the job exit non-zero.
@@ -123,12 +95,11 @@ data:
       const [{ n: usersAwaitingHash }] = await db`SELECT count(*)::int AS n FROM public.users
                                                   WHERE register_ip <> '' AND COALESCE(register_ip_hash, '') = ''`;
       console.log(JSON.stringify({
-        event: "privacy.ip_retention", cutoff, cleared, stragglers, remaining,
-        users, usersRemaining, usersAwaitingHash,
+        event: "privacy.ip_retention", cutoff, users, usersRemaining, usersAwaitingHash,
       }));
-      if (remaining > 0 || usersRemaining > 0) process.exitCode = 1;
+      if (usersRemaining > 0) process.exitCode = 1;
     } catch (err) {
-      console.error("ip retention failed; no rows deleted, nothing touched beyond logs.ip and users.register_ip", err);
+      console.error("ip retention failed; no rows deleted, nothing touched beyond users.register_ip", err);
       process.exitCode = 1;
     } finally {
       await db.close();

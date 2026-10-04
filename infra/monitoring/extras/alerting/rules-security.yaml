@@ -1,7 +1,7 @@
 # Security alerts for the new-api gateway, read from its `audit_logs` and `logs` tables.
 #
 # Why they exist: every admin action, login, key reveal, refused check and setting
-# change is written to `logs` with a source address. Left unread, that table only
+# change is written to `audit_logs` with a source address. Left unread, that table only
 # helps after the fact. These rules turn it into paging signals for the shapes an
 # account takeover produces: a stolen personal access token acting as admin, mass
 # account edits, auth hardening being switched off, 2FA being cycled to clear a
@@ -12,18 +12,24 @@
 # stops syncing silently. Existing groups are unorouter.{memory,etcd,services,
 # backups,postgres,ingress,cluster} -- these use the newapi.security.* prefix.
 #
-# These depend on scrape/cnpg-security-queries.yaml being wired into the newapi-pg
-# Cluster's monitoring.customQueriesConfigMap. Scraping comes from the standalone
-# PodMonitor in scrape/cnpg.yaml, NOT from enablePodMonitor, which the Cluster sets
-# to false on purpose: a second PodMonitor over the same pods made every series exist
-# six times and each `> 0` alert paged six times per event.
+# The metrics over the gateway logs come from databases/clickhouse-security-exporter.yaml
+# (sql_exporter against ClickHouse); the ones over Postgres tables (top_ups, users,
+# pat_change_audit) still come from scrape/cnpg-security-queries.yaml on the newapi-pg
+# Cluster, scraped by the standalone PodMonitor in scrape/cnpg.yaml, NOT by
+# enablePodMonitor, which the Cluster sets to false on purpose: a second PodMonitor
+# over the same pods made every series exist six times and each `> 0` alert paged six
+# times per event. Never run both sources for one metric, for the same reason.
 #
-# METRIC NAMING: CNPG prefixes every custom-query metric with `cnpg_`, so the
-# ConfigMap key `newapi_admin_actions` becomes `cnpg_newapi_admin_actions_count`.
-# Writing the un-prefixed name silently matches nothing and the alert never fires.
-# Confirm against a live instance before editing:
-#   kubectl -n databases exec <primary> -c postgres -- \
-#     sh -c 'wget -qO- http://127.0.0.1:9187/metrics' | grep '^cnpg_newapi_'
+# METRIC NAMING: every metric keeps the name CNPG gave it, `cnpg_` + query key +
+# column, so `newapi_admin_actions` is `cnpg_newapi_admin_actions_count` on both
+# sources. Writing the un-prefixed name silently matches nothing and the alert never
+# fires. Confirm against the live exporter before editing:
+#   kubectl -n databases port-forward deploy/clickhouse-security-exporter 9399 &
+#   curl -s 127.0.0.1:9399/metrics | grep '^cnpg_newapi_'
+#
+# Runbook queries over `logs` and `audit_logs` are ClickHouse SQL for clickhouse-client
+# in database new_api_logs; the token owner lookup needs dictGet, which admin has and
+# reader does not. The top_ups query under CardTesting is Postgres.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -67,9 +73,9 @@ spec:
               precisely so a stolen token cannot drive them; this is that gate doing its
               job. Only the operator's own testing has ever produced these rows. Identify
               the caller with
-              `SELECT ip, user_id, count(*) FROM audit_logs WHERE action='security.permission_denied'
+              `SELECT ip, user_id, count() FROM audit_logs WHERE action='security.permission_denied'
               AND content LIKE '%%PAT_NOT_ALLOWED%%'
-              AND created_at > extract(epoch from now())::bigint - 900 GROUP BY 1,2`.
+              AND created_at > toUnixTimestamp(now()) - 900 GROUP BY 1,2`.
 
         - alert: PrivilegeEscalationAttempts
           expr: cnpg_newapi_privilege_probes_privilege_count >= 5
@@ -95,8 +101,8 @@ spec:
               enough to clear SecurityDenialBurst. Measured over 7 days a single address
               is refused against 1 account per 5m at p95 and 2 at most, so 3 is outside
               anything observed. Check whether the address has succeeded anywhere:
-              `SELECT action, success, count(*) FROM audit_logs WHERE ip = '<ip>'
-              AND created_at > extract(epoch from now())::bigint - 3600 GROUP BY 1,2`
+              `SELECT action, success, count() FROM audit_logs WHERE ip = '<ip>'
+              AND created_at > toUnixTimestamp(now()) - 3600 GROUP BY 1,2`
               (relay traffic: the same on `logs`, `GROUP BY type`).
 
     # A new address producing refusals is the earliest signal a takeover gives: the
@@ -114,9 +120,9 @@ spec:
             description: >-
               {{ $value }} address(es) with no history in the last 7 days produced 3 or
               more refusals in 5m. Identify it with
-              `SELECT ip, count(*), min(to_timestamp(created_at)) FROM audit_logs
+              `SELECT ip, count(), min(toDateTime(created_at)) FROM audit_logs
               WHERE action LIKE 'security.%%'
-              AND created_at > extract(epoch from now())::bigint - 900 GROUP BY 1`,
+              AND created_at > toUnixTimestamp(now()) - 900 GROUP BY 1`,
               then check whether that address has any successful action since.
 
     # A refused channel-key read is reconnaissance against a route whose baseline is
@@ -134,9 +140,10 @@ spec:
               {{ $value }} refused channel-key read(s) in 5m from an external client.
               This is what a probe looks like before a gate is bypassed. Identify the
               caller with
-              `SELECT to_timestamp(created_at), user_id, ip, action, content FROM audit_logs
-              WHERE (action = 'channel.key_view' OR other::text LIKE '%"path":"/api/channel/%key%')
-              AND created_at > extract(epoch from now())::bigint - 900`.
+              `SELECT toDateTime(created_at), user_id, ip, action, content FROM audit_logs
+              WHERE (action = 'channel.key_view' OR other.op.params.path.:String LIKE '/api/channel/%key%'
+              OR other.audit_info.path.:String LIKE '/api/channel/%key%')
+              AND created_at > toUnixTimestamp(now()) - 900`.
               If the actor is not you, treat the credential as compromised and revoke
               it before the successful read follows.
 
@@ -157,9 +164,9 @@ spec:
               from a network prefix with no history on the account in 30 days. If this
               is not you on a new connection, revoke the PAT immediately: changing the
               root password blanks it. Identify the address with
-              `SELECT to_timestamp(created_at), ip, route, content FROM audit_logs
+              `SELECT toDateTime(created_at), ip, route, content FROM audit_logs
               WHERE user_id=1 AND auth_method='access_token'
-              AND created_at > extract(epoch from now())::bigint - 900 ORDER BY 1`.
+              AND created_at > toUnixTimestamp(now()) - 900 ORDER BY 1`.
 
     # Every invalid credential from a foreign network, as a Discord line naming the
     # token fingerprint and the address. Warning: a rejected credential did no
@@ -220,10 +227,10 @@ spec:
               account. Self-reveals are excluded: this counts cross-user reads only, which
               have never occurred legitimately. Treat as credential theft in progress.
               Check
-              `SELECT l.user_id AS actor, t.user_id AS owner, l.ip, l.content FROM audit_logs l
-              JOIN tokens t ON t.id=(l.other::jsonb->'op'->'params'->>'id')::int
-              WHERE l.action='token.key_view' AND t.user_id<>l.user_id
-              AND l.created_at > extract(epoch from now())::bigint - 900`,
+              `SELECT user_id AS actor, dictGet('newapi_token_owner', 'user_id', token_id) AS owner,
+              ip, content FROM (SELECT *, toUInt64OrZero(toString(other.op.params.id)) AS token_id
+              FROM audit_logs WHERE action='token.key_view' AND created_at > toUnixTimestamp(now()) - 900)
+              WHERE dictHas('newapi_token_owner', token_id) AND owner != actor`,
               then rotate every key that appears and revoke the actor's sessions.
 
     # B. Mass account tampering. Resetting many users' passwords in a short window is
@@ -239,7 +246,7 @@ spec:
             description: >-
               Bulk user-record modification. Check who and from where with
               `SELECT ip, content FROM audit_logs WHERE action='user.update' AND created_at >
-              extract(epoch from now())::bigint - 900`,
+              toUnixTimestamp(now()) - 900`,
               and look for logins as the edited users immediately afterwards.
 
     # B2. Money. The Discord bot issues $0.01-$0.50 grants hundreds of times a day, so
@@ -257,9 +264,9 @@ spec:
               A quota grant at or above $5 was issued in the last 5 minutes (largest:
               ${{ with query "max(cnpg_newapi_quota_grants_max_usd)" }}{{ . | first | value }}{{ end }}).
               Routine bot grants are $0.01-$0.50. Confirm the operator, then reconcile:
-              `SELECT to_timestamp(created_at), ip, content FROM logs WHERE type=3
+              `SELECT toDateTime(created_at), ip, content FROM logs WHERE type=3
               AND content LIKE '%granted quota%' AND created_at >
-              extract(epoch from now())::bigint - 900 ORDER BY created_at DESC`
+              toUnixTimestamp(now()) - 900 ORDER BY created_at DESC`
 
     # B3. Partner money movement. These routes convert an account's own balance into
     # value that leaves it: a gift card is a bearer code, and a grant is irreversible
@@ -281,10 +288,10 @@ spec:
               draining a balance into codes it controls. Largest single action:
               ${{ with query "max(cnpg_newapi_partner_actions_max_usd)" }}{{ . | first | value }}{{ end }}.
               Identify the caller and how it authenticated with
-              `SELECT to_timestamp(created_at), user_id, ip,
+              `SELECT toDateTime(created_at), user_id, ip,
               auth_method, content FROM audit_logs
               WHERE action LIKE 'partner.%'
-              AND created_at > extract(epoch from now())::bigint - 900
+              AND created_at > toUnixTimestamp(now()) - 900
               ORDER BY created_at DESC`.
               An auth_method of access_token that you did not script is credential theft:
               revoke the partner's token before the balance is gone.
@@ -300,11 +307,11 @@ spec:
               this from our side, so it is worth an eye even when legitimate. Deliberately
               a warning: grants are a normal part of the product. Confirm the recipient is
               a real customer with
-              `SELECT to_timestamp(created_at), user_id AS partner, ip,
-              other::jsonb->'op'->'params'->>'recipient_id' AS recipient,
-              other::jsonb->'op'->'params'->>'quota' AS quota FROM audit_logs
+              `SELECT toDateTime(created_at), user_id AS partner, ip,
+              toString(other.op.params.recipient_id) AS recipient,
+              toString(other.op.params.quota) AS quota FROM audit_logs
               WHERE action='partner.grant'
-              AND created_at > extract(epoch from now())::bigint - 900`.
+              AND created_at > toUnixTimestamp(now()) - 900`.
 
     # C. Auth hardening being switched off. Flipping the login captcha or the
     # registration and verification toggles repeatedly is how an intruder gets past
@@ -360,9 +367,9 @@ spec:
               Sustained auth/proof/permission refusals from a single source, above the
               operator's own noise floor. Context, not evidence of intrusion: check the
               behaviour alerts first. Inspect with
-              `SELECT to_timestamp(created_at), ip, other FROM audit_logs WHERE action LIKE
-              'security.%' AND created_at > extract(epoch from now())::bigint - 900
-              ORDER BY created_at DESC` -- `other` carries the
+              `SELECT toDateTime(created_at), ip, other FROM audit_logs WHERE action LIKE
+              'security.%' AND created_at > toUnixTimestamp(now()) - 900
+              ORDER BY created_at DESC`; `other` carries the
               path, the reason, whether a credential was presented and its fingerprint.
 
     - name: newapi.security.payments
@@ -580,5 +587,7 @@ spec:
             summary: "new-api security metrics are not being scraped"
             description: >-
               cnpg_newapi_channel_key_reads_count has been absent for 1h, so every security
-              alert in this file is silently dead. Check the newapi-pg podMonitor and that
+              alert in this file is silently dead. For the log metrics check the
+              clickhouse-security-exporter pod in databases (its log names the failing
+              query); for registrations and payments check the newapi-pg podMonitor and that
               monitoring.customQueriesConfigMap still references cnpg-newapi-security.

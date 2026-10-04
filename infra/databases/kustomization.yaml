@@ -9,3 +9,4 @@ resources:
   - dr-drill.yaml
   - ip-retention.yaml
   - clickhouse.yaml
+  - clickhouse-security-exporter.yaml

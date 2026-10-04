@@ -5,16 +5,15 @@
 # rules-security.yaml and SecurityMetricsMissing work unchanged. It runs in `databases`
 # so the series keep namespace="databases", which alertmanager groups on.
 #
-# NOT in kustomization.yaml until the cutover, in this order:
+# Needs, before it is deployed:
 #   1. ClickHouse side, as admin: clickhouse-security.sql (dictionaries, user).
 #      Postgres side, as dbadmin: clickhouse-dict-least-privilege.sql.
-#   2. OpenBao secret/clickhouse-security-exporter {dsn} (already in the ESO allowlist
-#      in loki/logql-rules.yaml).
-#   3. Add this file to kustomization.yaml AND, in the same commit, delete the queries
-#      it replaces from monitoring/extras/scrape/cnpg-security-queries.yaml. Both
-#      running at once doubles every series and every `> 0` alert pages twice.
+#   2. OpenBao secret/clickhouse-security-exporter {dsn} (in the ESO allowlist in
+#      loki/logql-rules.yaml).
+# Never define these queries in monitoring/extras/scrape/cnpg-security-queries.yaml as
+# well: both running at once doubles every series and every `> 0` alert pages twice.
 #
-# Each query is the Postgres one from cnpg-security-queries.yaml, one for one. `other`
+# Each query is a one for one port of the CNPG custom query of the same name. `other`
 # is a native JSON column: a key is read as a subcolumn (other.op.params.path.:String),
 # never by matching the serialized text, which ClickHouse prints with sorted keys and
 # escaped slashes. Correlated subqueries become joins or per-group aggregates, and the
@@ -63,6 +62,17 @@ data:
 
     # ClickHouse has no prepared statements, so every query is sent as text.
     queries:
+      # Hourly canary rows from monitoring/audit-canary (pollers/audit-canary.yaml). Zero means the
+      # path from gateway audit row to alert is broken somewhere; SecurityAuditCanarySilent pages.
+      - query_name: audit_canary
+        no_prepared_statement: true
+        query: |
+          SELECT toFloat64(count()) AS count
+          FROM audit_logs
+          WHERE action LIKE 'security.%'
+            AND user_agent = 'uno-audit-canary/1'
+            AND created_at > toUnixTimestamp(now()) - 10800
+
       - query_name: admin_actions
         no_prepared_statement: true
         query: |
@@ -257,6 +267,7 @@ data:
             AND created_at > toUnixTimestamp(now()) - 300
             AND other.op.params.credential_fingerprint.:String IS NOT NULL
             AND ip LIKE '10.42.%'
+            AND user_agent != 'uno-audit-canary/1'
           GROUP BY fingerprint, path
 
       - query_name: invalid_credentials
@@ -289,6 +300,7 @@ data:
             WHERE action LIKE 'security.%'
               AND created_at > toUnixTimestamp(now()) - 86400
               AND other.op.params.credential_fingerprint.:String IS NOT NULL
+              AND user_agent != 'uno-audit-canary/1'
           ),
           day AS (
             SELECT fingerprint,
@@ -420,6 +432,11 @@ data:
             AND errs * 100 >= req * 80
 
     metrics:
+      - metric_name: cnpg_newapi_audit_canary_count
+        type: gauge
+        help: "Canary refusals recorded in audit_logs in the last 3h. Expected 3; zero means the security alerts are blind."
+        values: [count]
+        query_ref: audit_canary
       - metric_name: cnpg_newapi_admin_actions_count
         type: gauge
         help: "Admin and security audit actions in the last 5 minutes, by source IP"
