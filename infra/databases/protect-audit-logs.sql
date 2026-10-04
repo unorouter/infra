@@ -58,9 +58,9 @@ BEGIN
     RETURN OLD;
   END IF;
   RAISE EXCEPTION
-    'audit row % (type=3, age %s) is inside the 180-day retention floor and cannot be deleted by %',
-    OLD.id, extract(epoch from now())::bigint - OLD.created_at, session_user
-    USING HINT = 'Drop trigger trg_protect_audit_logs as a superuser if this is a deliberate purge.';
+    '% row % (age %s) is inside the 180-day retention floor and cannot be deleted by %',
+    TG_TABLE_NAME, OLD.id, extract(epoch from now())::bigint - OLD.created_at, session_user
+    USING HINT = 'Drop trigger trg_protect_audit_logs on this table as a superuser if this is a deliberate purge.';
 END;
 $$ LANGUAGE plpgsql;
 
@@ -81,5 +81,30 @@ CREATE TRIGGER trg_protect_audit_logs
 -- re-introduced the same bypass question for postgres.
 DROP TRIGGER IF EXISTS trg_protect_audit_logs_truncate ON logs;
 DROP FUNCTION IF EXISTS protect_audit_log_truncate();
+
+-- audit_logs (logins, admin actions, refused checks, key reveals) is append-only: the gateway
+-- only inserts, so updates are refused outright and deletes share the 180-day floor.
+REVOKE TRUNCATE ON audit_logs FROM newapi;
+
+CREATE OR REPLACE FUNCTION protect_audit_log_update() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION '% row % is append-only and cannot be updated by %', TG_TABLE_NAME, OLD.id, session_user
+    USING HINT = 'Drop trigger trg_protect_audit_logs_update on this table as a superuser if this is deliberate.';
+END;
+$$ LANGUAGE plpgsql;
+
+REVOKE ALL ON FUNCTION protect_audit_log_update() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS trg_protect_audit_logs ON audit_logs;
+CREATE TRIGGER trg_protect_audit_logs
+  BEFORE DELETE ON audit_logs
+  FOR EACH ROW
+  EXECUTE FUNCTION protect_audit_log_rows();
+
+DROP TRIGGER IF EXISTS trg_protect_audit_logs_update ON audit_logs;
+CREATE TRIGGER trg_protect_audit_logs_update
+  BEFORE UPDATE ON audit_logs
+  FOR EACH ROW
+  EXECUTE FUNCTION protect_audit_log_update();
 
 COMMIT;
