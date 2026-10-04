@@ -59,13 +59,13 @@ spec:
         - alert: VectorArchiveDiscarded
           expr: sum by (pod) (increase(vector_component_discarded_events_total{component_id="archive"}[15m])) > 0
           for: 1m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $labels.pod }} discarded archive events: the write once copy has a hole (gateway 4xx?)"
         - alert: VectorArchiveErrors
           expr: sum by (pod, error_type) (rate(vector_component_errors_total{component_id="archive"}[5m])) > 0
           for: 10m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $labels.pod }} archive sink errors ({{ $labels.error_type }}) for 10m"
         - alert: VectorArchiveStalled

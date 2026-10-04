@@ -46,8 +46,10 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
   Teleport sees only pod addresses behind the tunnel (`trust_x_forwarded_for` breaks IPv6
   `tsh`), so `edge-probe-watch` posts each Teleport sign-in (`TeleportSignin`) with the real
   client address from Cloudflare's request log.
-- **Which alerts reach the phone** is one allowlist regex in
-  `alerting/alertmanager-config.yaml`; a new critical alert that should page goes there too.
+- **Which alerts reach the phone** is a label on the rule: `page: "true"` (with severity
+  critical, or any severity on the `k8s-audit-watch` evidence route). Pollers get it on every
+  critical through `pollers/watch-lib.yaml`. A renamed alert keeps paging; a new one pages
+  only if its rule carries the label.
   A new critical alert also starts with the label `burn_in: "until-<date a week out>"`: both
   phone routes skip any alert carrying it, so it posts to Discord only until the label is
   removed after a quiet week.

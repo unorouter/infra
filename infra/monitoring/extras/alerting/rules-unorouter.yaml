@@ -42,7 +42,7 @@ spec:
           expr: increase(kube_pod_container_status_restarts_total{pod!~"uno-import.*"}[10m]) > 0
             and on(namespace, pod, container) kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
           for: 0m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "OOMKilled: {{ $labels.namespace }}/{{ $labels.pod }}"
             description: "Container hit exit 137 (kernel OOM). This is exactly what killed both unorouter replicas for 8 hours."
@@ -103,7 +103,7 @@ spec:
         - alert: DeploymentNoReplicas
           expr: kube_deployment_status_replicas_available{namespace="services",deployment!~"uno-import.*"} == 0
           for: 2m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $labels.deployment }} has ZERO ready replicas"
             description: "Revenue service is down."
@@ -124,7 +124,7 @@ spec:
         - alert: PodCrashLoopBackOff
           expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",pod!~"uno-import.*"} == 1
           for: 5m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $labels.namespace }}/{{ $labels.pod }} in CrashLoopBackOff"
         - alert: SidePodCrashLoopBackOff
@@ -161,7 +161,7 @@ spec:
         - alert: CNPGWalArchiveFailing
           expr: cnpg_pg_stat_archiver_last_failed_time > cnpg_pg_stat_archiver_last_archived_time
           for: 15m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "WAL archiving failing on {{ $labels.pod }}"
             description: "Runbook hard gate: WAL archiving must stay green or PITR silently rots."
@@ -275,7 +275,7 @@ spec:
         - alert: CNPGClusterUnhealthy
           expr: cnpg_collector_up == 0
           for: 5m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "CNPG collector down for {{ $labels.namespace }}/{{ $labels.pod }}"
         # metric name has no `collector_` infix -- the wrong one silently returns nothing,
@@ -309,7 +309,7 @@ spec:
         - alert: PublicEndpointDown
           expr: probe_success{job!~"probe/monitoring/(og-badges|openbao)"} == 0
           for: 2m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "Public endpoint {{ $labels.instance }} failing from inside the cluster"
             description: "This is the exact hairpin path Cloudflare began dropping mid-TLS-handshake. External checks looked fine at the time."
@@ -345,7 +345,7 @@ spec:
           for: 10m
           # critical: this is the exact signature of the 2026-08-12 customer-impacting outage,
           # and the origin looks healthy while it fires -- nothing else pages for it.
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "cloudflared erroring {{ $value | humanizePercentage }} of requests while the origin is fast"
             description: "The edge is shedding requests while in-cluster probes still answer under 2s -- the 2026-08-12 signature, where the origin looked healthy and only pod logs showed it. Ordinary client cancellation of long LLM streams does NOT reach here, because that comes with a slow origin."
@@ -367,7 +367,7 @@ spec:
         - alert: CloudflaredStreamFlood
           expr: sum(cloudflared_tunnel_concurrent_requests_per_tunnel) > 1500
           for: 1m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $value | humanize }} open streams to the tunnel (attack or origin stall)"
             description: "Check Cloudflare analytics for what reaches origin; cloudflared pays memory per open stream and dies first."
@@ -415,7 +415,7 @@ spec:
         - alert: PVCTerminating
           expr: kube_persistentvolumeclaim_deletion_timestamp > 0
           for: 1m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is Terminating"
             description: "Do NOT restart its pod. Copy the data off first, or recreate the claim, or set the PV to Retain."
@@ -514,7 +514,7 @@ spec:
         - alert: CatalogModelsBelowFloor
           expr: max by (tier) (cnpg_newapi_catalog_models_visible) < 50
           for: 3m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "only {{ $value }} {{ $labels.tier }} models visible (floor 50)"
             description: >-
@@ -529,7 +529,7 @@ spec:
             max by (tier) (cnpg_newapi_catalog_models_visible)
               < 0.8 * max by (tier) (cnpg_newapi_catalog_models_enabled)
           for: 3m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $labels.tier }}: {{ $value }} visible, abilities say more are enabled"
             description: >-
@@ -541,7 +541,7 @@ spec:
             max by (key) (cnpg_newapi_catalog_options_entries)
               < 0.7 * max by (key) (max_over_time(cnpg_newapi_catalog_options_entries[6h] offset 10m))
           for: 2m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "option map {{ $labels.key }} shrank to {{ $value }} entries"
             description: >-

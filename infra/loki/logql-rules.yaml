@@ -62,7 +62,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: loki }
+            labels: { page: "true", severity: critical, source: loki }
             annotations:
               summary: "openbao root policy used by {{ $labels.auth_display_name }} from {{ $labels.src }}: {{ $value }} requests in 5m"
           - alert: OpenBaoNonRoutineActivity
@@ -109,7 +109,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: loki }
+            labels: { page: "true", severity: critical, source: loki }
             annotations:
               summary: "teleport privilege change by {{ $labels.user }} from {{ $labels.addr_remote }}: {{ $labels.event }} {{ $labels.name }}"
           # Every successful Teleport login, to Discord. Teleport only sees the proxy and
@@ -139,7 +139,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: loki }
+            labels: { page: "true", severity: critical, source: loki }
             annotations:
               summary: "GitHub rejects the Teleport connector credentials ({{ $labels.method }} login from {{ $labels.addr_remote }}); rebuild the connector from infra/teleport/resources/github-connector.yaml plus OpenBao secret/teleport-github"
           - alert: TeleportLogins
@@ -275,7 +275,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch }
             annotations:
               summary: "{{ $labels.actor }} {{ $labels.objectRef_subresource }} into {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
           - alert: K8sSecretRead
@@ -315,7 +315,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch }
             annotations:
               summary: "{{ $labels.actor }} {{ $labels.verb }} secret {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
           - alert: K8sSecurityConfigurationChanged
@@ -415,7 +415,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch }
             annotations:
               summary: "client certificate {{ $labels.actor }} used the kube API from {{ $labels.src }} x{{ $value }}"
           # A service account changing RBAC, webhooks or admission policies, or exec, attach,
@@ -440,7 +440,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
             annotations:
               summary: "{{ $labels.actor }} {{ $labels.verb }} {{ $labels.objectRef_resource }}/{{ $labels.objectRef_subresource }} {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} from {{ $labels.src }} x{{ $value }}"
           # Listing secrets returns every value at once; the get-based rules above skip list.
@@ -462,7 +462,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
             annotations:
               summary: "{{ $labels.actor }} listed every secret in {{ $labels.ns }} from {{ $labels.src }} x{{ $value }}"
           - alert: K8sSecretList
@@ -498,7 +498,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
             annotations:
               summary: "{{ $labels.actor }} used the kube API with {{ $labels.ua }} from {{ $labels.src }} x{{ $value }}"
           # A system:masters client cert from anywhere but the node mesh, the nodes themselves
@@ -517,7 +517,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch }
             annotations:
               summary: "system:masters client cert {{ $labels.actor }} from {{ $labels.src }} x{{ $value }}"
           # Teleport maps kube-admin to the teleport-admins group. An impersonated request in
@@ -532,7 +532,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
             annotations:
               summary: "Teleport impersonated system:masters for {{ $labels.actor }} x{{ $value }}"
           # A service account reading a Secret in another namespace. Platform controllers and the
@@ -559,7 +559,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch }
+            labels: { page: "true", severity: critical, source: k8s-audit-watch }
             annotations:
               summary: "{{ $labels.actor }} read secret {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} outside its namespace from {{ $labels.src }} x{{ $value }}"
           - alert: K8sSecretRead
@@ -584,7 +584,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: warning, source: k8s-audit-watch }
+            labels: { page: "true", severity: warning, source: k8s-audit-watch }
             annotations:
               summary: "{{ $labels.actor }} read secret {{ $labels.objectRef_namespace }}/{{ $labels.objectRef_name }} outside its namespace from {{ $labels.src }} x{{ $value }}"
           # A token minted for a service account by something other than a kubelet or the
@@ -655,7 +655,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: hubble }
+            labels: { page: "true", severity: critical, source: hubble }
             annotations:
               summary: "{{ $labels.ns }}/{{ $labels.pod }} tried the metadata service ({{ $labels.verdict }}) x{{ $value }}"
           # The Teleport agent probes the AWS, GCP and Azure metadata services on every start to
@@ -692,7 +692,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: talos-apid }
+            labels: { page: "true", severity: critical, source: talos-apid }
             annotations:
               summary: "Talos API {{ $labels.method }} as {{ $labels.role }} on {{ $labels.talos_node }} x{{ $value }}"
           # The follower stopped: no apid line for 26h. The nightly etcd-backup calls apid at
@@ -722,7 +722,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: tetragon }
+            labels: { page: "true", severity: critical, source: tetragon }
             annotations:
               summary: "{{ $labels.t_ns }}/{{ $labels.t_pod }} ({{ $labels.t_bin }}) read host {{ $labels.t_path }} on {{ $labels.node }} x{{ $value }}"
           # apid or trustd accepted a connection from outside loopback, the mesh, the pod network
@@ -739,7 +739,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: tetragon }
+            labels: { page: "true", severity: critical, source: tetragon }
             annotations:
               summary: "{{ $labels.t_bin }} on {{ $labels.node }} accepted a connection from {{ $labels.t_peer }} x{{ $value }}"
           # The export stopped: cron pollers start processes every few minutes, so an hour
@@ -759,7 +759,7 @@ data:
           # someone stopped the record.
           - alert: NetcupLogsSilent
             expr: absent_over_time({namespace="monitoring", app="netcup-journal"} |= `"ident":"docker-events"` [10m])
-            labels: { severity: critical, source: netcup-watch }
+            labels: { page: "true", severity: critical, source: netcup-watch }
             annotations:
               summary: "no journal lines from netcup for 10 minutes (puller, tailnet or the box)"
           # Source: /usr/local/bin/cluster-secret-scan on netcup, hourly systemd timer. It logs the
@@ -775,7 +775,7 @@ data:
                   [2h]
                 )
               ) > 0
-            labels: { severity: critical, source: netcup-watch, burn_in: "until-2026-10-11" }
+            labels: { page: "true", severity: critical, source: netcup-watch, burn_in: "until-2026-10-11" }
             annotations:
               summary: "cluster secret on netcup disk: {{ $labels.path }} (shred it, then rotate what it held)"
           - alert: NetcupSecretScanSilent
@@ -795,7 +795,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: netcup-watch }
+            labels: { page: "true", severity: critical, source: netcup-watch }
             annotations:
               summary: "Tailscale SSH on netcup from {{ $labels.who }} x{{ $value }}"
           - alert: NetcupShellLogin
@@ -803,7 +803,7 @@ data:
               sum by (ident) (
                 count_over_time({namespace="monitoring", app="netcup-journal"} |~ `"ident":"sshd[^"]*"` |= "Accepted " [5m])
               ) > 0
-            labels: { severity: critical, source: netcup-watch }
+            labels: { page: "true", severity: critical, source: netcup-watch }
             annotations:
               summary: "sshd accepted a login on netcup x{{ $value }}"
           # auditd file watches on netcup: keys, sudoers, account files and the audit rules
@@ -822,7 +822,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: netcup-watch }
+            labels: { page: "true", severity: critical, source: netcup-watch }
             annotations:
               summary: "netcup {{ $labels.key }} touched by {{ $labels.comm }} x{{ $value }}"
           - alert: NetcupConfigChange

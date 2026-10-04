@@ -25,6 +25,8 @@ data:
         # info: Discord only, one alert per distinct text, expires with the window
         summary = plain(summary)[:1600]
         labels = {"alertname": alertname, "severity": severity, "source": SOURCE}
+        if severity == "critical":
+            labels["page"] = "true"
         if severity != "critical":
             labels["digest"] = hashlib.sha256(summary.encode()).hexdigest()[:12]
         if not AM:

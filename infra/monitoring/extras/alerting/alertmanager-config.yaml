@@ -63,9 +63,8 @@ spec:
             value: ".+"
           - name: source
             value: k8s-audit-watch
-          - name: alertname
-            matchType: "=~"
-            value: "^(K8sSecretRead|K8sPodExec|K8sUnknownClientCert|K8sMastersFromUnknownSource|K8sImpersonatedMasters|K8sServiceAccountPrivilegedChange|K8sSecretList|K8sScriptingClient)$"
+          - name: page
+            value: "true"
         groupWait: 10s
         repeatInterval: 1h
         continue: true
@@ -87,9 +86,10 @@ spec:
         continue: true
       # Burn-in: an alert labelled burn_in (value until-<date>) never reaches the phone, only
       # Discord. New critical alerts start with it; drop the label after a quiet week.
-      # Phone pages are an explicit API-path allowlist (owner decision 2026-08-13 after a
-      # node-pressure page): only alerts that mean api.unorouter.com is failing or its
-      # database is dying ring the phone. Everything else critical stays Discord-only.
+      # Phone pages are opt-in per rule: a critical alert pages only with the label
+      # page: "true" on its rule (pollers set it on every critical through watch-lib). Only
+      # alerts that mean api.unorouter.com is failing, its database is dying or someone holds
+      # a working credential carry it. Everything else critical stays Discord-only.
       # The pod/deployment/instance excludes keep frontend/bot/site instances of the
       # shared alertnames (OOMKilled, PublicEndpointDown, ...) off the phone.
       #
@@ -105,9 +105,8 @@ spec:
             value: ".+"
           - name: severity
             value: critical
-          - name: alertname
-            matchType: "=~"
-            value: "^(LokiRulerStalled|SecurityAuditCanarySilent|NetcupClusterSecretOnDisk|K8sImpersonatedMasters|CatalogModelsBelowFloor|CatalogHiddenByOptions|CatalogOptionMapShrunk|PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork|ImageSecretLeak|PublicPackageExposed|K8sSecretRead|K8sPodExec|K8sCanaryWorkload|QuarantineApplied|VectorArchiveDiscarded|VectorArchiveErrors|TeleportPrivilegeChange|TeleportSSOBroken|OpenBaoRootUsed|PVCTerminating|TailscaleDeviceAdded|TailscaleUnknownDevice|TailscaleKeyCreated|TailscaleTailnetChanged|PodMetadataServiceAccess|NetcupLogsSilent|NetcupShellLogin|HetznerProjectAction|TalosAPIPrivilegedCall|CloudflareAccessForeignLogin|NetcupSensitiveFileAccess|GitHubUnexpectedMember|GitHubUnexpectedApp|GitHubWebhook|GitHubRepoCreated|GitHubRulesetInactive|GitHubDeployKey|GitHubUnexpectedCommit|TetragonHostSecretAccess|TalosAPIForeignCaller)$"
+          - name: page
+            value: "true"
           - name: pod
             matchType: "!~"
             value: "unorouter.*"

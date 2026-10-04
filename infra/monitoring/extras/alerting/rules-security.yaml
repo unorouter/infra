@@ -46,7 +46,7 @@ spec:
         - alert: ChannelKeyRevealed
           expr: cnpg_newapi_channel_key_reads_count > 0
           for: 0m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "Upstream channel key was revealed via the admin API"
             description: >-
@@ -156,7 +156,7 @@ spec:
         - alert: RootPATFromUnknownNetwork
           expr: cnpg_newapi_root_pat_from_new_network_count > 0
           for: 0m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "Root admin PAT used from a never-seen network ({{ $value }} actions)"
             description: >-
@@ -219,7 +219,7 @@ spec:
         - alert: TokenKeyRevealedByPAT
           expr: cnpg_newapi_token_key_reveals_pat_count > 0
           for: 0m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "API key belonging to another user revealed via access token"
             description: >-
@@ -240,7 +240,7 @@ spec:
         - alert: MassUserEdits
           expr: cnpg_newapi_admin_user_edits_distinct_targets > 5
           for: 0m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $value }} distinct accounts edited in 5 minutes"
             description: >-
@@ -257,7 +257,7 @@ spec:
         - alert: LargeQuotaGrant
           expr: cnpg_newapi_quota_grants_large_count > 0
           for: 0m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "Quota grant of ${{ $value }} or more issued"
             description: >-
@@ -321,7 +321,7 @@ spec:
         - alert: SecuritySettingFlapping
           expr: cnpg_newapi_security_setting_changes_count >= 3
           for: 0m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "Auth-hardening settings changed {{ $value }}x in 5 minutes"
             description: >-
@@ -338,7 +338,7 @@ spec:
         - alert: TwoFactorChurn
           expr: cnpg_newapi_twofa_changes_count >= 3
           for: 0m
-          labels: { severity: critical }
+          labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $value }} 2FA enrol/disable events in 5 minutes"
             description: >-
@@ -567,7 +567,7 @@ spec:
             (time() - max(loki_prometheus_rule_group_last_evaluation_timestamp_seconds) > 600)
             or absent(loki_prometheus_rule_group_last_evaluation_timestamp_seconds)
           for: 10m
-          labels: { severity: critical, burn_in: "until-2026-10-11" }
+          labels: { page: "true", severity: critical, burn_in: "until-2026-10-11" }
           annotations:
             summary: "Loki ruler has not evaluated a rule group for 10m: every log alert is blind"
         - alert: LokiRuleEvaluationFailing
@@ -614,7 +614,7 @@ spec:
         - alert: SecurityAuditCanarySilent
           expr: (max(cnpg_newapi_audit_canary_count) or vector(0)) == 0
           for: 30m
-          labels: { severity: critical, burn_in: "until-2026-10-11" }
+          labels: { page: "true", severity: critical, burn_in: "until-2026-10-11" }
           annotations:
             summary: "security alerts are blind: no audit canary row in 3h"
             description: >-
