@@ -889,6 +889,22 @@ data:
             labels: { severity: warning, source: loki }
             annotations:
               summary: "Discord message {{ $labels.message_id }} has no matching request in {{ $labels.pod }}; confirm the bot account sent it"
+          # The gateway writes log and audit rows to ClickHouse off the request path with no
+          # retry: every one of these lines is a row that will never exist (restart, memory cap).
+          - alert: GatewayLogRowsLost
+            expr: >-
+              sum by (table) (
+                count_over_time(
+                  {namespace="services", app="new-api"}
+                    |= "failed to write"
+                    | regexp `failed to write (?P<table>logs|audit_logs) row`
+                    | table != ""
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "{{ $value }} gateway {{ $labels.table }} rows failed to reach ClickHouse in 5 minutes and are lost; the error is in the new-api log line"
           # Free lanes answering 429 keep this at 500 to 1,500 an hour (Sep 28 to 30: median
           # 815, max 1,527), so only a jump well past that means something broke.
           - alert: GatewayDisableStorm
