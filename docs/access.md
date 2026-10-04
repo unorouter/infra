@@ -6,7 +6,7 @@ Daily work is a named, expiring session. Nothing standing lives on a laptop.
 | --- | --- | --- |
 | kubectl | `KUBECONFIG=~/.kube/teleport-unorouter.yaml` (user unit `tsh-kube`: `tsh proxy kube --port 18443 unorouter`) | 12 h |
 | Postgres | `tsh db login newapi-pg --db-user dbadmin\|reader --db-name newapi`, then `tsh db connect newapi-pg` | 12 h |
-| OpenBao | `./scripts/bao.sh login` (reader) or `login admin` (writes); trades the Teleport session for a token via `auth/jwt-teleport`; `BAO_ADDR=http://127.0.0.1:18200` (unit `tsh-openbao`) | 24 h / 1 h |
+| OpenBao | `./scripts/bao.sh login` (reader) or `login admin` (writes); trades the Teleport session for a token via `auth/jwt-teleport` (bound to the `kube-admin` Teleport role); `BAO_ADDR=http://127.0.0.1:18200` (unit `tsh-openbao`) | 24 h / 1 h |
 | Logs | `logcli` with `LOKI_ADDR=http://127.0.0.1:18300/api/datasources/proxy/uid/loki` (unit `tsh-grafana`); Teleport audits each query as you | 12 h |
 | Node | `talosctl -n <tailnet ip> dashboard\|logs\|etcd status`, `TALOSCONFIG=talos/clusterconfig/talosconfig` (rendered, never committed) | 1 year |
 | Ops UIs | argocd / openbao / grafana.unorouter.com through Teleport App Access, GitHub SSO | 12 h |
@@ -53,12 +53,19 @@ runs is recorded (auditd key `session_exec`, shipped by `netcup-journal`, argume
 
 Auth and proxy in [infra/teleport](../infra/teleport), the app/db/kube agent in
 [infra/teleport-app-access](../infra/teleport-app-access). GitHub team to roles in
-`infra/teleport/resources/`: `admins` everything plus `newapi-db-admin`, `readonly` auditor plus
-kube-viewer plus newapi-db-reader, `debuggers` pods in `services` only.
+`infra/teleport/resources/`: `admins` access, auditor, kube-admin, newapi-db-reader and
+newapi-db-admin (no `editor`), `readonly` auditor plus kube-viewer plus newapi-db-reader,
+`debuggers` pods in `services` only. `kube-admin` maps to the Kubernetes group
+`teleport-admins`, bound to cluster-admin in `kube-admin-rbac.yaml`: deleting that binding
+revokes it, which `system:masters` never allowed.
 
 - Audit shows the agent SA with `impersonatedUser: <github login>`; every `kubectl exec` is a
   recorded session. Local `tctl`: `~/.local/bin/tctl --auth-server=teleport.unorouter.com:443`
-  (the auth container is distroless).
+  (the auth container is distroless). It reads (`auditor`); writes are refused, because no
+  daily login holds `editor`.
+- Roles and the GitHub connector are operator-owned (label `teleport.dev/origin: kubernetes`):
+  change them in `resources/` and push. To get `editor` back for a manual fix, add it to the
+  `admins` mapping in `github-connector.yaml`, push, `tsh logout && tsh login`, then remove it.
 - `tctl get github/github` OMITS `client_secret`; re-applying its output wipes SSO
   (`incorrect_client_credentials`). Rebuild from `resources/github-connector.yaml` plus OpenBao
   `secret/teleport-github`.

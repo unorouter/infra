@@ -144,7 +144,9 @@ Same evacuation as above, then a reinstall instead of the EPHEMERAL reset (node1
   `10.200.0.0/24` (`talos/talconfig.yaml`, pins in `patches/`), so a node can live at any
   provider or behind NAT. In-cluster clients reach the apiserver through KubePrism
   (`localhost:7445`). Pod Security is `baseline` cluster wide; a workload that needs more gets
-  its own labelled namespace (`infra/services/uno-import.yaml`), never a wider exemption.
+  its own labelled namespace (`infra/services/uno-import.yaml`), never a wider exemption, plus
+  a ValidatingAdmissionPolicy that holds the namespace to baseline with only the one exception
+  it needs (uno-import: `NET_ADMIN` on the `vpn` container).
 - During a node address change, policy-restricted pods cannot reach the new address (Cilium
   calls it "world") until the kubelet reports it.
 - CNPG uses the Barman Cloud plugin. A test restore from the real bucket is a hard gate.
@@ -271,6 +273,8 @@ issue. Policy in `renovate.json`:
   before 06:00 on Mondays, seven days after release. ArgoCD rolls the commit.
 - Everything else (majors, OpenBao, Teleport, Cilium, ArgoCD, Talos, Kubernetes, operator minors,
   tofu providers) waits in the dashboard until its box is ticked; a tick merges within the hour.
+- Images are pinned `tag@sha256`. Renovate pins new ones and merges digest bumps with patch and
+  minor, which is how a floating tag such as `python:3.14-alpine` still picks up fixes.
 - Renovate never opens a PR. If it does (a branch it cannot rebase), merge or close it that day.
 - A bump that misbehaves: `git revert`, then pin it back in `renovate.json` with
   `matchPackageNames` plus `allowedVersions`.

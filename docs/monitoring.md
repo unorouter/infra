@@ -10,25 +10,36 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
   `alerting/rules-security.yaml` (account takeover, card testing, chargebacks, guest abuse), fed by
   SQL over the gateway's Postgres tables in `scrape/cnpg-security-queries.yaml` and over its
   ClickHouse logs and audit trail in `infra/databases/clickhouse-security-exporter.yaml`.
+- **Audit canary**: `pollers/audit-canary.yaml` sends one refused request an hour (fake bearer
+  token, user agent `uno-audit-canary/1`) and `cnpg_newapi_audit_canary_count` counts its
+  audit rows over 3 h. `SecurityAuditCanarySilent` pages at zero: a security metric that reads
+  zero forever looks like a quiet night. Whatever exporter serves the security metrics must
+  serve this one too, and the credential alerts exclude that user agent.
 - **Log alerts** are LogQL rules in `infra/loki/logql-rules.yaml` (ConfigMaps labelled
   `loki_rule: "1"`, Loki's ruler, same Alertmanager). Groups: `pgaudit`, `openbao` (root policy
-  in use pages), `teleport` (role, connector or user change pages), `dex`, `k8s-audit`
+  in use pages), `teleport` (role, connector or user change pages; `TeleportLogin` posts every
+  login to Discord), `dex`, `k8s-audit`
   (`K8sPodExec`, `K8sSecretRead`, `K8sSecurityConfigurationChanged` critical,
   `K8sUnexpectedAccess` warning; the owner's own identity `0-don` gets an info digest, never a
-  page). Rules group by actor and strip source ports, one session is one alert. `K8sSecretRead`
+  page; `K8sImpersonatedMasters` pages if Teleport ever impersonates `system:masters`). Rules group by actor and strip source ports, one session is one alert. `K8sSecretRead`
   also pages when a service account reads a Secret outside its namespace; platform controllers
   are one regex in the rule. `hubble` pages on any pod reaching the metadata service,
   `talos` on privileged Talos API calls (`talos-apid-log` follows apid), `tetragon` on a
   container reading host secrets and on apid or trustd accepting a caller from outside
   loopback, mesh, pod network and tailnet (`infra/tetragon`; every caller address is kept), `netcup` on shell logins, sensitive file
-  access and a silent journal, `apps` on bot messages without a matching request and gateway
+  access, a silent journal and a cluster secret on disk (hourly `/usr/local/bin/cluster-secret-scan`
+  timer on netcup, `NetcupSecretScanSilent` when it stops reporting), `apps` on bot messages without a matching request and gateway
   lane disable storms.
-- **Pollers** (`cloudflare-audit-watch`, `ghcr-visibility-watch`, `github-watch`,
-  `hetzner-watch`, `image-secret-scan`, `pat-audit-archive`, `tailscale-watch`) speak only to
+- **Pollers** (`cloudflare-audit-watch`, `edge-probe-watch`, `ghcr-visibility-watch`,
+  `github-watch`, `hetzner-watch`, `image-secret-scan`, `pat-audit-archive`, `tailscale-watch`)
+  speak only to
   Alertmanager through `pollers/watch-lib.yaml` (`notify.digest` info, `notify.alert`
   critical). No poller holds the Discord webhook. Each uses a read only credential of its own:
   a Tailscale OAuth client, a read only Hetzner token, the `unorouter-github-watch` GitHub App.
   `netcup-journal` is not a poller but a Deployment following netcup's journal into Loki.
+  Teleport sees only pod addresses behind the tunnel (`trust_x_forwarded_for` breaks IPv6
+  `tsh`), so `edge-probe-watch` posts each Teleport sign-in (`TeleportSignin`) with the real
+  client address from Cloudflare's request log.
 - **Which alerts reach the phone** is one allowlist regex in
   `alerting/alertmanager-config.yaml`; a new critical alert that should page goes there too.
 - **Responders** are Alertmanager webhook receivers, one Deployment each: `edge-mode` flips the

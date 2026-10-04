@@ -62,7 +62,7 @@ spec:
             value: k8s-audit-watch
           - name: alertname
             matchType: "=~"
-            value: "^(K8sSecretRead|K8sPodExec|K8sUnknownClientCert|K8sMastersFromUnknownSource)$"
+            value: "^(K8sSecretRead|K8sPodExec|K8sUnknownClientCert|K8sMastersFromUnknownSource|K8sImpersonatedMasters)$"
         groupWait: 10s
         repeatInterval: 1h
         continue: true
@@ -99,7 +99,7 @@ spec:
             value: critical
           - name: alertname
             matchType: "=~"
-            value: "^(CatalogModelsBelowFloor|CatalogHiddenByOptions|CatalogOptionMapShrunk|PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork|ImageSecretLeak|PublicPackageExposed|K8sSecretRead|K8sPodExec|K8sCanaryWorkload|QuarantineApplied|VectorArchiveDiscarded|VectorArchiveErrors|TeleportPrivilegeChange|TeleportSSOBroken|OpenBaoRootUsed|PVCTerminating|TailscaleDeviceAdded|TailscaleUnknownDevice|TailscaleKeyCreated|TailscaleTailnetChanged|PodMetadataServiceAccess|NetcupLogsSilent|NetcupShellLogin|HetznerProjectAction|TalosAPIPrivilegedCall|CloudflareAccessForeignLogin|NetcupSensitiveFileAccess|GitHubUnexpectedMember|GitHubUnexpectedApp|GitHubWebhook|GitHubRepoCreated|GitHubRulesetInactive|GitHubDeployKey|GitHubUnexpectedCommit|TetragonHostSecretAccess|TalosAPIForeignCaller)$"
+            value: "^(SecurityAuditCanarySilent|NetcupClusterSecretOnDisk|K8sImpersonatedMasters|CatalogModelsBelowFloor|CatalogHiddenByOptions|CatalogOptionMapShrunk|PublicEndpointDown|CloudflaredStreamFlood|TunnelRequestErrorsHigh|DeploymentNoReplicas|ContainerOOMKilled|PodCrashLoopBackOff|CNPGClusterUnhealthy|CNPGWalArchiveFailing|ChannelKeyRevealed|MassUserEdits|SecuritySettingFlapping|TwoFactorChurn|TokenKeyRevealedByPAT|LargeQuotaGrant|RootPATFromUnknownNetwork|ImageSecretLeak|PublicPackageExposed|K8sSecretRead|K8sPodExec|K8sCanaryWorkload|QuarantineApplied|VectorArchiveDiscarded|VectorArchiveErrors|TeleportPrivilegeChange|TeleportSSOBroken|OpenBaoRootUsed|PVCTerminating|TailscaleDeviceAdded|TailscaleUnknownDevice|TailscaleKeyCreated|TailscaleTailnetChanged|PodMetadataServiceAccess|NetcupLogsSilent|NetcupShellLogin|HetznerProjectAction|TalosAPIPrivilegedCall|CloudflareAccessForeignLogin|NetcupSensitiveFileAccess|GitHubUnexpectedMember|GitHubUnexpectedApp|GitHubWebhook|GitHubRepoCreated|GitHubRulesetInactive|GitHubDeployKey|GitHubUnexpectedCommit|TetragonHostSecretAccess|TalosAPIForeignCaller)$"
           - name: pod
             matchType: "!~"
             value: "unorouter.*"

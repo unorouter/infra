@@ -53,7 +53,8 @@ Created with its rendered config as user data, nothing else.
 
 A rendered config is the whole cluster (every CA key, the service account key, the tailnet
 key), so it is rendered on the operator laptop, sent to Hetzner and shredded, never copied to
-another host. Existing nodes learn about a new one only once it has a public address: a peer
+another host. netcup runs an hourly scan (`cluster-secret-scan`) that pages on a rendered
+config, talsecret, admin kubeconfig or Tailscale key on its disk. Existing nodes learn about a new one only once it has a public address: a peer
 entry without an endpoint accepts a handshake from anywhere, and whoever holds the new node's
 config holds its private key.
 
