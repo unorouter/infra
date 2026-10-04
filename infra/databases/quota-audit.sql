@@ -32,6 +32,11 @@
 -- must build against SQLite and MySQL too (CLAUDE.md Rule 2). It is also
 -- append-only and never read by the application, so it cannot affect a request.
 
+BEGIN;
+
+-- Re-runnable: the guard at the end would refuse the trigger drop below. Recreated there.
+DROP EVENT TRIGGER IF EXISTS trg_protect_quota_audit;
+
 CREATE TABLE IF NOT EXISTS quota_audit (
   id          bigserial PRIMARY KEY,
   user_id     bigint      NOT NULL,
@@ -88,25 +93,26 @@ CREATE TRIGGER trg_quota_increase
   EXECUTE FUNCTION log_quota_increase();
 
 -- Withholding DELETE is not enough on its own: the app role owns `users`, so
--- it can DROP the trigger and then grant a balance with nothing watching.
--- Verified: after a drop, a +999 left no row. Taking ownership of `users` away
--- would close it too, but the application runs AutoMigrate(&User{}) on every
--- boot and needs DDL there, so an event trigger is used instead -- it blocks
--- exactly this one drop and leaves ordinary migrations alone (ALTER TABLE
--- ADD/DROP COLUMN still succeed as the app role).
-CREATE OR REPLACE FUNCTION protect_quota_audit_trigger() RETURNS event_trigger AS $$
-DECLARE obj record;
+-- it can drop, disable or redefine the trigger and then grant a balance with
+-- nothing watching. Taking ownership of `users` away would close it too, but
+-- the application runs AutoMigrate(&User{}) on every boot and needs DDL there.
+-- After every DDL statement this checks the trigger is present, enabled and
+-- defined exactly as above, and rolls the statement back otherwise; ordinary
+-- column and index migrations pass.
+CREATE OR REPLACE FUNCTION public.protect_quota_audit_trigger() RETURNS event_trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
-  -- session_user, so SECURITY DEFINER and SET ROLE cannot spoof their way past.
   IF session_user = 'postgres' THEN RETURN; END IF;
-  FOR obj IN SELECT * FROM pg_event_trigger_dropped_objects() LOOP
-    IF obj.object_type = 'trigger' AND obj.object_identity LIKE 'trg_quota_increase%' THEN
-      RAISE EXCEPTION 'dropping trg_quota_increase requires superuser';
-    END IF;
-  END LOOP;
+  IF to_regclass('public.users') IS NULL OR (SELECT count(*) FROM pg_trigger
+      WHERE tgrelid = 'public.users'::regclass AND tgenabled IN ('O','A')
+      AND tgname = 'trg_quota_increase'
+      AND pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_quota_increase AFTER UPDATE OF quota ON public.users FOR EACH ROW WHEN ((new.quota > old.quota)) EXECUTE FUNCTION log_quota_increase()') <> 1 THEN
+    RAISE EXCEPTION 'audit guard: trg_quota_increase changes require database administrator maintenance';
+  END IF;
 END;
-$$ LANGUAGE plpgsql;
+$$;
+REVOKE ALL ON FUNCTION public.protect_quota_audit_trigger() FROM PUBLIC, newapi;
+CREATE EVENT TRIGGER trg_protect_quota_audit ON ddl_command_end
+  EXECUTE FUNCTION public.protect_quota_audit_trigger();
 
-DROP EVENT TRIGGER IF EXISTS trg_protect_quota_audit;
-CREATE EVENT TRIGGER trg_protect_quota_audit ON sql_drop
-  EXECUTE FUNCTION protect_quota_audit_trigger();
+COMMIT;

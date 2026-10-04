@@ -96,7 +96,7 @@ BEGIN
       AND tgqual IS NULL AND tgnargs = 0 AND tgattr = ''::int2vector
       AND ((tgname = 'evidence_pat_insert' AND tgtype = 5)
         OR (tgname = 'evidence_pat_update' AND tgtype = 17))) <> 2 THEN
-    RAISE EXCEPTION 'PAT audit trigger definitions require database administrator maintenance';
+    RAISE EXCEPTION 'audit guard: PAT audit trigger definitions require database administrator maintenance';
   END IF;
 END;
 $$;

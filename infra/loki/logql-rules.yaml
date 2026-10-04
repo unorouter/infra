@@ -41,6 +41,24 @@ data:
             labels: { severity: info, source: loki }
             annotations:
               summary: "pgaudit: {{ $labels.record_user_name }} on {{ $labels.pod }} from {{ $labels.src }} {{ $labels.record_audit_class }} {{ $labels.record_audit_object_name }} x{{ $value }} (5m)"
+          # The audit guards (databases/*-audit*.sql) refused a statement: someone tried to drop,
+          # disable or redefine an evidence trigger, take TRUNCATE back, rewrite an audit table
+          # or delete or update audit rows. The app never does any of that.
+          - alert: AuditGuardRefused
+            expr: >-
+              sum by (pod, record_user_name, src) (
+                count_over_time(
+                  {namespace="databases", container="postgres"} |= "audit guard:"
+                    | json
+                    | logger="postgres"
+                    | record_error_severity="ERROR"
+                    | label_format src=`{{ regexReplaceAll ":[0-9]+$" .record_connection_from "" }}`
+                  [5m]
+                )
+              ) > 0
+            labels: { page: "true", severity: critical, source: loki, burn_in: "until-2026-10-11" }
+            annotations:
+              summary: "audit guard refused {{ $labels.record_user_name }} from {{ $labels.src }} on {{ $labels.pod }} x{{ $value }} (5m)"
 
       # Replaces openbao-audit-watch. The audit device writes to stdout. Silent: UI plumbing,
       # logins, and read/list by the two identities whose purpose is reading (ESO for the

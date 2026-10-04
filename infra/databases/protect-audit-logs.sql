@@ -61,7 +61,7 @@ BEGIN
     RETURN OLD;
   END IF;
   RAISE EXCEPTION
-    '% row % (age %s) is inside the 180-day retention floor and cannot be deleted by %',
+    'audit guard: % row % (age %s) is inside the 180-day retention floor and cannot be deleted by %',
     TG_TABLE_NAME, OLD.id, extract(epoch from now())::bigint - OLD.created_at, session_user
     USING HINT = 'Drop trigger trg_protect_audit_logs on this table as a superuser if this is a deliberate purge.';
 END;
@@ -79,6 +79,15 @@ CREATE TRIGGER trg_protect_audit_logs
   WHEN (OLD.type = 3)
   EXECUTE FUNCTION protect_audit_log_rows();
 
+-- Without this an UPDATE of type turns an audit row into a consumption row the delete floor
+-- no longer covers.
+DROP TRIGGER IF EXISTS trg_protect_audit_logs_update ON logs;
+CREATE TRIGGER trg_protect_audit_logs_update
+  BEFORE UPDATE ON logs
+  FOR EACH ROW
+  WHEN (OLD.type = 3)
+  EXECUTE FUNCTION protect_audit_log_update();
+
 -- v1 also installed a BEFORE TRUNCATE trigger. It is not recreated: the REVOKE
 -- above removes the privilege from the app role, and a trigger would only have
 -- re-introduced the same bypass question for postgres.
@@ -91,7 +100,7 @@ REVOKE TRUNCATE ON audit_logs FROM newapi;
 
 CREATE OR REPLACE FUNCTION protect_audit_log_update() RETURNS trigger AS $$
 BEGIN
-  RAISE EXCEPTION '% row % is append-only and cannot be updated by %', TG_TABLE_NAME, OLD.id, session_user
+  RAISE EXCEPTION 'audit guard: % row % is append-only and cannot be updated by %', TG_TABLE_NAME, OLD.id, session_user
     USING HINT = 'Drop trigger trg_protect_audit_logs_update on this table as a superuser if this is deliberate.';
 END;
 $$ LANGUAGE plpgsql;
@@ -110,32 +119,52 @@ CREATE TRIGGER trg_protect_audit_logs_update
   FOR EACH ROW
   EXECUTE FUNCTION protect_audit_log_update();
 
--- The app role owns both tables and could drop or disable the triggers above. After every DDL
--- statement this checks they are still in place, enabled and unchanged, and rolls the
--- statement back otherwise. Same pattern as evidence_protect_pat_capture in pat-audit.sql.
+-- The app role owns both tables: it could drop, disable or redefine the triggers above, or
+-- grant itself TRUNCATE back. After every DDL statement (GRANT included) this checks the four
+-- triggers are enabled and defined exactly as above and that newapi holds no TRUNCATE, and
+-- rolls the statement back otherwise.
 CREATE OR REPLACE FUNCTION public.protect_audit_log_triggers() RETURNS event_trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
   IF session_user = 'postgres' THEN RETURN; END IF;
   IF to_regclass('public.audit_logs') IS NULL OR to_regclass('public.logs') IS NULL THEN
-    RAISE EXCEPTION 'audit tables require database administrator maintenance';
+    RAISE EXCEPTION 'audit guard: audit tables require database administrator maintenance';
   END IF;
-  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.audit_logs'::regclass
-      AND tgenabled IN ('O','A') AND NOT tgisinternal AND tgqual IS NULL AND tgnargs = 0
-      AND ((tgname = 'trg_protect_audit_logs' AND tgtype = 11
-            AND tgfoid = 'public.protect_audit_log_rows()'::regprocedure)
-        OR (tgname = 'trg_protect_audit_logs_update' AND tgtype = 19
-            AND tgfoid = 'public.protect_audit_log_update()'::regprocedure))) <> 2
-  OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.logs'::regclass
-      AND tgenabled IN ('O','A') AND NOT tgisinternal AND tgname = 'trg_protect_audit_logs'
-      AND tgtype = 11 AND tgfoid = 'public.protect_audit_log_rows()'::regprocedure) <> 1 THEN
-    RAISE EXCEPTION 'audit log trigger definitions require database administrator maintenance';
+  IF (SELECT count(*) FROM pg_trigger
+      WHERE tgrelid IN ('public.audit_logs'::regclass, 'public.logs'::regclass)
+      AND tgenabled IN ('O','A') AND NOT tgisinternal
+      AND pg_get_triggerdef(oid) IN (
+        'CREATE TRIGGER trg_protect_audit_logs BEFORE DELETE ON public.audit_logs FOR EACH ROW EXECUTE FUNCTION protect_audit_log_rows()',
+        'CREATE TRIGGER trg_protect_audit_logs_update BEFORE UPDATE ON public.audit_logs FOR EACH ROW EXECUTE FUNCTION protect_audit_log_update()',
+        'CREATE TRIGGER trg_protect_audit_logs BEFORE DELETE ON public.logs FOR EACH ROW WHEN ((old.type = 3)) EXECUTE FUNCTION protect_audit_log_rows()',
+        'CREATE TRIGGER trg_protect_audit_logs_update BEFORE UPDATE ON public.logs FOR EACH ROW WHEN ((old.type = 3)) EXECUTE FUNCTION protect_audit_log_update()')) <> 4 THEN
+    RAISE EXCEPTION 'audit guard: audit log trigger definitions require database administrator maintenance';
+  END IF;
+  IF has_table_privilege('newapi', 'public.audit_logs', 'TRUNCATE')
+  OR has_table_privilege('newapi', 'public.logs', 'TRUNCATE') THEN
+    RAISE EXCEPTION 'audit guard: TRUNCATE on the audit tables stays revoked from newapi';
   END IF;
 END;
 $$;
 REVOKE ALL ON FUNCTION public.protect_audit_log_triggers() FROM PUBLIC, newapi;
-DROP EVENT TRIGGER IF EXISTS evidence_protect_audit_log_triggers;
 CREATE EVENT TRIGGER evidence_protect_audit_log_triggers ON ddl_command_end
   EXECUTE FUNCTION public.protect_audit_log_triggers();
+
+-- A table rewrite (ALTER COLUMN ... TYPE ... USING) runs no row trigger, so it could age
+-- every audit row past the delete floor or rewrite users.access_token unrecorded. AutoMigrate
+-- never rewrites these tables; a real upstream type change is applied by an administrator.
+CREATE OR REPLACE FUNCTION public.protect_audit_table_rewrite() RETURNS event_trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF session_user = 'postgres' THEN RETURN; END IF;
+  IF pg_event_trigger_table_rewrite_oid() IN ('public.audit_logs'::regclass, 'public.logs'::regclass, 'public.users'::regclass) THEN
+    RAISE EXCEPTION 'audit guard: rewriting % requires database administrator maintenance', pg_event_trigger_table_rewrite_oid()::regclass;
+  END IF;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.protect_audit_table_rewrite() FROM PUBLIC, newapi;
+DROP EVENT TRIGGER IF EXISTS evidence_protect_audit_table_rewrite;
+CREATE EVENT TRIGGER evidence_protect_audit_table_rewrite ON table_rewrite
+  EXECUTE FUNCTION public.protect_audit_table_rewrite();
 
 COMMIT;
