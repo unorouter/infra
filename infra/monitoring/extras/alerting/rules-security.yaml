@@ -559,6 +559,27 @@ spec:
     # safety.
     - name: newapi.security.pipeline
       rules:
+        # Every watcher CronJob in monitoring is an entry point that is only watched while it
+        # succeeds (KubeJobFailed is off as noise). Stale after a few of its own intervals.
+        - alert: WatcherStale
+          expr: >-
+            (time() - kube_cronjob_status_last_successful_time{namespace="monitoring",
+              cronjob=~"cloudflare-audit-watch|edge-probe-watch|github-watch|hetzner-watch|tailscale-watch|pat-audit-archive|ghcr-visibility-watch|image-secret-scan"} > 2700)
+            or
+            (time() - kube_cronjob_status_last_successful_time{namespace="monitoring", cronjob="audit-canary"} > 10800)
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "watcher {{ $labels.cronjob }} has not succeeded for {{ $value | humanizeDuration }}"
+        - alert: WatcherMissing
+          expr: >-
+            count(kube_cronjob_info{namespace="monitoring",
+              cronjob=~"audit-canary|cloudflare-audit-watch|edge-probe-watch|github-watch|hetzner-watch|tailscale-watch|pat-audit-archive|ghcr-visibility-watch|image-secret-scan"}) < 9
+            or absent(kube_cronjob_info{namespace="monitoring", cronjob="github-watch"})
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "a watcher CronJob in monitoring is gone ({{ $value }} of 9 present)"
         # Watch a metric whose query has no GROUP BY: it emits a 0-valued series even
         # when nothing is happening. The ip-labelled ones (admin_actions, admin_logins)
         # legitimately vanish while idle, because a GROUP BY over zero rows produces no

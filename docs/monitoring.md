@@ -14,7 +14,13 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
   token, user agent `uno-audit-canary/1`) and `cnpg_newapi_audit_canary_count` counts its
   audit rows over 3 h. `SecurityAuditCanarySilent` pages at zero: a security metric that reads
   zero forever looks like a quiet night. Whatever exporter serves the security metrics must
-  serve this one too, and the credential alerts exclude that user agent.
+  serve this one too, and the credential alerts exclude that user agent (from the pod network
+  only, so the public user agent cannot be used to hide).
+- **Watching the watchers**: every feed and poller has a staleness alert, sized from its real
+  quietest stretch: `K8sAuditLogSilent` (15 m), `TeleportAuditSilent` (3 h), `HubbleExportSilent`
+  (6 h), `TalosAPILogSilent`, `TetragonExportSilent`, `NetcupLogsSilent`, and `WatcherStale` /
+  `WatcherMissing` for the monitoring CronJobs (`KubeJobFailed` is off as noise). A new watcher
+  goes into both regexes in `rules-security.yaml`.
 - **Log alerts** are LogQL rules in `infra/loki/logql-rules.yaml` (ConfigMaps labelled
   `loki_rule: "1"`, Loki's ruler, same Alertmanager). Groups: `pgaudit`, `openbao` (root policy
   in use pages), `teleport` (role, connector or user change pages; `TeleportLogin` posts every

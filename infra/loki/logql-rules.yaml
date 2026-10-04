@@ -91,6 +91,13 @@ data:
       - name: teleport
         interval: 1m
         rules:
+          # The auth audit stream goes at most about 30 minutes without an event; 3h of nothing
+          # means the auth pod's log is not reaching Loki and the alerts below are blind.
+          - alert: TeleportAuditSilent
+            expr: absent_over_time({namespace="teleport", container="teleport", pod=~"teleport-auth.*"} |= `"event":` [3h])
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "no Teleport audit event for 3h: logins, role and connector changes are unwatched"
           - alert: TeleportPrivilegeChange
             expr: >-
               sum by (user, event, name, addr_remote) (
@@ -225,6 +232,13 @@ data:
       - name: k8s-audit
         interval: 1m
         rules:
+          # The apiserver audit stream never drops below about 10,000 lines per 10 minutes.
+          # Silence means every K8s* rule here is blind.
+          - alert: K8sAuditLogSilent
+            expr: absent_over_time({job="k8s-audit"}[15m])
+            labels: { severity: critical, source: loki, burn_in: "until-2026-10-11" }
+            annotations:
+              summary: "no Kubernetes audit lines for 15m: every K8s* alert is blind"
           - alert: K8sPodExec
             expr: >-
               sum by (actor, verb, objectRef_resource, objectRef_subresource, objectRef_namespace, objectRef_name, src) (
@@ -539,6 +553,12 @@ data:
       - name: hubble
         interval: 1m
         rules:
+          # Hubble exports drops and internet egress; the longest normal gap is about 2.5h.
+          - alert: HubbleExportSilent
+            expr: absent_over_time({job="hubble"}[6h])
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "no Hubble flow lines for 6h: metadata and egress alerts are blind"
           # A pod asking the Hetzner metadata service for anything: it serves the node's
           # machine config. metadata-egress-deny drops the packet; the attempt itself means
           # something in that pod is looking for credentials.
