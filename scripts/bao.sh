@@ -16,7 +16,7 @@ session() {
 }
 
 # The proxy signs a JWT for every app request; the `openbao-jwt` app echoes it back and
-# auth/jwt-teleport (bound to that app's audience and the `editor` Teleport role) trades it
+# auth/jwt-teleport (bound to that app's audience and the `kube-admin` Teleport role) trades it
 # for a token.
 login() {
   set -euo pipefail

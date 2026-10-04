@@ -105,6 +105,22 @@ data:
             labels: { severity: critical, source: loki }
             annotations:
               summary: "teleport privilege change by {{ $labels.user }} from {{ $labels.addr_remote }}: {{ $labels.event }} {{ $labels.name }}"
+          # Every successful Teleport login, to Discord. Teleport only sees the proxy and
+          # cloudflared pod addresses, so the line names the user and method, not a source IP.
+          - alert: TeleportLogin
+            expr: >-
+              sum by (user, method) (
+                count_over_time(
+                  {namespace="teleport", container="teleport", pod=~"teleport-auth.*"}
+                    |= `"event":"user.login"`
+                    | json
+                    | success="true"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: warning, source: loki }
+            annotations:
+              summary: "Teleport login: {{ $labels.user }} via {{ $labels.method }}"
           - alert: TeleportSSOBroken
             expr: >-
               sum by (method, addr_remote) (
@@ -390,7 +406,7 @@ data:
               summary: "client certificate {{ $labels.actor }} used the kube API from {{ $labels.src }} x{{ $value }}"
           # A system:masters client cert from anywhere but the node mesh, the nodes themselves
           # (Hetzner prefixes, loopback) or the operator laptop. Also catches a cert that
-          # borrows a known name. Teleport impersonates system:masters without a client cert.
+          # borrows a known name. Teleport traffic carries no client cert and is not matched.
           - alert: K8sMastersFromUnknownSource
             expr: >-
               sum by (actor, src) (
@@ -407,6 +423,21 @@ data:
             labels: { severity: critical, source: k8s-audit-watch }
             annotations:
               summary: "system:masters client cert {{ $labels.actor }} from {{ $labels.src }} x{{ $value }}"
+          # Teleport maps kube-admin to the teleport-admins group. An impersonated request in
+          # system:masters means a role in Teleport was changed to grant it.
+          - alert: K8sImpersonatedMasters
+            expr: >-
+              sum by (actor) (
+                count_over_time(
+                  {job="k8s-audit"} |= "impersonatedUser" |= "system:masters"
+                    | regexp `"impersonatedUser":\{"username":"(?P<actor>[^"]*)","groups":\[(?P<igroups>[^\]]*)\]`
+                    | igroups=~".*system:masters.*"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, source: k8s-audit-watch }
+            annotations:
+              summary: "Teleport impersonated system:masters for {{ $labels.actor }} x{{ $value }}"
           # A service account reading a Secret in another namespace. Platform controllers and the
           # ESO reader that mirrors the CNPG CA into teleport-agent are the routine.
           - alert: K8sSecretRead
