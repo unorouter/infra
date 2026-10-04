@@ -6,8 +6,8 @@
 # so the series keep namespace="databases", which alertmanager groups on.
 #
 # Needs, before it is deployed:
-#   1. ClickHouse side, as admin: clickhouse-security.sql (dictionaries, user).
-#      Postgres side, as dbadmin: clickhouse-dict-least-privilege.sql.
+#   1. ClickHouse side, as admin: clickhouse/sql/security.sql (dictionaries, user).
+#      Postgres side, as dbadmin: clickhouse/sql/dict-least-privilege.sql.
 #   2. OpenBao secret/clickhouse-security-exporter {dsn} (in the ESO allowlist in
 #      loki/logql-rules.yaml).
 # Never define these queries in monitoring/extras/scrape/cnpg-security-queries.yaml as

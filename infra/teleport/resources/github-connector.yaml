@@ -41,7 +41,7 @@ spec:
       roles: ["access", "auditor", "newapi-db-reader", "newapi-db-admin", "kube-admin"]
     # Read-only debugging tier: kube view via kube-viewer (k8s Secrets excluded by the
     # `view` ClusterRole), DB reader with secret columns withheld by grant
-    # (databases/reader-least-privilege.sql), full audit log view.
+    # (databases/postgres/sql/reader-least-privilege.sql), full audit log view.
     # Deliberately no preset `access`/`editor`.
     - organization: unorouter
       team: readonly

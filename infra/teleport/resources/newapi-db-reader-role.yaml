@@ -1,5 +1,5 @@
 # DB access role: least-privilege reader on newapi-pg. The masking is enforced in
-# postgres, not here: databases/reader-least-privilege.sql revokes pg_read_all_data and
+# postgres, not here: databases/postgres/sql/reader-least-privilege.sql revokes pg_read_all_data and
 # grants SELECT per table, naming columns wherever a table carries a secret.
 #
 # The RLS policy on `options` used to be the whole of it, which left the role able to

@@ -18,7 +18,7 @@
 #      path in loki/logql-rules.yaml's ESO allowlist (or the first sync raises an alert)
 #   2. this file: ESO materialises Secret newapi-pg-ip-retention in databases
 #   3. new-api/k8s/pg.yaml managed.roles ip_retention: CNPG creates the login
-#   4. as dbadmin: infra/databases/ip-retention-least-privilege.sql
+#   4. as dbadmin: infra/databases/postgres/sql/ip-retention-least-privilege.sql
 #   5. kubectl -n databases create job --from=cronjob/ip-retention ip-retention-manual,
 #      then read its privacy.ip_retention line: usersRemaining must be 0
 #

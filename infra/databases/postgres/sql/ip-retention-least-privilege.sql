@@ -1,4 +1,4 @@
--- Least-privilege for the `ip_retention` role (infra/databases/ip-retention.yaml).
+-- Least-privilege for the `ip_retention` role (infra/databases/postgres/ip-retention.yaml).
 --
 -- The role does exactly one thing: blank users.register_ip older than 30 days. It is
 -- declared in new-api/k8s/pg.yaml (managed.roles, password from OpenBao

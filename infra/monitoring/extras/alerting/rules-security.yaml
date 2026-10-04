@@ -12,7 +12,7 @@
 # stops syncing silently. Existing groups are unorouter.{memory,etcd,services,
 # backups,postgres,ingress,cluster} -- these use the newapi.security.* prefix.
 #
-# The metrics over the gateway logs come from databases/clickhouse-security-exporter.yaml
+# The metrics over the gateway logs come from databases/clickhouse/security-exporter.yaml
 # (sql_exporter against ClickHouse); the ones over Postgres tables (top_ups, users,
 # pat_change_audit) still come from scrape/cnpg-security-queries.yaml on the newapi-pg
 # Cluster, scraped by the standalone PodMonitor in scrape/cnpg.yaml, NOT by

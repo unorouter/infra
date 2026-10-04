@@ -1,4 +1,4 @@
--- ClickHouse objects behind clickhouse-security-exporter.yaml, hand-applied as the
+-- ClickHouse objects behind clickhouse/security-exporter.yaml, hand-applied as the
 -- ClickHouse admin after the gateway has created new_api_logs.logs and
 -- new_api_logs.audit_logs. Re-apply after a restore that recreates the database.
 --
@@ -10,8 +10,8 @@
 -- on a balance cannot move a 30 minute alert.
 --
 -- Both read newapi-pg-ro through the named collection `newapi_pg` (server.xml in
--- clickhouse.yaml), so the password never lands in DDL or in system.dictionaries.
--- The role's Postgres grants are in clickhouse-dict-least-privilege.sql.
+-- clickhouse/clickhouse.yaml), so the password never lands in DDL or in system.dictionaries.
+-- The role's Postgres grants are in clickhouse/sql/dict-least-privilege.sql.
 
 -- Owner of every API key. Only id and user_id are declared, so only those two
 -- columns are selected; the role cannot read `key` anyway.

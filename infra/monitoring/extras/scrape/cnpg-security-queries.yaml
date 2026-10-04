@@ -2,7 +2,7 @@
 # the PAT change archive.
 #
 # The security metrics over its logs and audit trail come from
-# databases/clickhouse-security-exporter.yaml, because `logs` and `audit_logs` live in
+# databases/clickhouse/security-exporter.yaml, because `logs` and `audit_logs` live in
 # ClickHouse. They keep the `cnpg_` names, so never define one of them here as well:
 # every series would exist twice and each `> 0` alert would page twice.
 apiVersion: v1

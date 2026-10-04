@@ -1,5 +1,5 @@
 -- Least-privilege for the `clickhouse_dict` role: ClickHouse's two dictionaries
--- (clickhouse-security.sql) read newapi-pg through it, from the -ro service.
+-- (clickhouse/sql/security.sql) read newapi-pg through it, from the -ro service.
 --
 -- Declared like ip_retention in new-api/k8s/pg.yaml managed.roles (login, password
 -- from OpenBao secret/newapi-pg-clickhouse-dict, connectionLimit 2, inRoles []), so it

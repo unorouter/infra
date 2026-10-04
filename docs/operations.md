@@ -42,7 +42,7 @@ chart (`grafana-data`, `teleport`).
 ## Log store (ClickHouse)
 
 Gateway `logs` and `audit_logs` live in ClickHouse since 2026-10-04 (`LOG_SQL_*` in OpenBao
-`secret/newapi-env`; `infra/databases/clickhouse/clickhouse.yaml`, `clickhouse-keeper.yaml`). Three
+`secret/newapi-env`; `infra/databases/clickhouse/clickhouse.yaml`, `clickhouse/keeper.yaml`). Three
 replicas and three Keeper members, one of each per node. Every replica accepts writes and
 fetches the others' parts within seconds; there is no primary. The `clickhouse` Service routes
 only to a replica whose two tables exist, reach Keeper and are under 5 minutes behind; without
@@ -52,8 +52,8 @@ a Keeper majority all drop out and rows wait in the spool. Parts older than 30 d
 
 - Accounts: `admin`; `gateway` may only SELECT, INSERT and CREATE TABLE on the two tables
   (append only, like `protect-audit-logs.sql`); `reader`; `security_exporter`
-  (`clickhouse-security.sql`). The dictionaries read newapi-pg as `clickhouse_dict`.
-- Schema, TTL and index changes are admin's, by hand (`clickhouse-logs-indexes.sql`); the
+  (`clickhouse/sql/security.sql`). The dictionaries read newapi-pg as `clickhouse_dict`.
+- Schema, TTL and index changes are admin's, by hand (`clickhouse/sql/logs-indexes.sql`); the
   gateway issues no ALTER.
 - A failed write goes to Postgres `log_spool`; the master drains it every 5 s, skipping rows
   ClickHouse already has. `GatewayLogRowsLost`: a row reached neither. `GatewayLogSpoolBacklog`:

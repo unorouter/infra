@@ -208,7 +208,7 @@ unreadable without the pod's metadata: ClickHouse comes back from its backup.
 4. **Hand steps git does not carry**:
    - `psql -U postgres -d newapi -f infra/databases/postgres/sql/quota-audit.sql`,
      `reader-least-privilege.sql`, `ip-retention-least-privilege.sql`,
-     `clickhouse-dict-least-privilege.sql` and `protect-audit-logs.sql` after a cluster built
+     `clickhouse/sql/dict-least-privilege.sql` and `protect-audit-logs.sql` after a cluster built
      from `initdb` (a physical restore keeps
      roles, triggers and RLS; an initdb cluster lets `reader` read every PAT and password hash).
    - ClickHouse before new-api writes: the image creates `new_api_logs` only on its very first
