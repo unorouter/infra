@@ -18,9 +18,9 @@ spec:
     repeatInterval: 4h
     routes:
       # DEAD-MAN SWITCH. Watchdog always fires while Prometheus+Alertmanager are alive, so
-      # re-notifying it every 5m is a heartbeat to healthchecks.io. If the cluster, Prometheus
-      # or Alertmanager dies the pings stop and healthchecks emails after its grace period --
-      # the one failure mode in-cluster alerting can never report itself.
+      # re-notifying it every 5m is a heartbeat to healthchecks.io, sent through ntfy-bridge.
+      # If the cluster, Prometheus, Alertmanager, the bridge or ntfy fails, the pings stop and
+      # healthchecks emails after its grace period.
       - receiver: healthchecks
         matchers:
           - name: alertname
@@ -127,13 +127,12 @@ spec:
         repeatInterval: 12h
   receivers:
     - name: "null"
-    # heartbeat target: any POST marks the check alive. sendResolved is off -- a resolved
-    # Watchdog would ping too and defeat the point.
+    # heartbeat target: the bridge pings healthchecks.io only while ntfy is reachable and its
+    # last page did not fail, so the heartbeat covers the whole phone path. sendResolved is
+    # off -- a resolved Watchdog would ping too and defeat the point.
     - name: healthchecks
       webhookConfigs:
-        - urlSecret:
-            name: alertmanager-discord
-            key: healthchecks
+        - url: http://ntfy-bridge.monitoring.svc:8080/heartbeat
           sendResolved: false
     - name: edge-mode
       webhookConfigs:
