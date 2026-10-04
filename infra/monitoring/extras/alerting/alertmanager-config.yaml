@@ -58,6 +58,9 @@ spec:
         repeatInterval: 1h
       - receiver: ntfy-evidence
         matchers:
+          - name: burn_in
+            matchType: "!~"
+            value: ".+"
           - name: source
             value: k8s-audit-watch
           - name: alertname
@@ -82,6 +85,8 @@ spec:
         groupWait: 10s
         repeatInterval: 1h
         continue: true
+      # Burn-in: an alert labelled burn_in (value until-<date>) never reaches the phone, only
+      # Discord. New critical alerts start with it; drop the label after a quiet week.
       # Phone pages are an explicit API-path allowlist (owner decision 2026-08-13 after a
       # node-pressure page): only alerts that mean api.unorouter.com is failing or its
       # database is dying ring the phone. Everything else critical stays Discord-only.
@@ -95,6 +100,9 @@ spec:
       # normal admin work.
       - receiver: ntfy
         matchers:
+          - name: burn_in
+            matchType: "!~"
+            value: ".+"
           - name: severity
             value: critical
           - name: alertname

@@ -42,6 +42,9 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
   client address from Cloudflare's request log.
 - **Which alerts reach the phone** is one allowlist regex in
   `alerting/alertmanager-config.yaml`; a new critical alert that should page goes there too.
+  A new critical alert also starts with the label `burn_in: "until-<date a week out>"`: both
+  phone routes skip any alert carrying it, so it posts to Discord only until the label is
+  removed after a quiet week.
 - **Responders** are Alertmanager webhook receivers, one Deployment each: `edge-mode` flips the
   Cloudflare zone into attack mode on `CloudflaredStreamFlood` and back 30 min after resolve.
   Detect in a rule, route in Alertmanager, act in a responder; never a log tailer.

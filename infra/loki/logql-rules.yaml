@@ -435,7 +435,7 @@ data:
                   [5m]
                 )
               ) > 0
-            labels: { severity: critical, source: k8s-audit-watch }
+            labels: { severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
             annotations:
               summary: "Teleport impersonated system:masters for {{ $labels.actor }} x{{ $value }}"
           # A service account reading a Secret in another namespace. Platform controllers and the
@@ -672,7 +672,7 @@ data:
                   [2h]
                 )
               ) > 0
-            labels: { severity: critical, source: netcup-watch }
+            labels: { severity: critical, source: netcup-watch, burn_in: "until-2026-10-11" }
             annotations:
               summary: "cluster secret on netcup disk: {{ $labels.path }} (shred it, then rotate what it held)"
           - alert: NetcupSecretScanSilent
