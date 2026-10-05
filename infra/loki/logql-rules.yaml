@@ -896,6 +896,7 @@ data:
               sum by (kind) (
                 count_over_time(
                   {namespace="monitoring", app="netcup-journal"}
+                    != `"ident":"komodo-updates"`
                     |~ `handling new SSH connection|"ident":"sudo"|"ident":"su"|/auth/login|/api/auth|"ident":"(useradd|usermod|passwd|chpasswd|crontab)"`
                     | regexp `"ident":"(?P<kind>[^"]+)"`
                   [5m]
