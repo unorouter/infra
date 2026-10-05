@@ -203,6 +203,27 @@ data:
       });
     }
 
+    // One JSON line per alert with what the post said, so Loki and the locked archive hold the
+    // alert itself: {app="ntfy-bridge"} | json | event="alert"
+    function logDelivered(sink, alerts, status) {
+      for (const a of alerts) {
+        console.log(JSON.stringify({
+          event: "alert",
+          sink,
+          delivered: status,
+          status: a.status ?? "firing",
+          alertname: a.labels?.alertname,
+          severity: a.labels?.severity,
+          summary: a.annotations?.summary,
+          description: a.annotations?.description,
+          labels: a.labels,
+          startsAt: a.startsAt,
+          endsAt: a.endsAt,
+          fingerprint: a.fingerprint,
+        }));
+      }
+    }
+
     http.createServer((req, res) => {
       if (req.method !== "POST") { res.writeHead(200); res.end("ok"); return; }
       let body = "";
@@ -241,8 +262,7 @@ data:
           const alerts = items.map((x) => x.a);
           const r = await (discord ? toDiscord(p, alerts) : toNtfy(p, alerts));
           if (r.ok) mark(items);
-          // the one line of logging: which sink, which alert, and what it answered
-          console.log(`${sink} ${p.status} ${p.commonLabels?.severity ?? "-"} ${p.commonLabels?.alertname ?? "-"} -> ${r.status}`);
+          logDelivered(sink, alerts, r.status);
           res.writeHead(r.ok ? 200 : 502);
           res.end();
         } catch (e) {
@@ -267,7 +287,7 @@ spec:
     metadata:
       labels: { app: ntfy-bridge }
       # node reads server.mjs once at start: bump with every ConfigMap change so ArgoCD rolls the pod
-      annotations: { config-rev: "4" }
+      annotations: { config-rev: "5" }
     spec:
       containers:
         - name: bridge
