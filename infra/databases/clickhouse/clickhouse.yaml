@@ -129,7 +129,10 @@ data:
            values because every insert is fetched by two other replicas. -->
       <mysql_port remove="1"/>
       <postgresql_port remove="1"/>
-      <max_concurrent_queries>16</max_concurrent_queries>
+      <!-- the gateway holds every insert open up to 2 s for the async flush, 11 to 16 per replica:
+           a cap of 16 refused about 190 of them in an hour; only SELECTs carry real memory -->
+      <max_concurrent_queries>200</max_concurrent_queries>
+      <max_concurrent_select_queries>16</max_concurrent_select_queries>
       <max_connections>128</max_connections>
       <background_pool_size>4</background_pool_size>
       <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
@@ -346,7 +349,7 @@ spec:
         # the local volume is restorable from the nightly ClickHouse backup; Velero would copy it twice
         backup.velero.io/backup-volumes-excludes: data
         # pool sizes are read once at start: bump with every config change so the replicas roll
-        config-rev: "2"
+        config-rev: "3"
     spec:
       automountServiceAccountToken: false
       # one replica per node; each local-path volume pins its pod to the node it was made on
