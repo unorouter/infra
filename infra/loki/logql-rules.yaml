@@ -881,6 +881,7 @@ data:
                 count_over_time(
                   {namespace="monitoring", app="netcup-journal"} |= `"ident":"komodo-updates"`
                     | regexp `\\"op\\": \\"(?P<op>[A-Za-z]+)\\", \\"by\\": \\"(?P<actor>[^\\"]+)`
+                    | op!=""
                     | op!~"RunProcedure|RotateAllServerKeys|BackupCoreDatabase|GlobalAutoUpdate"
                   [5m]
                 )
