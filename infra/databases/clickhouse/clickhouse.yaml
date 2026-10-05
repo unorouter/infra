@@ -119,9 +119,6 @@ data:
       <!-- the cgroup figure counts reclaimable page cache: 2.2 GiB of it pushed the tracker past
            the cap and inserts were refused (2026-10-04); jemalloc's own figure is the real usage -->
       <memory_worker_use_cgroup>0</memory_worker_use_cgroup>
-      <!-- jemalloc allocated spikes to 3 GiB for under a second while the tracker sees 350 MiB
-           and RSS 1.2 GiB (2026-10-04): the first 100 refusals per process dump a heap profile -->
-      <jemalloc_flush_profile_on_memory_exceeded>1</jemalloc_flush_profile_on_memory_exceeded>
       <!-- defaults are 5 GiB each, sized for a big host: the gateway's token lookups filled them
            past the server cap and the overcommit tracker stopped inserts (2026-10-04) -->
       <mark_cache_size>536870912</mark_cache_size>
@@ -165,6 +162,9 @@ data:
       <!-- 1,435 columns on 25.8: each merge reserves ~2 MiB per column twice, ~5 GiB spikes that
            made the overcommit tracker stop inserts (2026-10-04). Prometheus scrapes these. -->
       <metric_log remove="remove"/>
+      <!-- the per query twin, 1,021 columns: its merges into wide parts held 2.3 GiB of stream
+           buffers outside the tracker and stopped inserts for hours (heap profiles, 2026-10-05) -->
+      <query_metric_log remove="remove"/>
       <asynchronous_metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></asynchronous_metric_log>
       <text_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></text_log>
       <error_log><ttl>event_date + INTERVAL 14 DAY DELETE</ttl></error_log>
@@ -327,9 +327,8 @@ spec:
           command:
             - bash
             - -c
-            - mkdir -p /var/lib/clickhouse/jeprof; export CH_INTERSERVER_HOST="$HOSTNAME.clickhouse-headless.databases.svc.cluster.local"; exec /entrypoint.sh
+            - export CH_INTERSERVER_HOST="$HOSTNAME.clickhouse-headless.databases.svc.cluster.local"; exec /entrypoint.sh
           env:
-            - { name: MALLOC_CONF, value: "prof:true,prof_active:true,prof_prefix:/var/lib/clickhouse/jeprof/heap" }
             - { name: CLICKHOUSE_USER, value: admin }
             - { name: CLICKHOUSE_DB, value: new_api_logs }
             - { name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1" }
