@@ -180,6 +180,10 @@ data:
               -- Security denials are written with status 200 before the abort; a refused
               -- PAT request is the only row that records the 403 itself.
               AND (action LIKE 'security.%' OR (status = 403 AND success = 0))
+              -- the step-up prompt before 2FA setup, not a probe: a new user enabling 2FA paged
+              -- critical (2026-10-05); a wrong code (SECURITY_PROOF_INVALID) still counts
+              AND NOT (action = 'security.proof_rejected'
+                       AND other.op.params.reason.:String = 'SECURITY_PROOF_REQUIRED')
               AND ip NOT IN ('127.0.0.1', '::1', 'unknown', '')
               AND ip NOT LIKE '10.42.%'
             GROUP BY ip
@@ -693,6 +697,8 @@ spec:
   template:
     metadata:
       labels: {app: clickhouse-security-exporter}
+      # sql_exporter reads its queries once at start: bump with every ConfigMap change
+      annotations: {config-rev: "2"}
     spec:
       automountServiceAccountToken: false
       securityContext:
