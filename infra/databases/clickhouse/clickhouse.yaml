@@ -124,6 +124,23 @@ data:
       <mark_cache_size>536870912</mark_cache_size>
       <index_mark_cache_size>134217728</index_mark_cache_size>
       <uncompressed_cache_size>0</uncompressed_cache_size>
+      <!-- Altinity's low memory profile (kb.altinity.com, configure_clickhouse_for_low_mem_envs):
+           the defaults assume 32 GiB and up. Fetch and schedule pools stay above its single node
+           values because every insert is fetched by two other replicas. -->
+      <mysql_port remove="1"/>
+      <postgresql_port remove="1"/>
+      <max_concurrent_queries>16</max_concurrent_queries>
+      <max_connections>128</max_connections>
+      <background_pool_size>4</background_pool_size>
+      <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+      <background_merges_mutations_scheduling_policy>round_robin</background_merges_mutations_scheduling_policy>
+      <background_fetches_pool_size>2</background_fetches_pool_size>
+      <background_move_pool_size>1</background_move_pool_size>
+      <background_common_pool_size>4</background_common_pool_size>
+      <background_schedule_pool_size>16</background_schedule_pool_size>
+      <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
+      <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>
+      <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>
       <!-- one replica only: an acknowledged insert must be on disk, not in the page cache -->
       <merge_tree>
         <fsync_after_insert>1</fsync_after_insert>
@@ -132,6 +149,12 @@ data:
              opens a buffer pair per column at once, 2.3 GiB for query_metric_log (Altinity) -->
         <min_bytes_for_wide_part>134217728</min_bytes_for_wide_part>
         <vertical_merge_algorithm_min_bytes_to_activate>134217728</vertical_merge_algorithm_min_bytes_to_activate>
+        <merge_max_block_size>1024</merge_max_block_size>
+        <max_bytes_to_merge_at_max_space_in_pool>1073741824</max_bytes_to_merge_at_max_space_in_pool>
+        <!-- the defaults (8) assume a pool of 16: with 8 slots every merge would count as starved -->
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>2</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>2</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
       </merge_tree>
       <!-- ZSTD over the default LZ4: the log text compresses about 11x instead of 7x -->
       <compression>
@@ -172,7 +195,8 @@ data:
       <asynchronous_metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></asynchronous_metric_log>
       <text_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></text_log>
       <error_log><ttl>event_date + INTERVAL 14 DAY DELETE</ttl></error_log>
-      <processors_profile_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></processors_profile_log>
+      <processors_profile_log remove="remove"/>
+      <opentelemetry_span_log remove="remove"/>
       <latency_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></latency_log>
       <backup_log><ttl>event_date + INTERVAL 90 DAY DELETE</ttl></backup_log>
     </clickhouse>
@@ -212,13 +236,25 @@ data:
   users.xml: |
     <clickhouse>
       <profiles>
+        <!-- every user inherits this; spill to disk well under the 3 GiB server cap -->
+        <default>
+          <max_threads>2</max_threads>
+          <max_block_size>8192</max_block_size>
+          <queue_max_wait_ms>1000</queue_max_wait_ms>
+          <input_format_parallel_parsing>0</input_format_parallel_parsing>
+          <output_format_parallel_formatting>0</output_format_parallel_formatting>
+          <max_bytes_before_external_group_by>1073741824</max_bytes_before_external_group_by>
+          <max_bytes_before_external_sort>1073741824</max_bytes_before_external_sort>
+        </default>
         <!-- one part every 2 s instead of every 200 ms: about 4 parts a second kept 1,000+
              merges running every 5 minutes; 2 s fits in the gateway's 10 s write timeout -->
         <gateway>
+          <profile>default</profile>
           <async_insert_use_adaptive_busy_timeout>0</async_insert_use_adaptive_busy_timeout>
           <async_insert_busy_timeout_max_ms>2000</async_insert_busy_timeout_max_ms>
         </gateway>
         <reader>
+          <profile>default</profile>
           <readonly>2</readonly>
           <max_execution_time>120</max_execution_time>
           <max_memory_usage>2000000000</max_memory_usage>
@@ -309,6 +345,8 @@ spec:
       annotations:
         # the local volume is restorable from the nightly ClickHouse backup; Velero would copy it twice
         backup.velero.io/backup-volumes-excludes: data
+        # pool sizes are read once at start: bump with every config change so the replicas roll
+        config-rev: "2"
     spec:
       automountServiceAccountToken: false
       # one replica per node; each local-path volume pins its pod to the node it was made on

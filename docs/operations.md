@@ -58,8 +58,13 @@ a Keeper majority all drop out and rows wait in the spool. Parts older than 30 d
 - A failed write goes to Postgres `log_spool`; the master drains it every 5 s, skipping rows
   ClickHouse already has. `GatewayLogRowsLost`: a row reached neither. `GatewayLogSpoolBacklog`:
   the spool stayed non-empty 15 minutes.
-- `system.metric_log` stays off (on 25.8 a merge of its 1,435 columns reserves about 5 GiB).
-  The config is subPath mounted: a ConfigMap change needs a rolling restart.
+- Memory: the defaults assume 32 GiB and up; the config follows Altinity's low memory profile
+  (kb.altinity.com, configure_clickhouse_for_low_mem_envs), with larger fetch and schedule pools
+  for replication. Start any change from that profile, not from the defaults. `metric_log` and
+  `query_metric_log` stay off: merges of their 1,000+ columns held 2 to 5 GiB of buffers outside
+  the memory tracker and stopped inserts (2026-10-04/05, found with jemalloc heap profiles).
+- The config is subPath mounted and the pool sizes are read once: bump `config-rev` on the pod
+  template with every ConfigMap change so the replicas roll.
 - Query: `kubectl -n databases exec -it clickhouse-0 -- clickhouse-client --user reader
   --password "$CH_READER_PASSWORD"`, or the Teleport app `clickhouse` (`tsh proxy app
   clickhouse --port 18123`). Backup and restore: `docs/dr.md` "ClickHouse".
