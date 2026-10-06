@@ -140,8 +140,8 @@ data:
     OPERATORS = {u.strip() for u in os.environ.get("TELEPORT_OPERATORS", "0-don").split(",") if u.strip()}
 
     # Teleport records the user but only an in-cluster address, the edge the address but not the
-    # user; a successful GitHub login by an operator within ten minutes joins the two.
-    def operator_logins(start, end):
+    # user; a successful GitHub login within ten minutes joins the two.
+    def github_logins(start, end):
         ts = lambda t: int(datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
         q = '{namespace="teleport", pod=~"teleport-auth.*"} |= `"event":"user.login"` |= `"success":true`'
         url = LOKI + "/loki/api/v1/query_range?" + urllib.parse.urlencode(
@@ -159,7 +159,7 @@ data:
                     ev = json.loads(line[line.index("{"):])
                 except ValueError:
                     continue
-                if ev.get("user") in OPERATORS and ev.get("method") == "github":
+                if ev.get("method") == "github" and ev.get("user"):
                     users.add(ev["user"])
         return sorted(users)
 
@@ -209,20 +209,25 @@ data:
         seen = signins(f(start), f(end))
         # one address and an operator's own GitHub login next to it is the operator signing in;
         # several addresses, or a session without a fresh login, stay a warning
-        who = operator_logins(f(start), f(end)) if seen else []
+        who = github_logins(f(start), f(end)) if seen else []
         for r in seen:
-            r["matched_login"] = who if len(seen) == 1 else []
+            r["logins_nearby"] = who
             print(json.dumps(r, separators=(",", ":")), flush=True)
         if seen:
             import notify
             for r in seen:
                 where = f"{r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:40]})"
-                if r["matched_login"]:
+                others = [u for u in who if u not in OPERATORS]
+                if len(seen) == 1 and who and not others:
                     notify.alert("TeleportSignin", severity="info", ttl=3600, summary=
-                        f"Teleport sign-in from {where} matched a GitHub login by {', '.join(r['matched_login'])}")
+                        f"Teleport sign-in from {where} matched a GitHub login by {', '.join(who)}")
+                elif others:
+                    notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
+                        f"Teleport sign-in from {where} next to a GitHub login by {', '.join(who)} "
+                        f"({', '.join(others)} not an operator), {r['user_agent'][:60]}")
                 else:
                     notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
-                        f"Teleport sign-in or web session from {where} with no operator login next to it, "
+                        f"Teleport sign-in or web session from {where} with no login next to it, "
                         f"{r['user_agent'][:60]}")
         print(json.dumps({"kind": "edge-probe-run", "window": f(start), "recorded": len(found), "sweeps": len(sweeps), "signins": len(seen)}), flush=True)
 ---
