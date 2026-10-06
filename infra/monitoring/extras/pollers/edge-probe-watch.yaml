@@ -91,6 +91,10 @@ data:
             x.setdefault("clientRequestQuery", ""); x.setdefault("clientAsn", 0); x.setdefault("clientASNDescription", "")
         return rows
 
+    # Free plan zones carry no network, so AS0 means unknown
+    def net(r, width):
+        return f"{r['country']} AS{r['asn']} {r['asn_name'][:width]}" if r["asn"] else r["country"]
+
     def score(rows):
         by = defaultdict(lambda: {"n": 0, "n4xx": 0, "hosts": set(), "payload": 0, "noise": 0, "tamper": 0, "unknown_host": 0, "samples": defaultdict(int), "ua": defaultdict(int)})
         for r in rows:
@@ -98,7 +102,9 @@ data:
             if own(x["clientIP"]):
                 continue
             p = by[x["clientIP"]]
-            p["asn"], p["asn_name"], p["country"] = x["clientAsn"], x["clientASNDescription"], x["clientCountryName"]
+            p["country"] = x["clientCountryName"]
+            if x["clientAsn"] or "asn" not in p:
+                p["asn"], p["asn_name"] = x["clientAsn"], x["clientASNDescription"]
             host, path, qs, st = x["clientRequestHTTPHost"], x["clientRequestPath"], x["clientRequestQuery"], x["edgeResponseStatus"]
             url = host + path + qs
             p["n"] += c; p["hosts"].add(host); p["ua"][x["userAgent"][:120]] += c
@@ -204,7 +210,7 @@ data:
         if sweeps:
             import notify
             notify.alert("EdgeProbeSweep", severity="warning", ttl=1800, summary="; ".join(
-                f"{r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:30]}): {r['requests']} req, {len(r['hosts'])} hosts, "
+                f"{r['ip']} ({net(r, 30)}): {r['requests']} req, {len(r['hosts'])} hosts, "
                 f"{r['payload']} payload, {r['tamper']} auth tampering, {r['unknown_host']} unknown host" for r in sweeps[:5]))
         seen = signins(f(start), f(end))
         # one address and an operator's own GitHub login next to it is the operator signing in;
@@ -216,7 +222,7 @@ data:
         if seen:
             import notify
             for r in seen:
-                where = f"{r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:40]})"
+                where = f"{r['ip']} ({net(r, 40)})"
                 others = [u for u in who if u not in OPERATORS]
                 if len(seen) == 1 and who and not others:
                     notify.alert("TeleportSignin", severity="info", ttl=3600, summary=

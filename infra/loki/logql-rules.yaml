@@ -113,6 +113,7 @@ data:
           # means the auth pod's log is not reaching Loki and the alerts below are blind.
           - alert: TeleportAuditSilent
             expr: absent_over_time({namespace="teleport", container="teleport", pod=~"teleport-auth.*"} |= `"event":` [3h])
+            for: 15m
             labels: { severity: warning, source: loki }
             annotations:
               summary: "no Teleport audit event for 3h: logins, role and connector changes are unwatched"
@@ -783,6 +784,7 @@ data:
           # without a single exec event means the agent or its export sidecar is down.
           - alert: TetragonExportSilent
             expr: absent_over_time({namespace="kube-system", container="export-stdout"} |= "process_exec" [1h])
+            for: 15m
             labels: { severity: warning, source: tetragon }
             annotations:
               summary: "no Tetragon process_exec events for 1h: agent or export sidecar down"
@@ -817,6 +819,7 @@ data:
               summary: "cluster secret on netcup disk: {{ $labels.path }} (shred it, then rotate what it held)"
           - alert: NetcupSecretScanSilent
             expr: absent_over_time({namespace="monitoring", app="netcup-journal"} |= `"ident":"cluster-secret-scan"` |= "scan done" [3h])
+            for: 15m
             labels: { severity: warning, source: netcup-watch }
             annotations:
               summary: "netcup cluster secret scan has not reported for 3h (timer stopped or removed)"
