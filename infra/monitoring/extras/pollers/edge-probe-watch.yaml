@@ -33,7 +33,7 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, re, sys, urllib.request
+    import json, os, re, sys, urllib.parse, urllib.request
     from collections import defaultdict
     from datetime import datetime, timedelta, timezone
 
@@ -136,6 +136,33 @@ data:
                 p["paths"].append(x["clientRequestPath"])
         return list(by.values())
 
+    LOKI = os.environ.get("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100")
+    OPERATORS = {u.strip() for u in os.environ.get("TELEPORT_OPERATORS", "0-don").split(",") if u.strip()}
+
+    # Teleport records the user but only an in-cluster address, the edge the address but not the
+    # user; a successful GitHub login by an operator within ten minutes joins the two.
+    def operator_logins(start, end):
+        ts = lambda t: int(datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
+        q = '{namespace="teleport", pod=~"teleport-auth.*"} |= `"event":"user.login"` |= `"success":true`'
+        url = LOKI + "/loki/api/v1/query_range?" + urllib.parse.urlencode(
+            {"query": q, "start": (ts(start) - 600) * 10**9, "end": (ts(end) + 600) * 10**9, "limit": 50})
+        try:
+            with urllib.request.urlopen(url, timeout=20) as r:
+                d = json.load(r)
+        except Exception as e:
+            print(json.dumps({"kind": "teleport-login-lookup-error", "error": str(e)[:200]}), flush=True)
+            return []
+        users = set()
+        for stream in d.get("data", {}).get("result", []):
+            for _, line in stream.get("values", []):
+                try:
+                    ev = json.loads(line[line.index("{"):])
+                except ValueError:
+                    continue
+                if ev.get("user") in OPERATORS and ev.get("method") == "github":
+                    users.add(ev["user"])
+        return sorted(users)
+
     CRAWLER = re.compile(r"Googlebot|bingbot|ClaudeBot|Claude-User|GPTBot|OAI-SearchBot|PerplexityBot|Applebot|DuckDuckBot|YandexBot|Baiduspider", re.I)
 
     def verdict(p):
@@ -180,14 +207,23 @@ data:
                 f"{r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:30]}): {r['requests']} req, {len(r['hosts'])} hosts, "
                 f"{r['payload']} payload, {r['tamper']} auth tampering, {r['unknown_host']} unknown host" for r in sweeps[:5]))
         seen = signins(f(start), f(end))
+        # one address and an operator's own GitHub login next to it is the operator signing in;
+        # several addresses, or a session without a fresh login, stay a warning
+        who = operator_logins(f(start), f(end)) if seen else []
         for r in seen:
+            r["matched_login"] = who if len(seen) == 1 else []
             print(json.dumps(r, separators=(",", ":")), flush=True)
         if seen:
             import notify
             for r in seen:
-                notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
-                    f"Teleport sign-in or web session from {r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:40]}), "
-                    f"{r['user_agent'][:60]}")
+                where = f"{r['ip']} ({r['country']} AS{r['asn']} {r['asn_name'][:40]})"
+                if r["matched_login"]:
+                    notify.alert("TeleportSignin", severity="info", ttl=3600, summary=
+                        f"Teleport sign-in from {where} matched a GitHub login by {', '.join(r['matched_login'])}")
+                else:
+                    notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
+                        f"Teleport sign-in or web session from {where} with no operator login next to it, "
+                        f"{r['user_agent'][:60]}")
         print(json.dumps({"kind": "edge-probe-run", "window": f(start), "recorded": len(found), "sweeps": len(sweeps), "signins": len(seen)}), flush=True)
 ---
 apiVersion: batch/v1
@@ -205,6 +241,8 @@ spec:
       backoffLimit: 1
       activeDeadlineSeconds: 240
       template:
+        metadata:
+          labels: { app: edge-probe-watch }
         spec:
           restartPolicy: Never
           serviceAccountName: poller

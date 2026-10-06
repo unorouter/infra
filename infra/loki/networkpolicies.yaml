@@ -16,6 +16,7 @@ spec:
         - matchLabels: { app.kubernetes.io/name: vector }
         - matchLabels: { app.kubernetes.io/name: prometheus }
         - matchLabels: { app: ntfy-bridge }
+        - matchLabels: { app: edge-probe-watch }
       toPorts:
         - ports: [{ port: "3100", protocol: TCP }]
     # kubelet readiness probe
@@ -101,6 +102,21 @@ metadata:
 spec:
   endpointSelector:
     matchLabels: { app: ntfy-bridge }
+  egress:
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: loki }
+      toPorts:
+        - ports: [{ port: "3100", protocol: TCP }]
+---
+# The edge watcher joins a Teleport sign-in address to the operator's own login event.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: edge-probe-watch-loki
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app: edge-probe-watch }
   egress:
     - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: loki }
