@@ -231,7 +231,8 @@ data:
                     notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
                         f"Teleport sign-in from {where} next to a GitHub login by {', '.join(who)} "
                         f"({', '.join(others)} not an operator), {r['user_agent'][:60]}")
-                else:
+                # the tsh landing page alone is a static page needing no session (a restored tab)
+                elif r["paths"] != ["/web/msg/info/login_success"]:
                     notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
                         f"Teleport sign-in or web session from {where} with no login next to it, "
                         f"{r['user_agent'][:60]}")
