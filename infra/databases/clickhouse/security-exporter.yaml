@@ -390,6 +390,30 @@ data:
           -- platform has ever issued automatically.
           WHERE usd >= 5
 
+      - query_name: quota_grants_large
+        no_prepared_statement: true
+        query: |
+          -- one row per grant at or above $5, so the alert can name recipient and reason;
+          -- the reason is the bracketed label the gateway appends since new-api dbd0f3e55
+          SELECT toString(user_id) AS user_id,
+                 username,
+                 toString(round(amount, 2)) AS usd,
+                 if(detail = '', 'no reason recorded', detail) AS detail,
+                 toString(toDateTime(created_at)) AS at,
+                 toFloat64(1) AS one
+          FROM (
+            SELECT user_id, username, created_at,
+                   toFloat64OrZero(extract(content, '[0-9]+\\.[0-9]+')) AS amount,
+                   extract(content, '\\[(.*)\\]$') AS detail
+            FROM logs
+            WHERE type = 3
+              AND created_at > toUnixTimestamp(now()) - 300
+              AND content LIKE '%granted quota%'
+          )
+          WHERE amount >= 5
+          ORDER BY amount DESC
+          LIMIT 10
+
       - query_name: partner_actions
         no_prepared_statement: true
         query: |
@@ -633,6 +657,13 @@ data:
         values: [max_usd]
         query_ref: quota_grants
 
+      - metric_name: cnpg_newapi_quota_grant_large
+        type: gauge
+        help: "One series per quota grant of $5 or more in the last 5 minutes, labelled with recipient and reason."
+        key_labels: [user_id, username, usd, detail, at]
+        values: [one]
+        query_ref: quota_grants_large
+
       - metric_name: cnpg_newapi_partner_actions_count
         type: gauge
         help: "Partner mint/void/grant actions in 5m. Only accounts with a negotiated top-up bonus can call these."
@@ -698,7 +729,7 @@ spec:
     metadata:
       labels: {app: clickhouse-security-exporter}
       # sql_exporter reads its queries once at start: bump with every ConfigMap change
-      annotations: {config-rev: "2"}
+      annotations: {config-rev: "3"}
     spec:
       automountServiceAccountToken: false
       securityContext:

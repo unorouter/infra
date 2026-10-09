@@ -255,19 +255,19 @@ spec:
     - name: newapi.security.quota
       rules:
         - alert: LargeQuotaGrant
-          expr: cnpg_newapi_quota_grants_large_count > 0
+          expr: cnpg_newapi_quota_grant_large > 0
           for: 0m
           labels: { page: "true", severity: critical }
           annotations:
-            summary: "Quota grant of ${{ $value }} or more issued"
+            summary: "${{ $labels.usd }} quota grant to {{ $labels.username }} (user {{ $labels.user_id }}) at {{ $labels.at }} UTC: {{ $labels.detail }}"
             description: >-
-              A quota grant at or above $5 was issued in the last 5 minutes (largest:
-              ${{ with query "max(cnpg_newapi_quota_grants_max_usd)" }}{{ . | first | value }}{{ end }}).
-              Routine bot grants are $0.01-$0.50. Confirm the operator, then reconcile:
-              `SELECT toDateTime(created_at), ip, content FROM logs WHERE type=3
-              AND content LIKE '%granted quota%' AND created_at >
-              toUnixTimestamp(now()) - 900 ORDER BY created_at DESC`
-
+              A single grant of $5 or more. Routine bot grants are $0.005 to $0.50; the
+              level 7 reward is exactly $5. The text after the colon is the bot's own
+              source and reason ("level: reached level ...", "bug: ...", "giveaway: ...",
+              with the granting staff member for manual grants); "no reason recorded"
+              means a caller that does not send one (an old bot build or a direct API
+              call), which needs a human to confirm. Bot ledger: reward_grants in
+              unorouter-bot-db (bot-pg), new_api_user_id = {{ $labels.user_id }}.
     # B3. Partner money movement. These routes convert an account's own balance into
     # value that leaves it: a gift card is a bearer code, and a grant is irreversible
     # once it lands. They accept a PAT by design, because partners script them, so a
