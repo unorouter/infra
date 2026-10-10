@@ -426,11 +426,13 @@ spec:
               week old (largest {{ with query "cnpg_newapi_creem_topup_velocity_max_usd" }}{{ . | first | value }}{{ end }} USD).
               Real whales are old accounts; check the buyer name against the account email.
         - alert: CardTesting
-          expr: cnpg_newapi_card_testing_burst_users > 0
+          # one account retrying 5 times fired most days (a customer with a failing card);
+          # two at once happened once in two weeks. The metric keeps every single-account burst.
+          expr: cnpg_newapi_card_testing_burst_users >= 2
           for: 2m
           labels: { severity: warning }
           annotations:
-            summary: "Card testing: {{ $value }} new account(s) with 5+ checkouts in 15m and no success"
+            summary: "Card testing: {{ $value }} new accounts each with 5+ checkouts in 15m and no success"
             description: >-
               Someone is trying cards through the checkout. List them:
               SELECT user_id, count(*) FROM top_ups WHERE create_time > extract(epoch from now())::bigint - 900
@@ -441,14 +443,15 @@ spec:
               that settled in the Creem dashboard before it becomes a chargeback.
         - alert: CardTestingSustained
           expr: >-
-            cnpg_newapi_card_testing_checkouts_1h >= 15
-              and cnpg_newapi_card_testing_successes_1h / cnpg_newapi_card_testing_checkouts_1h < 0.15
+            cnpg_newapi_card_testing_checkouts_1h >= 40
+              and cnpg_newapi_card_testing_successes_1h / cnpg_newapi_card_testing_checkouts_1h < 0.10
           for: 10m
           labels: { severity: warning }
           annotations:
-            summary: "{{ $value }} card checkouts in 1h with under 15% settling"
+            summary: "{{ $value }} card checkouts in 1h with under 10% settling"
             description: >-
-              Normal hours run 5 to 15 checkouts with roughly a fifth settling. Sustained
+              Normal hours run 5 to 15 checkouts with roughly a fifth settling; the busiest
+              hour from 2026-09-26 to 2026-10-10 had 34, so 40 is above anything seen. Sustained
               volume with almost nothing settling is a testing run spread over accounts and IPs.
 
     - name: newapi.security.checkout

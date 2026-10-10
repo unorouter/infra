@@ -171,6 +171,14 @@ data:
 
     CRAWLER = re.compile(r"Googlebot|bingbot|ClaudeBot|Claude-User|GPTBot|OAI-SearchBot|PerplexityBot|Applebot|DuckDuckBot|YandexBot|Baiduspider", re.I)
 
+    # what reaches Discord: a probe aimed at internal addresses (the 2026-09-29 entry was a
+    # metadata fetch) or heavy payload/auth tampering; every other sweep is only recorded
+    INTERNAL = re.compile(r"169\.254\.|metadata\.google|localhost|127\.0\.0\.1|0x7f0|\[::1\]|oast\.|interact\.sh|burpcollaborator|file://|gopher://|dict://|\$\{jndi", re.I)
+
+    def suspicious(r):
+        internal = sum(n for h, m, u, s, n in r["samples"] if INTERNAL.search(u))
+        return internal >= 1 or r["tamper"] >= 20 or r["payload"] >= 50, internal
+
     def verdict(p):
         targeted = p["payload"] + p["tamper"] + p["unknown_host"]
         crawler = CRAWLER.search(max(p["ua"], key=p["ua"].get) if p["ua"] else "")
@@ -207,11 +215,12 @@ data:
         f = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
         found = run(f(start), f(end))
         sweeps = [r for r in found if r["verdict"] == "sweep"]
-        if sweeps:
+        loud = [(r, n) for r in sweeps for hit, n in [suspicious(r)] if hit]
+        if loud:
             import notify
             notify.alert("EdgeProbeSweep", severity="warning", ttl=1800, summary="; ".join(
-                f"{r['ip']} ({net(r, 30)}): {r['requests']} req, {len(r['hosts'])} hosts, "
-                f"{r['payload']} payload, {r['tamper']} auth tampering, {r['unknown_host']} unknown host" for r in sweeps[:5]))
+                f"{r['ip']} ({net(r, 30)}): {r['requests']} req, {len(r['hosts'])} hosts, {n} at internal addresses, "
+                f"{r['payload']} payload, {r['tamper']} auth tampering, {r['unknown_host']} unknown host" for r, n in loud[:5]))
         seen = signins(f(start), f(end))
         # one address and an operator's own GitHub login next to it is the operator signing in;
         # several addresses, or a session without a fresh login, stay a warning
@@ -236,7 +245,7 @@ data:
                     notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
                         f"Teleport sign-in or web session from {where} with no login next to it, "
                         f"{r['user_agent'][:60]}")
-        print(json.dumps({"kind": "edge-probe-run", "window": f(start), "recorded": len(found), "sweeps": len(sweeps), "signins": len(seen)}), flush=True)
+        print(json.dumps({"kind": "edge-probe-run", "window": f(start), "recorded": len(found), "sweeps": len(sweeps), "alerted": len(loud), "signins": len(seen)}), flush=True)
 ---
 apiVersion: batch/v1
 kind: CronJob
