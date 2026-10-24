@@ -21,6 +21,10 @@ GRANT SELECT ON audit_logs TO cnpg_metrics_exporter;
 -- card top-up velocity (cnpg-security-queries newapi_creem_topup_velocity) needs the account age
 GRANT SELECT (id, created_at) ON users TO cnpg_metrics_exporter;
 
+-- chargeback rate (newapi_creem_risk_30d) counts paid subscription orders too. Never
+-- provider_payload: it is the raw Creem webhook with the customer's email and name.
+GRANT SELECT (payment_method, status, create_time, complete_time) ON subscription_orders TO cnpg_metrics_exporter;
+
 -- Catalog metrics (monitoring/extras/cnpg-catalog-queries.yaml): models exposed to
 -- users and the size of every option map the sync writes. Whole-table reads; neither
 -- table holds secrets (abilities is routing, options is the map set the gateway
