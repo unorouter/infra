@@ -30,6 +30,7 @@ spec:
         - matchLabels: { app: unorouter-bot }
         - matchLabels: { app: new-api-sync }
         - matchLabels: { app: new-api-sync-full }
+        - matchLabels: { app: new-api-sync-weekly }
         - matchLabels: { app: unorouter-mcp }
         - matchLabels: { io.kubernetes.pod.namespace: monitoring, app: audit-canary }
       toPorts:
@@ -166,7 +167,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [new-api-sync, new-api-sync-full]
+        values: [new-api-sync, new-api-sync-full, new-api-sync-weekly]
   egress:
     - toEndpoints:
         - matchLabels: { app: new-api }

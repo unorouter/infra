@@ -313,6 +313,7 @@ spec:
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: vector}
         - matchLabels: {io.kubernetes.pod.namespace: services, app: new-api-sync}
         - matchLabels: {io.kubernetes.pod.namespace: services, app: new-api-sync-full}
+        - matchLabels: {io.kubernetes.pod.namespace: services, app: new-api-sync-weekly}
         - matchLabels: {io.kubernetes.pod.namespace: kube-system, app: talos-etcd-backup}
       toPorts:
         - ports: [{port: "8443", protocol: TCP}]

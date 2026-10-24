@@ -524,6 +524,7 @@ spec:
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api-sync }
         - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api-sync-full }
+        - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api-sync-weekly }
       toPorts:
         - ports: [{ port: "8123", protocol: TCP }]
   egress:
