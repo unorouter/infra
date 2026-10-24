@@ -79,22 +79,13 @@ data:
     # completed (success, refunded, disputed) against those that came back as disputes.
     newapi_creem_risk_30d:
       query: |
-        -- Creem's rate covers subscription payments too; complete_time > 0 is a paid order
-        -- whatever it became later, since "expired" also marks unpaid checkouts.
         SELECT count(*) FILTER (WHERE status = 'disputed')::float8 AS disputes,
                count(*)::float8 AS payments,
                count(*) FILTER (WHERE status = 'refunded')::float8 AS refunds
-        FROM (
-          SELECT status FROM top_ups
-          WHERE payment_method = 'creem'
-            AND status IN ('success', 'refunded', 'disputed')
-            AND create_time > extract(epoch from now())::bigint - 30*86400
-          UNION ALL
-          SELECT status FROM subscription_orders
-          WHERE payment_method = 'creem'
-            AND complete_time > 0
-            AND create_time > extract(epoch from now())::bigint - 30*86400
-        ) p
+        FROM top_ups
+        WHERE payment_method = 'creem'
+          AND status IN ('success', 'refunded', 'disputed')
+          AND create_time > extract(epoch from now())::bigint - 30*86400
       primary: true
       target_databases:
         - newapi
