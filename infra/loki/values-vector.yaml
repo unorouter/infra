@@ -69,7 +69,15 @@ customConfig:
     pods_labels:
       type: remap
       inputs: [pods]
+      drop_on_abort: true
       source: |
+        # Teleport auth runs at debug only for the GitHub login name of a refused sign-in
+        # (infra/teleport/values.yaml); every other debug line stays out of Loki.
+        if .kubernetes.pod_namespace == "teleport" &&
+          match(to_string(.message) ?? "", r'^\S+\s+DEBU\s') &&
+          !contains(to_string(.message) ?? "", "Retrieved teams for GitHub user") {
+          abort
+        }
         .namespace = .kubernetes.pod_namespace
         .pod = .kubernetes.pod_name
         .container = .kubernetes.container_name

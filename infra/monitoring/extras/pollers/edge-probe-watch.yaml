@@ -172,6 +172,27 @@ data:
                                    "ok": ev.get("success") is True, "error": ev.get("error", "")})
         return sorted(events, key=lambda e: e["time"])
 
+    # The refused account's name exists only in Teleport's debug line, logged before the team
+    # check (num_teams:0 is the account the audit event could not name).
+    def refused_accounts(start, end):
+        ts = lambda t: int(datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
+        q = '{namespace="teleport", pod=~"teleport-auth.*"} |= `Retrieved teams for GitHub user` |= `num_teams:0`'
+        url = LOKI + "/loki/api/v1/query_range?" + urllib.parse.urlencode(
+            {"query": q, "start": (ts(start) - 600) * 10**9, "end": (ts(end) + 600) * 10**9, "limit": 50})
+        try:
+            with urllib.request.urlopen(url, timeout=20) as r:
+                d = json.load(r)
+        except Exception as e:
+            print(json.dumps({"kind": "teleport-login-lookup-error", "error": str(e)[:200]}), flush=True)
+            return []
+        names = set()
+        for stream in d.get("data", {}).get("result", []):
+            for _, line in stream.get("values", []):
+                m = re.search(r"github_user[:=]\"?([A-Za-z0-9-]+)", line)
+                if m:
+                    names.add(m.group(1))
+        return sorted(names)
+
     CRAWLER = re.compile(r"Googlebot|bingbot|ClaudeBot|Claude-User|GPTBot|OAI-SearchBot|PerplexityBot|Applebot|DuckDuckBot|YandexBot|Baiduspider", re.I)
 
     # what reaches Discord: a probe aimed at internal addresses (the 2026-09-29 entry was a
@@ -247,9 +268,12 @@ data:
                 if refused and not who and "/v1/webapi/github/callback" in r["paths"]:
                     reason = ("the GitHub account is in no team of the org"
                               if "teams is empty" in refused[-1]["error"] else refused[-1]["error"][:80])
+                    names = refused_accounts(f(start), f(end))
+                    account = (f"GitHub account {', '.join(names)}" if names
+                               else "GitHub account not found in the auth debug log")
                     notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
-                        f"Teleport refused a GitHub sign-in from {where} at {refused[-1]['time']}Z: {reason}. "
-                        f"Nobody got in; Teleport records no user name for a refused account. {r['user_agent'][:60]}")
+                        f"Teleport refused a GitHub sign-in from {where} at {refused[-1]['time']}Z, "
+                        f"{account}: {reason}. Nobody got in. {r['user_agent'][:60]}")
                 elif len(seen) == 1 and who and not others:
                     notify.alert("TeleportSignin", severity="info", ttl=3600, summary=
                         f"Teleport sign-in from {where} matched a GitHub login by {', '.join(who)}")
