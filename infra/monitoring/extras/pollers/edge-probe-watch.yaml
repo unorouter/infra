@@ -144,30 +144,33 @@ data:
 
     LOKI = os.environ.get("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100")
     OPERATORS = {u.strip() for u in os.environ.get("TELEPORT_OPERATORS", "0-don").split(",") if u.strip()}
+    SESSION_TTL = 13 * 3600
 
     # Teleport records the user but only an in-cluster address, the edge the address but not the
-    # user; a successful GitHub login within ten minutes joins the two.
-    def github_logins(start, end):
+    # user; a GitHub login attempt near the edge hit joins the two. A refused attempt carries no
+    # user: Teleport rejects an account outside the org's teams before it records the login name.
+    def github_logins(start, end, before=600):
         ts = lambda t: int(datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
-        q = '{namespace="teleport", pod=~"teleport-auth.*"} |= `"event":"user.login"` |= `"success":true`'
+        q = '{namespace="teleport", pod=~"teleport-auth.*"} |= `"event":"user.login"`'
         url = LOKI + "/loki/api/v1/query_range?" + urllib.parse.urlencode(
-            {"query": q, "start": (ts(start) - 600) * 10**9, "end": (ts(end) + 600) * 10**9, "limit": 50})
+            {"query": q, "start": (ts(start) - before) * 10**9, "end": (ts(end) + 600) * 10**9, "limit": 200})
         try:
             with urllib.request.urlopen(url, timeout=20) as r:
                 d = json.load(r)
         except Exception as e:
             print(json.dumps({"kind": "teleport-login-lookup-error", "error": str(e)[:200]}), flush=True)
             return []
-        users = set()
+        events = []
         for stream in d.get("data", {}).get("result", []):
             for _, line in stream.get("values", []):
                 try:
                     ev = json.loads(line[line.index("{"):])
                 except ValueError:
                     continue
-                if ev.get("method") == "github" and ev.get("user"):
-                    users.add(ev["user"])
-        return sorted(users)
+                if ev.get("method") == "github":
+                    events.append({"time": ev.get("time", "")[:16], "user": ev.get("user", ""),
+                                   "ok": ev.get("success") is True, "error": ev.get("error", "")})
+        return sorted(events, key=lambda e: e["time"])
 
     CRAWLER = re.compile(r"Googlebot|bingbot|ClaudeBot|Claude-User|GPTBot|OAI-SearchBot|PerplexityBot|Applebot|DuckDuckBot|YandexBot|Baiduspider", re.I)
 
@@ -224,26 +227,45 @@ data:
         seen = signins(f(start), f(end))
         # one address and an operator's own GitHub login next to it is the operator signing in;
         # several addresses, or a session without a fresh login, stay a warning
-        who = github_logins(f(start), f(end)) if seen else []
+        nearby = github_logins(f(start), f(end)) if seen else []
+        who = sorted({e["user"] for e in nearby if e["ok"] and e["user"]})
+        refused = [e for e in nearby if not e["ok"]]
+        # a web session outlives its login, so a session check is matched to the logins of the
+        # session lifetime before it
+        holders = []
+        if any("/v1/webapi/user/status" in r["paths"] for r in seen):
+            holders = sorted({e["user"] for e in github_logins(f(start), f(end), before=SESSION_TTL) if e["ok"] and e["user"]})
         for r in seen:
             r["logins_nearby"] = who
+            r["refused_nearby"] = len(refused)
             print(json.dumps(r, separators=(",", ":")), flush=True)
         if seen:
             import notify
             for r in seen:
                 where = f"{r['ip']} ({net(r, 40)})"
                 others = [u for u in who if u not in OPERATORS]
-                if len(seen) == 1 and who and not others:
+                if refused and not who and "/v1/webapi/github/callback" in r["paths"]:
+                    reason = ("the GitHub account is in no team of the org"
+                              if "teams is empty" in refused[-1]["error"] else refused[-1]["error"][:80])
+                    notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
+                        f"Teleport refused a GitHub sign-in from {where} at {refused[-1]['time']}Z: {reason}. "
+                        f"Nobody got in; Teleport records no user name for a refused account. {r['user_agent'][:60]}")
+                elif len(seen) == 1 and who and not others:
                     notify.alert("TeleportSignin", severity="info", ttl=3600, summary=
                         f"Teleport sign-in from {where} matched a GitHub login by {', '.join(who)}")
                 elif others:
                     notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
                         f"Teleport sign-in from {where} next to a GitHub login by {', '.join(who)} "
                         f"({', '.join(others)} not an operator), {r['user_agent'][:60]}")
+                elif r["paths"] == ["/v1/webapi/user/status"]:
+                    notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
+                        f"Teleport web session in use from {where}, an address no login came from. "
+                        f"Logged in during the last {SESSION_TTL // 3600}h: {', '.join(holders) or 'nobody'}. "
+                        f"{r['user_agent'][:60]}")
                 # the tsh landing page alone is a static page needing no session (a restored tab)
                 elif r["paths"] != ["/web/msg/info/login_success"]:
                     notify.alert("TeleportSignin", severity="warning", ttl=3600, summary=
-                        f"Teleport sign-in or web session from {where} with no login next to it, "
+                        f"Teleport sign-in from {where} with no login next to it, "
                         f"{r['user_agent'][:60]}")
         print(json.dumps({"kind": "edge-probe-run", "window": f(start), "recorded": len(found), "sweeps": len(sweeps), "alerted": len(loud), "signins": len(seen)}), flush=True)
 ---
