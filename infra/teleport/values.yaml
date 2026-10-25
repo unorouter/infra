@@ -47,6 +47,12 @@ auth:
         # mirrored to stdout so the audit watcher in monitoring can post failed logins, with
         # the GitHub username and source address, to Discord within five minutes.
         audit_events_uri: ["file:///var/lib/teleport/log", "stdout://"]
+      # A refused GitHub login (an account in none of the org's teams) carries no user in its
+      # audit event; the only record of the account is the debug line "Retrieved teams for
+      # GitHub user" (github_user), logged before the team check. Vector drops every other
+      # teleport debug line before Loki (infra/loki/values-vector.yaml, pods_labels).
+      log:
+        severity: DEBUG
     auth_service:
       # GitHub SSO only: hide local username/password/passkey from the login UI. Everyone
       # signs in via the org-gated GitHub connector. Break-glass = tctl on the auth pod
