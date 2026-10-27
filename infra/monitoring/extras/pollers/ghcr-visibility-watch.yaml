@@ -30,7 +30,7 @@ metadata:
   namespace: monitoring
 data:
   watch.py: |
-    import json, os, urllib.request, urllib.error
+    import json, os, time, urllib.request, urllib.error
     import notify
 
     ORG = os.environ.get("GITHUB_ORG", "unorouter")
@@ -40,16 +40,27 @@ data:
 
     def get(url, headers=None):
         req = urllib.request.Request(url, headers={**UA, **(headers or {})})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                return r.status, r.read().decode()
-        except urllib.error.HTTPError as e:
-            return e.code, ""
+        # GitHub's API answers a stray 502/503 a few times a week; only a persistent one is news
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                status = e.code
+            except (urllib.error.URLError, TimeoutError):
+                status = 0
+            if status and status < 500:
+                return status, ""
+            if attempt < 3:
+                time.sleep(15 * (attempt + 1))
+        return status, ""
 
     status, body = get(f"https://api.github.com/orgs/{ORG}/packages?package_type=container&per_page=100",
                        {"authorization": "Bearer " + GH, "accept": "application/vnd.github+json"})
     if status != 200:
-        notify.alert("PublicPackageExposed", f"ghcr visibility watch is BLIND: cannot list packages (HTTP {status}); the GITHUB_TOKEN in secret/ghcr-pull may be dead")
+        cause = ("the GITHUB_TOKEN in secret/ghcr-pull may be dead" if status in (401, 403)
+                 else "GitHub API still failing after 4 tries over 90s, not the token")
+        notify.alert("PublicPackageExposed", f"ghcr visibility watch is BLIND: cannot list packages (HTTP {status}); {cause}")
         raise SystemExit(1)
     packages = json.loads(body)
     # The org listing silently omits packages the token's user only reaches through
@@ -101,7 +112,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 180
+      activeDeadlineSeconds: 300
       template:
         spec:
           restartPolicy: Never
