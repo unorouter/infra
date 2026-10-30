@@ -873,6 +873,7 @@ data:
           # themselves are read or changed only during deliberate operator work. The one
           # exception is the daily systemd-tmpfiles-clean run, which checks /root/.ssh for
           # Debian's provision.conf: excluded only as systemd's own child with no login session.
+          # xattr reads (syscalls 191 to 196, e.g. `ls -la` on a home dir) expose no file content.
           - alert: NetcupSensitiveFileAccess
             expr: >-
               sum by (key, comm) (
@@ -880,6 +881,7 @@ data:
                   {namespace="monitoring", app="netcup-journal"} |= `"ident":"audisp-syslog"` |~ `type=SYSCALL`
                     |~ `key=\\?"(secrets|ssh_keys|sudoers|accounts|audit_config)`
                     !~ `ppid=1 pid=[0-9]+ auid=4294967295 .*exe=\\?"/usr/bin/systemd-tmpfiles\\?"`
+                    !~ `syscall=19[1-6] `
                     | regexp `comm=\\?"(?P<comm>[^"\\]+)`
                     | regexp `key=\\?"(?P<key>[a-z_]+)`
                   [5m]
