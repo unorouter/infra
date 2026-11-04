@@ -161,6 +161,10 @@ spec:
         - ports:
             - { port: "9094", protocol: TCP }
             - { port: "9094", protocol: UDP }
+    # Watchdog heartbeat to the dead man's switch on netcup's tailnet address
+    - toCIDR: [100.114.228.25/32]
+      toPorts:
+        - ports: [{ port: "19532", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]

@@ -17,6 +17,18 @@ spec:
     groupInterval: 5m
     repeatInterval: 4h
     routes:
+      # OFF CLUSTER DEAD MAN'S SWITCH. Watchdog goes straight to netcup over the tailnet every
+      # minute, bypassing ntfy-bridge, and netcup pages the phone and Discord itself after 5
+      # minutes without one (am-heartbeat on netcup, docs/monitoring.md). This one needs nothing
+      # in the cluster to page, so it covers the cluster's own uplink being down.
+      - receiver: netcup-heartbeat
+        matchers:
+          - name: alertname
+            value: Watchdog
+        groupWait: 0s
+        groupInterval: 1m
+        repeatInterval: 1m
+        continue: true
       # DEAD-MAN SWITCH. Watchdog always fires while Prometheus+Alertmanager are alive, so
       # re-notifying it every 5m is a heartbeat to healthchecks.io, sent through ntfy-bridge.
       # If the cluster, Prometheus, Alertmanager, the bridge or ntfy fails, the pings stop and
@@ -129,6 +141,10 @@ spec:
     # heartbeat target: the bridge pings healthchecks.io only while ntfy is reachable and its
     # last page did not fail, so the heartbeat covers the whole phone path. sendResolved is
     # off -- a resolved Watchdog would ping too and defeat the point.
+    - name: netcup-heartbeat
+      webhookConfigs:
+        - url: http://100.114.228.25:19532/watchdog
+          sendResolved: false
     - name: healthchecks
       webhookConfigs:
         - url: http://ntfy-bridge.monitoring.svc:8080/heartbeat
