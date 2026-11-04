@@ -1,6 +1,9 @@
-# Cloudflare Tunnel (cloudflared) - outbound-only edge entry. Hides node IP, no inbound ports.
-# Routes prod apps + internal UIs (ops hosts go via the Teleport proxy svc, which gates SSO).
-# Token from OpenBao via ESO. Teleport stays DIRECT grey-cloud (ALPN, can't tunnel).
+# Cloudflare Tunnel (cloudflared), outbound only: hides the node IPs, no inbound ports.
+# Three tunnels, because replicas of one tunnel serve every hostname and a flood on one host
+# starved the rest (2026-11-04): this one serves the site hosts, cloudflared-api.yaml serves
+# api.unorouter.com, cloudflared-ops.yaml serves Teleport, the Teleport-gated UIs and Dex.
+# Each host has its own proxied CNAME to <tunnel id>.cfargotunnel.com; the *.unorouter.com
+# wildcard and the apex point at this tunnel. Tokens from OpenBao secret/cloudflared via ESO.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -40,31 +43,7 @@ data:
     # the origin answered in 0.1s. QUIC rides UDP, the least reliable path on this network;
     # http2 keeps the tunnel on TCP.
     protocol: http2
-    # Internal UIs now front through Teleport App Access (GitHub SSO), NOT CF Access.
-    # All *-tp hosts point at the SAME proxy origin; Teleport routes by Host header to the app
-    # whose public_addr matches. noTLSVerify: proxy serves its own teleport.unorouter.com cert
-    # on this in-cluster hop (edge TLS already terminated at Cloudflare). Do NOT set
-    # httpHostHeader -- the original Host is what selects the app.
     ingress:
-      # Teleport proxy itself: tsh/kubectl/psql ride a WebSocket connection upgrade (Teleport's
-      # TLS-routing-behind-L7 mode), the web UI is plain HTTPS. No public IP anywhere.
-      - hostname: teleport.unorouter.com
-        service: https://teleport.teleport.svc.cluster.local:443
-        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
-      - hostname: argocd.unorouter.com
-        service: https://teleport.teleport.svc.cluster.local:443
-        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
-      - hostname: openbao.unorouter.com
-        service: https://teleport.teleport.svc.cluster.local:443
-        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
-      - hostname: grafana.unorouter.com
-        service: https://teleport.teleport.svc.cluster.local:443
-        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
-      # Dex OIDC IdP: direct (no Teleport gate) -- discovery/JWKS must be publicly fetchable
-      # and browser redirects land here; actual auth happens at GitHub (org-gated).
-      - hostname: dex.unorouter.com
-        service: http://dex.dex.svc.cluster.local:5556
-      # ---- prod services (real hostnames since cutover) ----
       # uno-import: the OpenAPI document plus the import API, which takes no
       # token. It is not an open proxy: the adapter whitelist pins the fetch
       # target to ten card sites, and a per-IP concurrency cap keeps one caller
@@ -78,8 +57,6 @@ data:
         service: http://uno-import.uno-import.svc.cluster.local:4000
       - hostname: cards.unorouter.com
         service: http_status:404
-      - hostname: api.unorouter.com
-        service: http://new-api.services.svc.cluster.local:3000
       - hostname: unorouter.com
         service: http://unorouter.services.svc.cluster.local:3000
       - hostname: www.unorouter.com
@@ -170,7 +147,7 @@ spec:
           configMap: { name: cloudflared-config }
 ---
 # SSO: internal UIs are gated by TELEPORT App Access (GitHub connector), not CF Access.
-# - hosts argocd / openbao .unorouter.com -> tunnel -> teleport proxy -> app (SSO-gated).
+# - hosts argocd / openbao / grafana .unorouter.com -> ops tunnel -> teleport proxy -> app (SSO-gated).
 # - Teleport GitHub SSO (org unorouter, team admins) is the gate; one pane like the work setup.
 # - CF Access apps + the "Cloudflare Access SSO" GitHub OAuth app on these hosts are RETIRED
 #   (removed via CF API). Cloudflare here is only the tunnel (IP hiding), not the auth layer.

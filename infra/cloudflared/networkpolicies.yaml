@@ -41,7 +41,6 @@ spec:
   egress:
     # Every origin named in cloudflared-config ingress rules.
     - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: services, app: new-api }
         - matchLabels: { io.kubernetes.pod.namespace: services, app: unorouter }
         - matchLabels: { io.kubernetes.pod.namespace: services, app: unorouter-mcp }
       toPorts:
@@ -51,17 +50,6 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: uno-import, app: uno-import }
       toPorts:
         - ports: [{ port: "4000", protocol: TCP }]
-    - toEndpoints:
-        - matchLabels:
-            io.kubernetes.pod.namespace: teleport
-            app.kubernetes.io/name: teleport-cluster
-            app.kubernetes.io/component: proxy
-      toPorts:
-        - ports: [{ port: "3080", protocol: TCP }]
-    - toEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: dex, app: dex }
-      toPorts:
-        - ports: [{ port: "5556", protocol: TCP }]
     # Cloudflare edge: region1 and region2.v2.argotunnel.com live in these two ranges.
     - toCIDR: [198.41.192.0/24, 198.41.200.0/24]
       toPorts:

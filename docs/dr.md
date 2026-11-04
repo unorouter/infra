@@ -191,7 +191,7 @@ in free disk (`local-path` does not enforce it).
 
 **Survives**: the buckets (`prevent_destroy`, so `dr.sh destroy` targets the nodes only), the
 Talos snapshot on Hetzner (`talos/README.md` rebuilds it), git and its sops files, the
-break-glass age key (VeraCrypt plus Bitwarden), Cloudflare DNS, the tunnel token in the vault
+break-glass age key (VeraCrypt plus Bitwarden), Cloudflare DNS, the three tunnel tokens in the vault
 snapshot. **Dies**: nodes, etcd, every local-path PV (PGDATA, OpenBao raft, Teleport SQLite,
 ClickHouse, ArgoCD, monitoring), every pod. The `unorouter-clickhouse` objects survive but are
 unreadable without the pod's metadata: ClickHouse comes back from its backup.
@@ -245,7 +245,7 @@ unreadable without the pod's metadata: ClickHouse comes back from its backup.
      `tctl auth export --type=db-client` (own client CA first, `ca.key` stays SEC1), then the
      agent identity: scale `teleport-app-access` to 0, delete `teleport-app-access-0-state`,
      scale to 1.
-   - `rollout restart` dex and cloudflared after any hostname change; both read config at boot.
+   - `rollout restart` dex and the three cloudflared Deployments after any hostname change; they read config at boot.
    - The edge rule "machine surface ... own nodes" lists the node public addresses
      (`infra/cloudflare/unorouter.com/rules*.sops.yaml`); new nodes sit in a datacenter ASN the
      challenge rule targets, so in-cluster probes fail until the set is updated and applied.

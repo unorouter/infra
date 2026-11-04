@@ -5,7 +5,7 @@ nbg1, cx43) on their own WireGuard mesh, no provider network, no SSH; Cilium wit
 ArgoCD app-of-apps, CloudNativePG with PITR to Hetzner Object Storage, ClickHouse for the gateway
 logs, OpenBao, ESO, cloudflared, kube-prometheus-stack, Loki, Vector, Tetragon.
 
-Everything enters through the Cloudflare tunnel. Two firewalls in series allow Tailscale, the
+Everything enters through three Cloudflare tunnels (site, api, ops; see docs/operations.md). Two firewalls in series allow Tailscale, the
 WireGuard mesh and ICMP, nothing else: Hetzner's in front of the NIC and Talos's own on the
 node (`talos/patches/firewall.yaml`), which alone protects a node outside Hetzner. Every daily action is a named, expiring Teleport session;
 nothing standing lives on a laptop.

@@ -2,9 +2,24 @@
 
 ## DNS
 
-`*.unorouter.com` CNAME to the tunnel covers every host. New hostname: a `hostname:` rule in
-[cloudflared.yaml](../infra/cloudflared/cloudflared.yaml), push, `kubectl -n cloudflared rollout
-restart deploy/cloudflared` (config read at startup).
+Three tunnels, one Deployment each in `cloudflared`, so a flood on one group cannot starve
+another (replicas of one tunnel serve every hostname, with no steering):
+
+| Tunnel | Deployment | Hosts | Manifest |
+|---|---|---|---|
+| `unorouter-talos` | `cloudflared` (3) | apex, www, status, cards, mcp, bot, anything else | [cloudflared.yaml](../infra/cloudflared/cloudflared.yaml) |
+| `unorouter-api` | `cloudflared-api` (3) | api | [cloudflared-api.yaml](../infra/cloudflared/cloudflared-api.yaml) |
+| `unorouter-ops` | `cloudflared-ops` (2) | teleport, argocd, openbao, grafana, dex | [cloudflared-ops.yaml](../infra/cloudflared/cloudflared-ops.yaml) |
+
+The `*.unorouter.com` wildcard and the apex CNAME to `unorouter-talos`; every host on another
+tunnel has its own proxied CNAME to `<tunnel id>.cfargotunnel.com`, which overrides the wildcard.
+Moving a host: add its `hostname:` rule to the target tunnel's ConfigMap and let it roll out, set
+the CNAME (zone token `secret/cloudflare-edge` field `token`), then drop the rule from the old
+tunnel. Deleting the specific record sends a host back to the wildcard tunnel. Tunnel tokens are
+`secret/cloudflared` fields `token`, `token_api`, `token_ops`; creating a tunnel needs the account
+token (field `account_token`). Config is read at startup: `kubectl -n cloudflared rollout restart
+deploy/<name>` after a ConfigMap change. Teleport rides the ops tunnel, so keep
+`kubeconfig.breakglass` at hand when touching it.
 
 ## tofu
 

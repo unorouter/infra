@@ -22,7 +22,6 @@ spec:
     matchLabels: { app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: proxy }
   ingress:
     - fromEndpoints:
-        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
         - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared-ops }
         - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
         - matchLabels: { io.kubernetes.pod.namespace: monitoring, app: blackbox-exporter }
