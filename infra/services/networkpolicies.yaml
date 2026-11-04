@@ -45,6 +45,12 @@ spec:
       toPorts:
         - ports: [{ port: "6379", protocol: TCP }]
     - toEndpoints:
+        - matchLabels: { app: newapi-redis-ha }
+      toPorts:
+        - ports:
+            - { port: "6379", protocol: TCP }
+            - { port: "26379", protocol: TCP }
+    - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: databases, cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
       toPorts:
         - ports: [{ port: "5432", protocol: TCP }]
@@ -206,3 +212,29 @@ spec:
     - fromEntities: [host]
       toPorts:
         - ports: [{ port: "6379", protocol: TCP }]
+---
+# Redis with Sentinel. In from the gateway (data and Sentinel lookups) and from its own pods
+# (replication, Sentinel gossip); out only to its own pods. Probes are exec, so no host rule.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: newapi-redis-ha
+  namespace: services
+spec:
+  endpointSelector:
+    matchLabels: { app: newapi-redis-ha }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app: new-api }
+        - matchLabels: { app: newapi-redis-ha }
+      toPorts:
+        - ports:
+            - { port: "6379", protocol: TCP }
+            - { port: "26379", protocol: TCP }
+  egress:
+    - toEndpoints:
+        - matchLabels: { app: newapi-redis-ha }
+      toPorts:
+        - ports:
+            - { port: "6379", protocol: TCP }
+            - { port: "26379", protocol: TCP }
