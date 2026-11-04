@@ -1,8 +1,12 @@
 # Monitoring and alerting
 
-kube-prometheus-stack, Loki and blackbox run on node12 (`nodeSelector` on the label
-`unorouter.com/monitoring`, local-path PVCs; a PVC pinned to a dead node stays Pending, delete
-PVC and PV). `infra/monitoring/extras/` is applied recursively: `alerting/` (Alertmanager
+Grafana and Loki run on node12 (`nodeSelector` on the label `unorouter.com/monitoring`,
+local-path PVCs; a PVC pinned to a dead node stays Pending, delete PVC and PV). So that one node
+outage neither blinds the scrape nor stops pages (node12 was cut off for 8 minutes on
+2026-11-04): Prometheus runs two independent replicas (node12, node13, each with its own PVC;
+Alertmanager dedupes), Alertmanager three gossiping replicas (one per node, port 9094),
+ntfy-bridge and blackbox two each on different nodes, and kube-state-metrics one replica kept
+off the Prometheus nodes that leaves a lost node after 30 s. `infra/monitoring/extras/` is applied recursively: `alerting/` (Alertmanager
 routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external APIs and SQL),
 `scrape/` (targets, blackbox, the CNPG metric queries), `grafana/` (dashboards, datasource).
 
@@ -56,6 +60,23 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
 - **Responders** are Alertmanager webhook receivers, one Deployment each: `edge-mode` flips the
   Cloudflare zone into attack mode on `CloudflaredStreamFlood` and back 30 min after resolve.
   Detect in a rule, route in Alertmanager, act in a responder; never a log tailer.
+- **Dead man's switches**: Watchdog fires only while its Prometheus scrapes at least two of the
+  three node exporters (`alerting/rules-quorum.yaml`, recording rule `unorouter:scrape_quorum`).
+  Alertmanager sends it two ways. Every 5 minutes through ntfy-bridge to healthchecks.io, which
+  emails after its grace period (withheld while ntfy fails or a silence is active). Every minute
+  straight to netcup over the tailnet (`http://<netcup tailnet ip>:19532/watchdog`, Tailscale
+  grant node11..13 to tag:ops on 19531 and 19532): `am-heartbeat serve` (systemd
+  `am-heartbeat.service`, user `am-heartbeat`) records it, and `am-heartbeat-check.timer` pages
+  ntfy (urgent) and Discord after 5 minutes without one, again hourly, and posts once when it is
+  back. Script `/usr/local/bin/am-heartbeat`, ntfy topic and Discord webhook in
+  `/etc/am-heartbeat.env` (root, 600, copied from the `ntfy-bridge` Secret: update it when either
+  rotates), state in `/var/lib/am-heartbeat`. Nothing in the cluster is on that paging path, so
+  it covers the cluster's own uplink, every Alertmanager and both Prometheus being down.
+- **Scrape quorum guard**: alerts that only mean "this Prometheus cannot reach it" (`up == 0`,
+  `absent()` of a kube-state-metrics series, blackbox probes, etcd member count, Keeper leader)
+  end with `and on() unorouter:scrape_quorum`, so a replica that lost its node's uplink stays
+  quiet while the other one, which still sees the majority, reports what is really down. Add it
+  to any new alert of that kind.
 - **Routing is drop-by-default**: root receiver `null`; critical and warning reach Discord
   through `alerting/ntfy-bridge.yaml` (severity-coloured embeds, one log line per delivery),
   critical also pages the phone via ntfy. Test with `amtool alert add` in the alertmanager pod.
