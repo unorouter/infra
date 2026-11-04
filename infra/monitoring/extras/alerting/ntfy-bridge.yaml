@@ -280,7 +280,8 @@ metadata:
   name: ntfy-bridge
   namespace: monitoring
 spec:
-  replicas: 1
+  # every page passes through here, so a lost node must not take the only bridge
+  replicas: 2
   selector:
     matchLabels: { app: ntfy-bridge }
   template:
@@ -289,6 +290,11 @@ spec:
       # node reads server.mjs once at start: bump with every ConfigMap change so ArgoCD rolls the pod
       annotations: { config-rev: "5" }
     spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: { matchLabels: { app: ntfy-bridge } }
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: bridge
           image: node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402

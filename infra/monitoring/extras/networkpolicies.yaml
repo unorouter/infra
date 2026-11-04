@@ -140,12 +140,24 @@ spec:
         - ports:
             - { port: "9093", protocol: TCP }
             - { port: "8080", protocol: TCP }
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports:
+            - { port: "9094", protocol: TCP }
+            - { port: "9094", protocol: UDP }
   egress:
     - toEndpoints:
         - matchLabels: { app: ntfy-bridge }
         - matchLabels: { app: edge-mode }
       toPorts:
         - ports: [{ port: "8080", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: alertmanager }
+      toPorts:
+        - ports:
+            - { port: "9094", protocol: TCP }
+            - { port: "9094", protocol: UDP }
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]

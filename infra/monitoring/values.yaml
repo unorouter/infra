@@ -1,15 +1,17 @@
-# kube-prometheus-stack. Whole stack is PINNED to the node labelled unorouter.com/monitoring
-# (one node carries it): local-path PVCs bind to one node forever, so pinning is explicit
-# rather than accidental. Moving it = label the new node, delete the Prometheus, Grafana and
-# Alertmanager PVCs and lose history (no prod impact); see the DR runbook.
+# kube-prometheus-stack. local-path PVCs bind a pod to one node forever, so anything with a
+# volume and only one replica stays where its volume is. Grafana and Loki stay pinned to the
+# node labelled unorouter.com/monitoring; Alertmanager and Prometheus run one replica per node
+# so a single node outage neither blinds the scrape nor stops pages (2026-11-04: node12 was cut
+# off for 8 minutes and every page waited for it).
 
 nameOverride: kps
 fullnameOverride: kps
 
 alertmanager:
   alertmanagerSpec:
-    nodeSelector:
-      unorouter.com/monitoring: "true"
+    # clustered by gossip on 9094, so a page goes out once from whichever replica is reachable
+    replicas: 3
+    podAntiAffinity: hard
     resources:
       requests: { cpu: 20m, memory: 64Mi }
       limits: { cpu: 100m, memory: 128Mi }
