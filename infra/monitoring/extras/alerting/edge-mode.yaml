@@ -65,6 +65,7 @@ data:
                               'and http.request.version eq "HTTP/2" '
                               'and not cf.client.bot '
                               'and not http.request.uri.path in {"/robots.txt" "/sitemap.xml" "/favicon.ico" "/llms.txt"} '
+                              'and not starts_with(http.request.uri.path, "/api/") '
                               'and not starts_with(http.request.uri.path, "/_next/") '
                               'and not starts_with(http.request.uri.path, "/cdn-cgi/") '
                               'and not starts_with(http.request.uri.path, "/images/") '
