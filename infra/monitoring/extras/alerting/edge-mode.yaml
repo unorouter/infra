@@ -2,7 +2,7 @@
 # the Cloudflare zone into attack mode, resolved switches back after a hold, and every switch is
 # posted to Discord. It edits a few live rules in place, found by description, so the encrypted
 # rule files in infra/cloudflare stay the source of truth; apply.sh attack|normal does the same
-# by hand except the HTTP/2 block, which only exists here. Thresholds come from the same OpenBao
+# by hand except the HTTP/2 challenge, which only exists here. Thresholds come from the same OpenBao
 # secret as the token, not from this file.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
@@ -56,10 +56,11 @@ data:
                      'and not http.request.uri.path in {"/" "/robots.txt" "/sitemap.xml" "/favicon.ico"})')
     UA_RULE = {"action": "set_config", "enabled": True, "description": "ATTACK MODE: cookie-less browser traffic",
                "expression": BROWSER_HOSTS, "action_parameters": {"security_level": "under_attack"}}
-    # The 2026-11-04 botnets solved challenges and carried clearance, but spoke only HTTP/2,
-    # while real Chrome moves to HTTP/3 after its first visit. Sessions skip it (placed after their skip).
-    H2_RULE = {"ref": "edge_mode_attack_h2", "action": "block", "enabled": True,
-               "description": "ATTACK MODE: block anonymous HTTP/2 page requests on browser hosts",
+    # The 2026-11-04 botnets spoke only HTTP/2, while real Chrome moves to HTTP/3 after its first
+    # visit. A challenge, not a block: a first visit is HTTP/2 too, and blocking it turned away about
+    # 8.8k real requests an hour. Sessions skip it (placed after their skip).
+    H2_RULE = {"ref": "edge_mode_attack_h2", "action": "managed_challenge", "enabled": True,
+               "description": "ATTACK MODE: challenge anonymous HTTP/2 page requests on browser hosts",
                "expression": ('(http.host in {"unorouter.com" "www.unorouter.com" "status.unorouter.com"} '
                               'and http.request.version eq "HTTP/2" '
                               'and not starts_with(http.request.uri.path, "/_next/") '
@@ -113,7 +114,7 @@ data:
             if r["description"].startswith(COOKIELESS): r["enabled"] = (mode == "attack")
         if mode == "attack":
             at = next((i for i, r in enumerate(custom) if r["description"].startswith(SESSION_SKIP)), None)
-            if at is None: log(f"no '{SESSION_SKIP}' rule, HTTP/2 block left out")
+            if at is None: log(f"no '{SESSION_SKIP}' rule, HTTP/2 challenge left out")
             else: custom.insert(at + 1, H2_RULE)
         cf("PUT", "/http_request_firewall_custom/entrypoint", {"rules": custom})
         rl = [strip(r) for r in cf("GET", "/http_ratelimit/entrypoint")["rules"]]
@@ -142,7 +143,7 @@ data:
                 log(f"FAILED {mode}: {e}")
                 discord(f"edge-mode FAILED to switch to {mode} ({why}): {e}"[:256], 0xE74C3C); return
         if mode == "attack":
-            discord(f"Edge ATTACK MODE on ({why}): anonymous HTTP/2 pages blocked, burst guard {RATE['attack']}/min, "
+            discord(f"Edge ATTACK MODE on ({why}): anonymous HTTP/2 pages challenged, burst guard {RATE['attack']}/min, "
                     f"cookie-less visitors challenged. Back to normal {HOLD // 60} min after the alerts resolve."[:256], 0xE74C3C)
         else:
             discord(f"Edge back to normal ({why}): burst guard {RATE['normal']}/min"[:256], 0x2ECC71)
@@ -193,7 +194,7 @@ spec:
   template:
     metadata:
       labels: { app: edge-mode }
-      annotations: { config-rev: "2" }
+      annotations: { config-rev: "3" }
     spec:
       affinity:
         nodeAffinity:
