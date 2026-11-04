@@ -26,6 +26,10 @@ spec:
     # Namespaced storage for workload state (e.g. new-api-sync's verdict cache).
     - { group: "", kind: PersistentVolumeClaim }
     - { group: apps, kind: Deployment }
+    # new-api's Redis with Sentinel needs stable pod names. A PodDisruptionBudget only slows
+    # voluntary evictions inside the destinations above.
+    - { group: apps, kind: StatefulSet }
+    - { group: policy, kind: PodDisruptionBudget }
     - { group: autoscaling, kind: HorizontalPodAutoscaler }
     - { group: batch, kind: CronJob }
     - { group: external-secrets.io, kind: ExternalSecret }
