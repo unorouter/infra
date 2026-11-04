@@ -228,8 +228,19 @@ prometheusOperator:
     limits: { cpu: 200m, memory: 256Mi }
 
 kube-state-metrics:
-  nodeSelector:
-    unorouter.com/monitoring: "true"
+  # One replica only: a second would double every kube_* series. It keeps off the Prometheus
+  # nodes and leaves a lost node after 30s instead of the default 5 minutes, since the
+  # absent(kube_*) alerts read its silence as a dead workload.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+            topologyKey: kubernetes.io/hostname
+  tolerations:
+    - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+    - { key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
   resources:
     requests: { cpu: 20m, memory: 64Mi }
     limits: { cpu: 200m, memory: 192Mi }

@@ -8,15 +8,25 @@ metadata:
   namespace: monitoring
   labels: { app: blackbox-exporter }
 spec:
-  replicas: 1
+  # two on different nodes behind the Service: a probe from a node that lost its uplink
+  # alternates with a good one instead of failing for the whole alert window
+  replicas: 2
   selector:
     matchLabels: { app: blackbox-exporter }
   template:
     metadata:
       labels: { app: blackbox-exporter }
     spec:
-      nodeSelector:
-        unorouter.com/monitoring: "true"
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: { matchLabels: { app: blackbox-exporter } }
+              topologyKey: kubernetes.io/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: blackbox-exporter
           image: quay.io/prometheus/blackbox-exporter:v0.28.0@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc
