@@ -117,7 +117,11 @@ data:
         if mode == "attack":
             at = next((i for i, r in enumerate(custom) if r["description"].startswith(SESSION_SKIP)), None)
             if at is None: log(f"no '{SESSION_SKIP}' rule, HTTP/2 challenge left out")
-            else: custom.insert(at + 1, H2_RULE)
+            else:
+                # A challenge ends evaluation for a bot holding clearance, so it goes after the blocks that follow the skip.
+                at += 1
+                while at < len(custom) and custom[at].get("action") == "block": at += 1
+                custom.insert(at, H2_RULE)
         cf("PUT", "/http_request_firewall_custom/entrypoint", {"rules": custom})
         rl = [strip(r) for r in cf("GET", "/http_ratelimit/entrypoint")["rules"]]
         for r in rl:
