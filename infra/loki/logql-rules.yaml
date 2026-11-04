@@ -445,6 +445,8 @@ data:
                     | actor!~"system:.*"
                     | actor!="0-don"
                     | (actor!="talos:admin" or objectRef_name!="talos-bootstrap-manifests-inventory")
+                    # machined re-labels its own Node over the tailnet when the node mesh is down
+                    | (actor!="admin" or userAgent!~"Talos/.*" or verb!~"get|update" or objectRef_resource!="nodes" or src!=ip("100.64.0.0/10"))
                     | objectRef_subresource!~"exec|attach|portforward"
                     | (objectRef_resource!="secrets" or objectRef_namespace!~"|services|openbao|databases")
                     | objectRef_resource!~"externalsecrets|secretstores|clustersecretstores|roles|rolebindings|clusterroles|clusterrolebindings"
@@ -573,6 +575,8 @@ data:
                     # node's tailnet address: discovery, the kube-system namespace and its own
                     # inventory configmap. Anything else under talos:admin still pages.
                     | (actor!="talos:admin" or verb!~"get|update" or (requestURI!~"/apis?" and (objectRef_resource!~"configmaps|namespaces" or objectRef_name!~"talos-bootstrap-manifests-inventory|kube-system")))
+                    # machined re-labels its own Node over the tailnet when the node mesh is down
+                    | (actor!="admin" or userAgent!~"Talos/.*" or verb!~"get|update" or objectRef_resource!="nodes" or src!=ip("100.64.0.0/10"))
                   [5m]
                 )
               ) > 0
