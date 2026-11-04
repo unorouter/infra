@@ -131,6 +131,10 @@ grafana:
           enabled: false
 
 prometheus:
+  # the replicas hold different history: pin each
+  # client to one so a Grafana panel does not alternate between them
+  service:
+    sessionAffinity: ClientIP
   prometheusSpec:
     # the TSDB is reproducible-by-waiting and grows to the 16GB retention cap; backing it
     # up nightly cost ~9GB in the Velero repo for data nobody would restore. Grafana
@@ -138,10 +142,20 @@ prometheus:
     podMetadata:
       annotations:
         backup.velero.io/backup-volumes-excludes: prometheus-kps-prometheus-db
-    # The monitoring node. Prometheus is ~1Gi and ~0.2 core; on 2026-09-02 a 4-core node
-    # hosting it next to the pg primary saturated within 90s, so it stays off the busiest node.
-    nodeSelector:
-      unorouter.com/monitoring: "true"
+    # Two independent scrapers, each with its own TSDB; Alertmanager dedupes their alerts
+    # (prometheus_replica is dropped before sending). Prometheus is ~0.9Gi (1.4Gi peak) and
+    # ~0.1 core. replica 0 lives on node12 with its volume; replica 1 goes to node13, the node
+    # with the most memory left, because on 2026-09-02 a 4-core node hosting it next to the pg
+    # primary (node11 today) saturated within 90s. A local-path volume binds on first schedule,
+    # so this choice holds for the life of the PVC.
+    replicas: 2
+    podAntiAffinity: hard
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - { key: kubernetes.io/hostname, operator: In, values: [unorouter-node12, unorouter-node13] }
     retention: 15d
     # 10GB not 16GB: node1 has 34G free and the 16GB cap would park the node at 72% disk,
     # brushing the 75% NodeDiskFillingUp threshold with normal image churn on top.
