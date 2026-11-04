@@ -13,8 +13,9 @@ spec:
       rules:
         - alert: LokiDown
           expr: >-
-            kube_statefulset_status_replicas_available{namespace="monitoring", statefulset="loki"} < 1
-              or absent(kube_statefulset_status_replicas_available{namespace="monitoring", statefulset="loki"})
+            (kube_statefulset_status_replicas_available{namespace="monitoring", statefulset="loki"} < 1
+              or absent(kube_statefulset_status_replicas_available{namespace="monitoring", statefulset="loki"}))
+              and on() unorouter:scrape_quorum
           for: 5m
           labels: { severity: critical }
           annotations:

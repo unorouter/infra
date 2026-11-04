@@ -1,0 +1,24 @@
+# A Prometheus that can scrape fewer than two of the three node exporters is the one cut off,
+# not the cluster: on 2026-11-04 node12 lost its uplink for 8 minutes and its Prometheus raised
+# EtcdMembersDown, LokiDown, S3GatewayDown, ClickHouseKeeperNoLeader, OpenBaoSealedOrDown and
+# PublicEndpointDown for targets that were fine. Alerts that only mean "I cannot scrape it"
+# end with `and on() unorouter:scrape_quorum`, so they fire from a replica that still sees the
+# majority. Watchdog takes the same guard: with no replica holding the majority the heartbeat
+# stops and the dead man's switch on netcup pages instead.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: unorouter-scrape-quorum
+  namespace: monitoring
+spec:
+  groups:
+    - name: unorouter.quorum
+      rules:
+        - record: unorouter:scrape_quorum
+          expr: count(up{job="node-exporter"} == 1) >= 2
+        # replaces the chart's Watchdog (defaultRules.disabled.Watchdog in values.yaml)
+        - alert: Watchdog
+          expr: vector(1) and on() unorouter:scrape_quorum
+          labels: { severity: none }
+          annotations:
+            summary: "Always firing while this Prometheus sees the cluster: the heartbeat behind both dead man's switches"

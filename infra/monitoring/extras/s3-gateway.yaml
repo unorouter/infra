@@ -385,7 +385,7 @@ spec:
     - name: unorouter.s3gateway
       rules:
         - alert: S3GatewayDown
-          expr: kube_statefulset_status_replicas_available{namespace="s3-gateway",statefulset="s3-gateway"} < 1 or absent(kube_statefulset_status_replicas_available{namespace="s3-gateway",statefulset="s3-gateway"})
+          expr: (kube_statefulset_status_replicas_available{namespace="s3-gateway",statefulset="s3-gateway"} < 1 or absent(kube_statefulset_status_replicas_available{namespace="s3-gateway",statefulset="s3-gateway"})) and on() unorouter:scrape_quorum
           for: 5m
           labels: {severity: critical}
           annotations:

@@ -332,6 +332,8 @@ defaultRules:
   # chart defaults that only ever described normal life on 2 to 4 vCPU nodes or a rollout in
   # progress (30-day audit 2026-09-04: these were 1,500 of ~2,000 firing episodes, zero acted on)
   disabled:
+    # replaced by the quorum gated Watchdog in extras/alerting/rules-quorum.yaml
+    Watchdog: true
     NodeSystemSaturation: true
     NodeCPUHighUsage: true
     NodeMemoryMajorPagesFaults: true
