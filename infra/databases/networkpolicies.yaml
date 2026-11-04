@@ -145,6 +145,10 @@ spec:
     - toEntities: [kube-apiserver, host]
       toPorts:
         - ports: [{ port: "6443", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
+      toPorts:
+        - ports: [{ port: "8443", protocol: TCP }]
 ---
 # CNPG Jobs (initdb, full-recovery, join) carry cnpg.io/jobRole instead of podRole and sat
 # under default deny until 2026-09-09: a DR recovery needs the API server, DNS and the

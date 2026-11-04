@@ -3,7 +3,42 @@
 # down). Its own cluster, not a database in newapi-pg: the backend needs wal2json logical
 # decoding and a REPLICATION role, and Teleport must not wait on a newapi-pg restore.
 # Change feed slots are temporary, so a failover only makes auth reconnect and recreate one.
-# No barman archive yet: a lost cluster means a fresh Teleport CA and everyone runs tsh login.
+# Archived like bot-pg (barman through the s3-gateway, serverName teleport-pg-v1); a DR create
+# recovers from v1 and archives to v2.
+# Hetzner Object Storage through the in-cluster s3-gateway (client side encryption). The bucket
+# is Object Locked: no retentionPolicy, its lifecycle expires objects.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: teleport-pg-hz
+  namespace: databases
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  configuration:
+    destinationPath: s3://unorouter-backups/
+    endpointURL: https://s3.unorouter.com
+    s3Credentials:
+      accessKeyId:
+        name: s3gw
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: s3gw
+        key: ACCESS_SECRET_KEY
+      region:
+        name: s3gw
+        key: REGION
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
+  instanceSidecarConfiguration:
+    env:
+      - name: AWS_REQUEST_CHECKSUM_CALCULATION
+        value: when_required
+      - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+        value: when_required
+---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -15,6 +50,11 @@ spec:
   inheritedMetadata:
     annotations:
       backup.velero.io/backup-volumes-excludes: pgdata,scratch-data,shm
+  env:
+    - name: AWS_REQUEST_CHECKSUM_CALCULATION
+      value: when_required
+    - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+      value: when_required
   imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm@sha256:045f843b885679b7f1265c2961f3fa66c2d374e9ebe1dfcc4aa7fb3b8e58bd1f
   instances: 2
   affinity:
@@ -57,6 +97,31 @@ spec:
         inherit: true
         connectionLimit: -1
         inRoles: []
+  # webhook defaults written out: plugins is an atomic list, ArgoCD would stay OutOfSync
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      enabled: true
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: teleport-pg-hz
+        serverName: teleport-pg-v1
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+  name: teleport-pg-daily
+  namespace: databases
+spec:
+  schedule: "0 45 3 * * *" # 03:45 UTC daily, offset from the other clusters
+  backupOwnerReference: self
+  immediate: true
+  cluster:
+    name: teleport-pg
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
