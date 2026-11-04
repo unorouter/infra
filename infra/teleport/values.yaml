@@ -1,9 +1,10 @@
 # teleport-cluster Helm chart (CE, self-hosted). Access plane: kubectl + Postgres behind
 # GitHub SSO, short-lived certs, session recording + audit.
 #
-# DR posture: re-login acceptable at 1-2 users -> standalone SQLite on a PVC. On full node
-# loss the PVC dies -> fresh CA -> everyone `tsh login` again. Session recordings survive in
-# S3. Avoids the Teleport-needs-Postgres-while-Postgres-restores cycle.
+# Cluster state and audit events live in the dedicated CNPG cluster databases/teleport-pg (not
+# newapi-pg, so Teleport never waits on a newapi-pg restore), which lets two auth pods run on
+# different nodes. Losing teleport-pg entirely means a fresh CA and everyone runs `tsh login`
+# again. Session recordings survive in S3.
 chartMode: standalone
 clusterName: teleport.unorouter.com
 
@@ -21,19 +22,24 @@ proxyListenerMode: multiplex
 # requests only (7 day median), no limits; the chart applies this to auth and proxy
 resources: { requests: { cpu: 20m, memory: 128Mi } }
 
+# Auth kept SQLite on the PVC teleport (node11) until 2026-11-05. That PVC is not in git and
+# holds the state as of the move to teleport-pg (plus backend.premigration-20261105): it is the
+# rollback, so the chart must never own it.
 persistence:
-  enabled: true
-  existingClaimName: teleport   # local-type PV (Velero can read it), restored 2026-09-16, not in git: never let the chart own it again
+  enabled: false
 
-# session recordings -> S3 (node-independent, survives node loss). Audit events stay on SQLite.
 auth:
-  # Velero reads the auth backend volume (users, roles, tokens, the recording index); it is the
-  # one Teleport state worth restoring.
-  annotations:
-    pod: {backup.velero.io/backup-volumes: data}
+  highAvailability:
+    replicaCount: 2
+    requireAntiAffinity: true
+    podDisruptionBudget: { enabled: true, minAvailable: 1 }
   teleportConfig:
     teleport:
       storage:
+        # PGPASSWORD comes from the environment; the change feed needs wal2json and REPLICATION,
+        # both set on teleport-pg
+        type: postgresql
+        conn_string: "postgresql://teleport@teleport-pg-rw.databases.svc.cluster.local:5432/teleport_backend?sslmode=verify-full&sslrootcert=/etc/teleport-pg/ca.crt"
         # Hetzner Object Storage through the in-cluster s3-gateway (s3.unorouter.com, resolved
         # by CoreDNS, Let's Encrypt certificate), which encrypts client side (rclone crypt) on
         # the way to the Object Locked logs bucket. disablesse stays: Teleport would otherwise ask for SSE-KMS, which Hetzner
@@ -43,10 +49,12 @@ auth:
         # serve ListObjectVersions (501). Recordings are evidence, not a replay feature: download
         # the tar through the crypt drill and run `tsh play --format=json <file>` (docs/dr.md).
         audit_sessions_uri: "s3://unorouter-logs/teleport-recordings?endpoint=s3.unorouter.com&region=fsn1&disablesse=true"
-        # events stay in the default dir backend (first entry, what the web UI queries) and are
-        # mirrored to stdout so the audit watcher in monitoring can post failed logins, with
-        # the GitHub username and source address, to Discord within five minutes.
-        audit_events_uri: ["file:///var/lib/teleport/log", "stdout://"]
+        # The first entry is what the web UI queries (events before 2026-11-05 stay in the file
+        # log on the old PVC). The stdout mirror lets the audit watcher in monitoring post failed
+        # logins, with the GitHub username and source address, to Discord within five minutes.
+        audit_events_uri:
+          - "postgresql://teleport@teleport-pg-rw.databases.svc.cluster.local:5432/teleport_audit?sslmode=verify-full&sslrootcert=/etc/teleport-pg/ca.crt"
+          - "stdout://"
       # A refused GitHub login (an account in none of the org's teams) carries no user in its
       # audit event; the only record of the account is the debug line "Retrieved teams for
       # GitHub user" (github_user), logged before the team check. Vector drops every other
@@ -61,12 +69,20 @@ auth:
         type: github
         connector_name: github
         local_auth: false
-  # S3 creds for session-recording uploads (ESO secret teleport-s3)
+  # S3 creds for session-recording uploads (ESO secret teleport-s3); teleport-pg password and
+  # server CA (ESO secret teleport-pg, infra/teleport/resources/teleport-pg-secret.yaml)
   extraEnv:
     - name: AWS_ACCESS_KEY_ID
       valueFrom: { secretKeyRef: { name: teleport-s3, key: AWS_ACCESS_KEY_ID } }
     - name: AWS_SECRET_ACCESS_KEY
       valueFrom: { secretKeyRef: { name: teleport-s3, key: AWS_SECRET_ACCESS_KEY } }
+    - name: PGPASSWORD
+      valueFrom: { secretKeyRef: { name: teleport-pg, key: password } }
+  extraVolumes:
+    - name: teleport-pg-ca
+      secret: { secretName: teleport-pg, items: [{ key: ca.crt, path: ca.crt }] }
+  extraVolumeMounts:
+    - { name: teleport-pg-ca, mountPath: /etc/teleport-pg, readOnly: true }
 
 # expose the proxy on the host network (needs the public IP for ACME + ALPN passthrough)
 service:
