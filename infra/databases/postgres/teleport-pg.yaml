@@ -1,0 +1,103 @@
+# Teleport's cluster state and audit events, so auth runs two replicas on different nodes
+# (on 2026-11-04 the single auth pod sat on node11's SQLite volume and its OOM took all access
+# down). Its own cluster, not a database in newapi-pg: the backend needs wal2json logical
+# decoding and a REPLICATION role, and Teleport must not wait on a newapi-pg restore.
+# Change feed slots are temporary, so a failover only makes auth reconnect and recreate one.
+# No barman archive yet: a lost cluster means a fresh Teleport CA and everyone runs tsh login.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: teleport-pg
+  namespace: databases
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  inheritedMetadata:
+    annotations:
+      backup.velero.io/backup-volumes-excludes: pgdata,scratch-data,shm
+  imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm@sha256:045f843b885679b7f1265c2961f3fa66c2d374e9ebe1dfcc4aa7fb3b8e58bd1f
+  instances: 2
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests: { cpu: 50m, memory: 256Mi }
+  storage:
+    size: 2Gi
+    storageClass: local-path
+  probes:
+    liveness:
+      isolationCheck:
+        enabled: true
+  postgresql:
+    parameters:
+      wal_level: logical
+      # PostgreSQL 18.6 only decodes through plugins on this list
+      output_plugin_libraries: "pgoutput, test_decoding, wal2json"
+      # a stalled change feed slot must not fill the volume
+      max_slot_wal_keep_size: 512MB
+      shared_buffers: 64MB
+    extensions:
+      - name: wal2json
+        image:
+          reference: ghcr.io/cloudnative-pg/wal2json:2.7-202610292025-18-bookworm@sha256:39d966ea8bc1266daa066bd24e27fadb28c5a86e8f42762bd4307ad133890e1a
+  bootstrap:
+    initdb:
+      database: teleport_backend
+      owner: teleport
+  # the initdb owner keeps the password CNPG generated (teleport-pg-app); this only adds
+  # REPLICATION, which the change feed needs
+  managed:
+    roles:
+      - name: teleport
+        ensure: present
+        login: true
+        replication: true
+        inherit: true
+        connectionLimit: -1
+        inRoles: []
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: teleport-pg-audit
+  namespace: databases
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  name: teleport_audit
+  owner: teleport
+  cluster:
+    name: teleport-pg
+  databaseReclaimPolicy: retain
+---
+# The External Secrets kubernetes provider in the teleport namespace mirrors the password and
+# the server CA certificate (verify-full) into the auth pods.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: read-teleport-pg
+  namespace: databases
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [teleport-pg-app, teleport-pg-ca]
+    verbs: [get, list, watch]
+  - apiGroups: [authorization.k8s.io]
+    resources: [selfsubjectrulesreviews]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eso-teleport-pg-reader
+  namespace: databases
+subjects:
+  - kind: ServiceAccount
+    name: eso-teleport-pg-reader
+    namespace: teleport
+roleRef:
+  kind: Role
+  name: read-teleport-pg
+  apiGroup: rbac.authorization.k8s.io

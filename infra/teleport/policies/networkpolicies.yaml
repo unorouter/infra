@@ -2,7 +2,7 @@
 # agent (reverse tunnel) and by in-cluster clients that resolve teleport.unorouter.com through
 # the CoreDNS rewrite (only the agent does that today); it talks to auth on 3025/3026 and to the
 # API server for kube access. Auth serves the proxy and the agent, talks to the API server, and
-# reaches the s3-gateway (session recordings) and GitHub on 443. Kubelet probes arrive as host on the diag port.
+# reaches the s3-gateway (session recordings), teleport-pg (state and audit) and GitHub on 443. Kubelet probes arrive as host on the diag port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -77,6 +77,11 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
       toPorts:
         - ports: [{ port: "8443", protocol: TCP }]
+    # cluster state and audit events
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, cnpg.io/cluster: teleport-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]

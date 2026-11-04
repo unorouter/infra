@@ -15,3 +15,4 @@ resources:
   - kube-debugger-rbac.yaml
   - newapi-db-admin-role.yaml
   - newapi-db-reader-role.yaml
+  - teleport-pg-secret.yaml

@@ -1,5 +1,5 @@
 # Pod isolation for the Postgres clusters. Default-deny for every pod here; each CNPG cluster
-# gets its own allow set so bot-pg and newapi-pg cannot even talk to each other. Ingress:
+# gets its own allow set so bot-pg, newapi-pg and teleport-pg cannot even talk to each other. Ingress:
 # 5432 from the application pods that own the database (plus Teleport database access for
 # newapi-pg), 8000 (instance manager) from the kubelet probes and the CNPG operator, 9187
 # from Prometheus, and the cluster's own instances on 5432 (replication) and 8000 (status).
@@ -108,6 +108,44 @@ spec:
       toPorts:
         - ports: [{ port: "8443", protocol: TCP }]
 ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: teleport-pg
+  namespace: databases
+spec:
+  endpointSelector:
+    matchLabels: { cnpg.io/cluster: teleport-pg, cnpg.io/podRole: instance }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: teleport, app.kubernetes.io/name: teleport-cluster, app.kubernetes.io/component: auth }
+        - matchLabels: { cnpg.io/cluster: teleport-pg, cnpg.io/podRole: instance }
+        - matchLabels: { cnpg.io/cluster: teleport-pg, cnpg.io/jobRole: join }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: cnpg-system, app.kubernetes.io/name: cloudnative-pg }
+        - matchLabels: { cnpg.io/cluster: teleport-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "9187", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { cnpg.io/cluster: teleport-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports:
+            - { port: "5432", protocol: TCP }
+            - { port: "8000", protocol: TCP }
+    - toEntities: [kube-apiserver, host]
+      toPorts:
+        - ports: [{ port: "6443", protocol: TCP }]
+---
 # CNPG Jobs (initdb, full-recovery, join) carry cnpg.io/jobRole instead of podRole and sat
 # under default deny until 2026-09-09: a DR recovery needs the API server, DNS and the
 # s3-gateway from the job pod, before any instance pod exists. Join jobs also need the
@@ -133,5 +171,6 @@ spec:
     - toEndpoints:
         - matchLabels: { cnpg.io/cluster: newapi-pg, cnpg.io/podRole: instance }
         - matchLabels: { cnpg.io/cluster: bot-pg, cnpg.io/podRole: instance }
+        - matchLabels: { cnpg.io/cluster: teleport-pg, cnpg.io/podRole: instance }
       toPorts:
         - ports: [{ port: "5432", protocol: TCP }]
