@@ -128,9 +128,11 @@ spec:
       priorityClassName: serving
       containers:
         - name: cloudflared
-          image: cloudflare/cloudflared:2026.10.3@sha256:faa8e0a1475f137c910be6025f43c8e4092fdd35461b31e19fd1390657a1ff39
+          # 2026.10.7 or later: 2026.10.3 (Go 1.27) capped http2 at 250 streams per connection
+          # (cloudflared #1777), and on 2026-11-04 a flood filled them until the edge closed every connection.
+          image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
           resources:
-            requests: { cpu: 10m, memory: 128Mi }
+            requests: { cpu: 250m, memory: 128Mi }
             limits: { memory: 2Gi }
           ports:
             - name: metrics
@@ -150,10 +152,19 @@ spec:
             - name: config
               mountPath: /etc/cloudflared
               readOnly: true
+          # /ready is 503 while every edge connection is down, which includes cloudflared's own
+          # reconnect backoff; killing the pod then restarts from zero (26 kills on 2026-11-04).
+          # Liveness waits 3 minutes, so only a process stuck without connections is replaced.
+          readinessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            periodSeconds: 10
+            failureThreshold: 3
           livenessProbe:
             httpGet: { path: /ready, port: 2000 }
-            initialDelaySeconds: 10
+            initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
       volumes:
         - name: config
           configMap: { name: cloudflared-config }
