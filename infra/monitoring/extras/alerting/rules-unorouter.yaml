@@ -398,11 +398,13 @@ spec:
           # WHILE the origin answered in 0.1s, so probe latency stayed flat and this fires.
           # When users simply cancel long generations, the origin is also slow (that is why
           # they cancelled), so the conjunct holds it silent.
+          # Per tunnel; the request floor keeps the quiet ops tunnel's websocket closes out.
           expr: |
             (
-              sum(rate(cloudflared_tunnel_request_errors[5m]))
-              / clamp_min(sum(rate(cloudflared_tunnel_total_requests[5m])), 0.01)
+              sum by (app) (rate(cloudflared_tunnel_request_errors[5m]))
+              / clamp_min(sum by (app) (rate(cloudflared_tunnel_total_requests[5m])), 0.01)
             ) > 0.25
+            and sum by (app) (rate(cloudflared_tunnel_total_requests[5m])) > 1
             and on()
             (
               max(probe_duration_seconds{instance="https://api.unorouter.com/api/status"}) < 2
@@ -412,7 +414,7 @@ spec:
           # and the origin looks healthy while it fires -- nothing else pages for it.
           labels: { page: "true", severity: critical }
           annotations:
-            summary: "cloudflared erroring {{ $value | humanizePercentage }} of requests while the origin is fast"
+            summary: "{{ $labels.app }} erroring {{ $value | humanizePercentage }} of requests while the origin is fast"
             description: "The edge is shedding requests while in-cluster probes still answer under 2s -- the 2026-08-12 signature, where the origin looked healthy and only pod logs showed it. Ordinary client cancellation of long LLM streams does NOT reach here, because that comes with a slow origin."
         - alert: TLSCertExpiringSoon
           expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
@@ -421,23 +423,40 @@ spec:
           annotations:
             summary: "Certificate for {{ $labels.instance }} expires in <14d"
         - alert: CloudflaredDegraded
-          expr: kube_deployment_status_replicas_available{namespace="cloudflared"} < 3
+          expr: |
+            kube_deployment_status_replicas_available{namespace="cloudflared",deployment=~"cloudflared.*"}
+            < kube_deployment_spec_replicas{namespace="cloudflared",deployment=~"cloudflared.*"}
           for: 10m
           labels: { severity: warning }
           annotations:
-            summary: "cloudflared HA degraded ({{ $value }}/3 up)"
-            description: "Tunnel is the ONLY ingress path for app traffic."
+            summary: "{{ $labels.deployment }} HA degraded ({{ $value }} replicas up)"
+            description: "Each tunnel is the ONLY ingress path for its hosts."
+        # Every replica holds 4 edge connections. On 2026-11-04 the edge closed them during a flood
+        # while the stream count stayed under its threshold, so connections are watched directly.
+        # The `or` side counts a tunnel with no scraped replica as 0.
+        - alert: CloudflaredEdgeConnectionsLow
+          expr: |
+            (
+              sum by (app) (cloudflared_tunnel_ha_connections)
+              or on (app) 0 * label_replace(kube_deployment_spec_replicas{namespace="cloudflared",deployment=~"cloudflared.*"}, "app", "$1", "deployment", "(.*)")
+            )
+            < on (app) 2 * label_replace(kube_deployment_spec_replicas{namespace="cloudflared",deployment=~"cloudflared.*"}, "app", "$1", "deployment", "(.*)")
+          for: 2m
+          labels: { page: "true", severity: critical }
+          annotations:
+            summary: "{{ $labels.app }} holds {{ $value }} edge connections, under half of 4 per replica"
+            description: "The edge is dropping this tunnel's connections; its hosts answer 530/1033 or stall. Check cloudflared logs for 'connection with edge closed'."
         # Open streams are the leading signal of an L7 flood; memory alerts only arrive
         # after the tunnel is already down. Normal is a few hundred across all replicas.
         - alert: CloudflaredStreamFlood
-          expr: sum(cloudflared_tunnel_concurrent_requests_per_tunnel) > 1500
+          expr: sum by (app) (cloudflared_tunnel_concurrent_requests_per_tunnel) > 1500
           for: 1m
           labels: { page: "true", severity: critical }
           annotations:
-            summary: "{{ $value | humanize }} open streams to the tunnel (attack or origin stall)"
+            summary: "{{ $value | humanize }} open streams to {{ $labels.app }} (attack or origin stall)"
             description: "Check Cloudflare analytics for what reaches origin; cloudflared pays memory per open stream and dies first."
         - alert: CloudflaredStreamsPerReplicaHigh
-          expr: max by (pod) (cloudflared_tunnel_concurrent_requests_per_tunnel) > 1000
+          expr: max by (app, pod) (cloudflared_tunnel_concurrent_requests_per_tunnel) > 1000
           for: 2m
           labels: { severity: warning }
           annotations:
