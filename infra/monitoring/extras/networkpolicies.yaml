@@ -48,11 +48,12 @@ spec:
             - { port: "53", protocol: TCP }
             - { port: "9153", protocol: TCP }
     # In-namespace targets: alertmanager (alerts and scrape), grafana, kube-state-metrics,
-    # blackbox, the operator, and its own reloader.
+    # blackbox, the operator, its own reloader, and the other Prometheus replica.
     - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: monitoring }
       toPorts:
         - ports:
+            - { port: "9090", protocol: TCP }
             - { port: "9093", protocol: TCP }
             - { port: "8080", protocol: TCP }
             - { port: "8081", protocol: TCP }
