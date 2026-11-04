@@ -3,4 +3,6 @@ kind: Kustomization
 namespace: cloudflared
 resources:
   - cloudflared.yaml
+  - cloudflared-api.yaml
+  - cloudflared-ops.yaml
   - networkpolicies.yaml

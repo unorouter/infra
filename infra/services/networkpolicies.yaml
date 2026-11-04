@@ -26,6 +26,7 @@ spec:
   ingress:
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared-api }
         - matchLabels: { app: unorouter }
         - matchLabels: { app: unorouter-bot }
         - matchLabels: { app: new-api-sync }

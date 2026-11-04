@@ -1,0 +1,89 @@
+# api.unorouter.com on its own tunnel: replicas of one tunnel all serve every hostname, so a
+# flood on the site hosts used to starve the API too. Protocol and probes match cloudflared.yaml.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: cloudflared-api-token
+  namespace: cloudflared
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-platform
+    kind: ClusterSecretStore
+  target:
+    name: cloudflared-api-token
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef: { key: cloudflared, property: token_api }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-api-config
+  namespace: cloudflared
+data:
+  config.yaml: |
+    metrics: 0.0.0.0:2000
+    no-autoupdate: true
+    protocol: http2
+    ingress:
+      - hostname: api.unorouter.com
+        service: http://new-api.services.svc.cluster.local:3000
+      - service: http_status:404
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared-api
+  namespace: cloudflared
+spec:
+  replicas: 3
+  strategy:
+    rollingUpdate: { maxSurge: 0, maxUnavailable: 1 }
+  selector:
+    matchLabels: { app: cloudflared-api }
+  template:
+    metadata:
+      labels: { app: cloudflared-api, app.kubernetes.io/part-of: cloudflared }
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { app: cloudflared-api }
+              topologyKey: kubernetes.io/hostname
+      serviceAccountName: cloudflared
+      priorityClassName: serving
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
+          resources:
+            requests: { cpu: 250m, memory: 128Mi }
+            limits: { memory: 2Gi }
+          ports:
+            - name: metrics
+              containerPort: 2000
+          args: [tunnel, --config, /etc/cloudflared/config.yaml, --no-autoupdate, run]
+          env:
+            - name: GOMEMLIMIT
+              value: 1700MiB
+            - name: TUNNEL_TOKEN
+              valueFrom: { secretKeyRef: { name: cloudflared-api-token, key: token } }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+      volumes:
+        - name: config
+          configMap: { name: cloudflared-api-config }

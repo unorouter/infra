@@ -1,0 +1,105 @@
+# Teleport, the Teleport-gated UIs and Dex on their own tunnel, so a flood on a public host can
+# no longer take our own access down with it. Protocol and probes match cloudflared.yaml.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: cloudflared-ops-token
+  namespace: cloudflared
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-platform
+    kind: ClusterSecretStore
+  target:
+    name: cloudflared-ops-token
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef: { key: cloudflared, property: token_ops }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-ops-config
+  namespace: cloudflared
+data:
+  config.yaml: |
+    metrics: 0.0.0.0:2000
+    no-autoupdate: true
+    protocol: http2
+    # Every *.unorouter.com UI host hits the same Teleport proxy, which picks the app by Host
+    # header, so never set httpHostHeader. noTLSVerify: the proxy serves its own cert on this hop.
+    ingress:
+      - hostname: teleport.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: argocd.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: openbao.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: grafana.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      # Direct, not behind Teleport: discovery and JWKS must be publicly fetchable.
+      - hostname: dex.unorouter.com
+        service: http://dex.dex.svc.cluster.local:5556
+      - service: http_status:404
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared-ops
+  namespace: cloudflared
+spec:
+  replicas: 2
+  # 2 replicas leave a third node free for the surge pod, so a rollout never drops to one
+  strategy:
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app: cloudflared-ops }
+  template:
+    metadata:
+      labels: { app: cloudflared-ops, app.kubernetes.io/part-of: cloudflared }
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { app: cloudflared-ops }
+              topologyKey: kubernetes.io/hostname
+      serviceAccountName: cloudflared
+      priorityClassName: serving
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
+          resources:
+            requests: { cpu: 250m, memory: 128Mi }
+            limits: { memory: 2Gi }
+          ports:
+            - name: metrics
+              containerPort: 2000
+          args: [tunnel, --config, /etc/cloudflared/config.yaml, --no-autoupdate, run]
+          env:
+            - name: GOMEMLIMIT
+              value: 1700MiB
+            - name: TUNNEL_TOKEN
+              valueFrom: { secretKeyRef: { name: cloudflared-ops-token, key: token } }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+      volumes:
+        - name: config
+          configMap: { name: cloudflared-ops-config }

@@ -185,7 +185,10 @@ metadata:
   namespace: cloudflared
 spec:
   selector:
-    matchLabels: { app: cloudflared }
+    matchExpressions:
+      - { key: app, operator: In, values: [cloudflared, cloudflared-api, cloudflared-ops] }
+  # the app label names the tunnel, which the per-tunnel alerts group by
+  podTargetLabels: [app]
   podMetricsEndpoints:
     - port: metrics
       interval: 30s
@@ -208,7 +211,7 @@ metadata:
 rules:
   - apiGroups: [apps]
     resources: [deployments]
-    resourceNames: [cloudflared]
+    resourceNames: [cloudflared, cloudflared-api, cloudflared-ops]
     verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -252,6 +255,8 @@ spec:
                 - rollout
                 - restart
                 - deployment/cloudflared
+                - deployment/cloudflared-api
+                - deployment/cloudflared-ops
               resources:
                 requests: { cpu: 10m, memory: 32Mi }
                 limits: { memory: 64Mi }

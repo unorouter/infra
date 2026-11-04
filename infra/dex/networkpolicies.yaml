@@ -20,6 +20,7 @@ spec:
   ingress:
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared-ops }
       toPorts:
         - ports: [{ port: "5556", protocol: TCP }]
     - fromEntities: [host]

@@ -75,6 +75,8 @@ spec:
         - ports: [{ port: "9399", protocol: TCP }]
     - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared-api }
+        - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared-ops }
       toPorts:
         - ports: [{ port: "2000", protocol: TCP }]
     - toEndpoints:
