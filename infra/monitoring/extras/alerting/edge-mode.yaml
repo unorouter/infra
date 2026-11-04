@@ -63,6 +63,8 @@ data:
                "description": "ATTACK MODE: challenge anonymous HTTP/2 page requests on browser hosts",
                "expression": ('(http.host in {"unorouter.com" "www.unorouter.com" "status.unorouter.com"} '
                               'and http.request.version eq "HTTP/2" '
+                              'and not cf.client.bot '
+                              'and not http.request.uri.path in {"/robots.txt" "/sitemap.xml" "/favicon.ico" "/llms.txt"} '
                               'and not starts_with(http.request.uri.path, "/_next/") '
                               'and not starts_with(http.request.uri.path, "/cdn-cgi/") '
                               'and not starts_with(http.request.uri.path, "/images/") '
