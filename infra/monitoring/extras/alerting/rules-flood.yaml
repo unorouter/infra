@@ -1,0 +1,85 @@
+# L7 flood detection fast enough for edge-mode to switch the zone into attack mode before the
+# site or the tunnel falls over. On 2026-11-04 open streams (CloudflaredStreamFlood) peaked at
+# 1,068 and never fired, and Cloudflare warns no earlier than 2 to 5 minutes on Pro.
+# Baselines are the same moment a week and a day earlier, never the last hour, which a flood
+# inflates. Each is capped so a past flood cannot lift the bar over its floor, and a replica
+# with no history falls back to the floor alone (floors alone never fired outside a flood,
+# 10-24 to 11-04).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: edge-flood
+  namespace: monitoring
+spec:
+  groups:
+    - name: edge.flood.record
+      rules:
+        # 404s are left out: path scanners send up to 360 a second of them for 10 minutes every
+        # few hours, as many as the flood waves, and the site pod signal below still sees a 404 flood.
+        - record: edge:tunnel_requests_no404:rate2m
+          expr: |
+            sum(rate(cloudflared_tunnel_total_requests{namespace="cloudflared"}[2m]))
+            - (sum(rate(cloudflared_tunnel_response_by_code{namespace="cloudflared",status_code="404"}[2m])) or vector(0))
+        - record: edge:tunnel_requests_no404:baseline
+          expr: |
+            max(
+              label_replace(
+                sum(rate(cloudflared_tunnel_total_requests{namespace="cloudflared"}[10m] offset 1w))
+                - (sum(rate(cloudflared_tunnel_response_by_code{namespace="cloudflared",status_code="404"}[10m] offset 1w)) or vector(0)),
+                "baseline", "1w", "", "")
+              or label_replace(
+                sum(rate(cloudflared_tunnel_total_requests{namespace="cloudflared"}[10m] offset 1d))
+                - (sum(rate(cloudflared_tunnel_response_by_code{namespace="cloudflared",status_code="404"}[10m] offset 1d)) or vector(0)),
+                "baseline", "1d", "", "")
+            ) or vector(0)
+        # Neither new-api nor the site exports a request counter, so packets received by the
+        # site pods stand in for requests that reached origin.
+        - record: edge:site_rx_packets:rate2m
+          expr: sum(rate(container_network_receive_packets_total{namespace="services",pod=~"unorouter-[a-z0-9]+-[a-z0-9]+",interface="eth0"}[2m]))
+        - record: edge:site_rx_packets:baseline
+          expr: |
+            max(
+              label_replace(sum(rate(container_network_receive_packets_total{namespace="services",pod=~"unorouter-[a-z0-9]+-[a-z0-9]+",interface="eth0"}[10m] offset 1w)), "baseline", "1w", "", "")
+              or label_replace(sum(rate(container_network_receive_packets_total{namespace="services",pod=~"unorouter-[a-z0-9]+-[a-z0-9]+",interface="eth0"}[10m] offset 1d)), "baseline", "1d", "", "")
+            ) or vector(0)
+
+    - name: edge.flood
+      rules:
+        # Outside floods the rate peaks near 200 a second for single minutes (scanner bursts).
+        - alert: EdgeFloodSuspected
+          expr: |
+            edge:tunnel_requests_no404:rate2m > 200
+            and edge:tunnel_requests_no404:rate2m > 3 * clamp_max(edge:tunnel_requests_no404:baseline, 100)
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $value | humanize }} requests a second through the tunnels (404s left out), over 3x a week and a day ago"
+            description: "L7 flood signature. edge-mode switches the zone to attack mode; it switches back 30 min after this resolves."
+        # Normal is 150 to 250 packets a second, single minute peaks near 700.
+        - alert: EdgeOriginFlood
+          expr: |
+            edge:site_rx_packets:rate2m > 700
+            and edge:site_rx_packets:rate2m > 3 * clamp_max(edge:site_rx_packets:baseline, 300)
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "site pods receive {{ $value | humanize }} packets a second, over 3x a week and a day ago"
+            description: "Requests are reaching the site origin past the edge cache and rules. edge-mode switches the zone to attack mode."
+        - alert: EdgeTunnelSaturation
+          expr: |
+            sum(cloudflared_tunnel_concurrent_requests_per_tunnel{namespace="cloudflared"}) > 400
+            and sum(cloudflared_tunnel_concurrent_requests_per_tunnel{namespace="cloudflared"})
+              > 4 * avg_over_time(sum(cloudflared_tunnel_concurrent_requests_per_tunnel{namespace="cloudflared"})[1h:30s] offset 10m)
+          for: 30s
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $value | humanize }} open tunnel streams, over 4x the hour before"
+            description: "Origin is slowing under load or a flood holds streams open. Check the site and new-api pods."
+        # Normal peaks at 2.6 a second; every flood wave on 2026-11-04 and 2026-11-02 went past 5.
+        - alert: EdgeTunnelRequestErrors
+          expr: sum(rate(cloudflared_tunnel_request_errors{namespace="cloudflared"}[2m])) > 5
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "tunnels fail {{ $value | humanize }} requests a second"
+            description: "Origin is not answering in time. During a flood this comes before the site and the tunnel fall over."

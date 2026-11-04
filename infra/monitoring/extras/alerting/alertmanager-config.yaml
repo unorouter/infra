@@ -45,13 +45,15 @@ spec:
         matchers:
           - name: alertname
             value: InfoInhibitor
-      # Edge attack mode: the stream-flood alert flips the Cloudflare zone into attack mode
-      # (edge-mode Deployment); resolved flips it back after a hold. continue: true so the
-      # same alert still reaches discord and the phone below.
+      # Edge attack mode: the flood alerts (rules-flood.yaml and the stream flood) flip the
+      # Cloudflare zone into attack mode (edge-mode Deployment); resolved flips it back after a
+      # hold. Keep the list in step with EDGE_ALERTNAMES there. continue: true so the same
+      # alerts still reach discord and the phone below.
       - receiver: edge-mode
         matchers:
           - name: alertname
-            value: CloudflaredStreamFlood
+            matchType: "=~"
+            value: "CloudflaredStreamFlood|EdgeFloodSuspected|EdgeOriginFlood"
         groupWait: 0s
         groupInterval: 1m
         repeatInterval: 10m

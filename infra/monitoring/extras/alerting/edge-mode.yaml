@@ -1,8 +1,9 @@
-# Edge mode toggler. Alertmanager posts CloudflaredStreamFlood here; firing switches the
-# Cloudflare zone into attack mode, resolved switches back after a hold. It edits a few rules
-# in place, found by description, so the encrypted rule files in infra/cloudflare stay the
-# source of truth and apply.sh attack|normal does the same thing by hand. Thresholds come
-# from the same OpenBao secret as the token, not from this file.
+# Edge mode toggler. Alertmanager posts the flood alerts in EDGE_ALERTNAMES here; firing switches
+# the Cloudflare zone into attack mode, resolved switches back after a hold, and every switch is
+# posted to Discord. It edits a few live rules in place, found by description, so the encrypted
+# rule files in infra/cloudflare stay the source of truth; apply.sh attack|normal does the same
+# by hand except the HTTP/2 block, which only exists here. Thresholds come from the same OpenBao
+# secret as the token, not from this file.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -25,6 +26,8 @@ spec:
       remoteRef: { key: cloudflare-edge, property: rate_normal }
     - secretKey: EDGE_RATE_ATTACK
       remoteRef: { key: cloudflare-edge, property: rate_attack }
+    - secretKey: DISCORD_WEBHOOK
+      remoteRef: { key: alertmanager, property: discordWebhook }
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -38,12 +41,13 @@ data:
 
     TOKEN = os.environ["CF_API_TOKEN"]; ZONE = os.environ["CF_ZONE_ID"]
     HOLD = int(os.environ.get("EDGE_HOLD_SECONDS", "1800"))
-    ALERT = os.environ.get("EDGE_ALERTNAME", "CloudflaredStreamFlood")
+    ALERTS = {n.strip() for n in os.environ.get("EDGE_ALERTNAMES", os.environ.get("EDGE_ALERTNAME", "CloudflaredStreamFlood")).split(",") if n.strip()}
+    DISCORD = os.environ.get("DISCORD_WEBHOOK", "")
     API = f"https://api.cloudflare.com/client/v4/zones/{ZONE}/rulesets/phases"
     # Under Attack is a blunt instrument: applied to a whole host it challenges every
     # visitor, including customers with a live session, and 2026-09-04 showed that costs
     # real traffic for as long as the mode is on. Scope it to what a flood actually looks
-    # like -- no session, no clearance cookie, and a path the edge cache cannot serve --
+    # like (no session, no clearance cookie, and a path the edge cache cannot serve)
     # so returning users and cached pages ride through untouched.
     BROWSER_HOSTS = ('(http.host in {"unorouter.com" "www.unorouter.com" "status.unorouter.com"} '
                      'and http.cookie eq "" '
@@ -52,10 +56,24 @@ data:
                      'and not http.request.uri.path in {"/" "/robots.txt" "/sitemap.xml" "/favicon.ico"})')
     UA_RULE = {"action": "set_config", "enabled": True, "description": "ATTACK MODE: cookie-less browser traffic",
                "expression": BROWSER_HOSTS, "action_parameters": {"security_level": "under_attack"}}
+    # The 2026-11-04 botnets solved challenges and carried clearance, but spoke only HTTP/2,
+    # while real Chrome moves to HTTP/3 after its first visit. Sessions skip it (placed after their skip).
+    H2_RULE = {"ref": "edge_mode_attack_h2", "action": "block", "enabled": True,
+               "description": "ATTACK MODE: block anonymous HTTP/2 page requests on browser hosts",
+               "expression": ('(http.host in {"unorouter.com" "www.unorouter.com" "status.unorouter.com"} '
+                              'and http.request.version eq "HTTP/2" '
+                              'and not starts_with(http.request.uri.path, "/_next/") '
+                              'and not starts_with(http.request.uri.path, "/cdn-cgi/") '
+                              'and not starts_with(http.request.uri.path, "/images/") '
+                              'and not starts_with(http.request.uri.path, "/icons/") '
+                              'and not starts_with(http.request.uri.path, "/sw-worker/"))')}
+    SESSION_SKIP = "logged-in browsers"
     COOKIELESS = "frontend host: challenge cookie-less"
     RATE = {"normal": int(os.environ["EDGE_RATE_NORMAL"]), "attack": int(os.environ["EDGE_RATE_ATTACK"])}
-    state = {"mode": None, "timer": None, "changed": None}
+    state = {"mode": None, "timer": None, "changed": None, "why": None}
     lock = threading.Lock()
+
+    def log(msg): print(f"{time.strftime('%FT%T')} {msg}", flush=True)
 
     def cf(method, path, body=None):
         req = urllib.request.Request(API + path, data=json.dumps(body).encode() if body is not None else None, method=method,
@@ -66,21 +84,37 @@ data:
             raise RuntimeError(f"{method} {path}: {d.get('errors')}")
         return d["result"]
 
+    # id and ref ride along so every untouched rule keeps its id across the PUT.
     def strip(rule):
-        keep = ("action", "expression", "description", "enabled", "action_parameters", "ratelimit", "logging")
-        return {k: rule[k] for k in keep if k in rule}
+        return {k: v for k, v in rule.items() if k not in ("last_updated", "version")}
+
+    def ours(rule): return rule.get("description", "").startswith("ATTACK MODE")
+
+    def discord(text, color):
+        if not DISCORD: return
+        body = {"embeds": [{"title": text, "color": color, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}],
+                "allowed_mentions": {"parse": []}}
+        try:
+            urllib.request.urlopen(urllib.request.Request(DISCORD, data=json.dumps(body).encode(), method="POST",
+                                                          headers={"Content-Type": "application/json", "User-Agent": "edge-mode"}), timeout=10)
+        except Exception as e:
+            log(f"discord post failed: {e}")
 
     def current_mode():
         rules = cf("GET", "/http_config_settings/entrypoint")["rules"]
-        return "attack" if any(r["description"].startswith("ATTACK MODE") for r in rules) else "normal"
+        return "attack" if any(ours(r) for r in rules) else "normal"
 
     def set_mode(mode):
-        cfg = [strip(r) for r in cf("GET", "/http_config_settings/entrypoint")["rules"] if not r["description"].startswith("ATTACK MODE")]
+        cfg = [strip(r) for r in cf("GET", "/http_config_settings/entrypoint")["rules"] if not ours(r)]
         if mode == "attack": cfg.append(UA_RULE)
         cf("PUT", "/http_config_settings/entrypoint", {"rules": cfg})
-        custom = [strip(r) for r in cf("GET", "/http_request_firewall_custom/entrypoint")["rules"]]
+        custom = [strip(r) for r in cf("GET", "/http_request_firewall_custom/entrypoint")["rules"] if not ours(r)]
         for r in custom:
             if r["description"].startswith(COOKIELESS): r["enabled"] = (mode == "attack")
+        if mode == "attack":
+            at = next((i for i, r in enumerate(custom) if r["description"].startswith(SESSION_SKIP)), None)
+            if at is None: log(f"no '{SESSION_SKIP}' rule, HTTP/2 block left out")
+            else: custom.insert(at + 1, H2_RULE)
         cf("PUT", "/http_request_firewall_custom/entrypoint", {"rules": custom})
         rl = [strip(r) for r in cf("GET", "/http_ratelimit/entrypoint")["rules"]]
         for r in rl:
@@ -89,7 +123,7 @@ data:
                 r["description"] = ("ATTACK MODE: " if mode == "attack" else "") + f"auto-ban above {RATE[mode]} requests a minute per IP, one hour"
         cf("PUT", "/http_ratelimit/entrypoint", {"rules": rl})
         state["mode"] = mode; state["changed"] = time.time()
-        print(f"{time.strftime('%FT%T')} mode -> {mode}", flush=True)
+        log(f"mode -> {mode}")
 
     def schedule_normal():
         with lock:
@@ -97,18 +131,27 @@ data:
             t = threading.Timer(HOLD, lambda: request("normal", "hold expired")); t.daemon = True; t.start()
             state["timer"] = t
 
-    def request(mode, why):
+    def request(mode, why, force=False):
         with lock:
             if mode == "attack" and state["timer"]: state["timer"].cancel(); state["timer"] = None
-            if state["mode"] == mode:
-                print(f"{time.strftime('%FT%T')} already {mode} ({why})", flush=True); return
-            try: set_mode(mode)
-            except Exception as e: print(f"{time.strftime('%FT%T')} FAILED {mode}: {e}", flush=True)
+            if state["mode"] == mode and not force:
+                log(f"already {mode} ({why})"); return
+            try:
+                set_mode(mode); state["why"] = why
+            except Exception as e:
+                log(f"FAILED {mode}: {e}")
+                discord(f"edge-mode FAILED to switch to {mode} ({why}): {e}"[:256], 0xE74C3C); return
+        if mode == "attack":
+            discord(f"Edge ATTACK MODE on ({why}): anonymous HTTP/2 pages blocked, burst guard {RATE['attack']}/min, "
+                    f"cookie-less visitors challenged. Back to normal {HOLD // 60} min after the alerts resolve."[:256], 0xE74C3C)
+        else:
+            discord(f"Edge back to normal ({why}): burst guard {RATE['normal']}/min"[:256], 0x2ECC71)
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
         def do_GET(self):
-            body = json.dumps({"mode": state["mode"], "changed": state["changed"], "hold_seconds": HOLD}).encode()
+            body = json.dumps({"mode": state["mode"], "changed": state["changed"], "why": state["why"], "hold_seconds": HOLD,
+                               "normal_pending": state["timer"] is not None, "alerts": sorted(ALERTS)}).encode()
             self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
         def do_POST(self):
             n = int(self.headers.get("Content-Length", 0)); raw = self.rfile.read(n) if n else b"{}"
@@ -120,17 +163,22 @@ data:
                 self.send_response(200); self.end_headers(); return
             try:
                 p = json.loads(raw or b"{}")
-                names = {a.get("labels", {}).get("alertname") for a in p.get("alerts", [])} | {p.get("commonLabels", {}).get("alertname")}
-                if ALERT in names:
-                    if p.get("status") == "firing": request("attack", "alert firing")
+                alerts = [a for a in p.get("alerts", []) if a.get("labels", {}).get("alertname") in ALERTS]
+                if alerts:
+                    firing = sorted({a["labels"]["alertname"] for a in alerts if a.get("status", p.get("status")) == "firing"})
+                    if firing: request("attack", ", ".join(firing))
                     else: schedule_normal()
                 self.send_response(200)
             except Exception as e:
-                print(f"bad payload: {e}", flush=True); self.send_response(400)
+                log(f"bad payload: {e}"); self.send_response(400)
             self.end_headers()
 
     state["mode"] = current_mode()
-    print(f"{time.strftime('%FT%T')} start, mode={state['mode']}, hold={HOLD}s", flush=True)
+    log(f"start, mode={state['mode']}, hold={HOLD}s, alerts={sorted(ALERTS)}")
+    # A restart during attack mode re-applies it (rules added since) and arms the hold, which a
+    # still firing alert cancels on its next repeat.
+    if state["mode"] == "attack":
+        request("attack", "restart", force=True); schedule_normal()
     HTTPServer(("0.0.0.0", 8080), H).serve_forever()
 ---
 apiVersion: apps/v1
@@ -145,6 +193,7 @@ spec:
   template:
     metadata:
       labels: { app: edge-mode }
+      annotations: { config-rev: "2" }
     spec:
       affinity:
         nodeAffinity:
@@ -157,6 +206,9 @@ spec:
           image: python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
           command: ["python3", "-u", "/app/server.py"]
           envFrom: [{ secretRef: { name: edge-mode } }]
+          env:
+            - name: EDGE_ALERTNAMES
+              value: CloudflaredStreamFlood,EdgeFloodSuspected,EdgeOriginFlood
           ports: [{ containerPort: 8080 }]
           resources:
             requests: { cpu: 5m, memory: 32Mi }
