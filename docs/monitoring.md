@@ -224,4 +224,6 @@ the batch: the archive is complete, a 5xx would make Logpush resend it.
   | json [5m])))`. The archive reads with the rclone crypt remote from `docs/dr.md`.
 - **Alerts**: `CfLogpushSilent` (no batch for an hour), `CfLogpushArchiveFailing`,
   `CfLogpushUnauthorized`. Token: Zone Logs Edit on the `cloudflare-edge` token.
-- Logpush is billed per GB after the first 25 GB a month (0.10 USD per GB).
+- Logpush is a usage-based subscription on the zone (Analytics, Logpush, Subscribe; billed per
+  GB after the first 25 GB a month, 0.10 USD per GB). Without it job creation answers 1004
+  "logpush is not enabled for this account".
