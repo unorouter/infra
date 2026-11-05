@@ -132,6 +132,7 @@ resource "aws_s3_bucket" "loki" {
 # rewritten dozens of times a day. Noncurrent versions expire by lifecycle (30 days, set by
 # signed PUT like the others), 3 days for the hot objects answer-fingerprints*, lane-keys/ and
 # verdict-cache.json: rewritten up to 416 times a day, their old versions held 65 of 67 GB.
+# fp-autoban/runs/ expires after 180 days and fp-autoban/waves/ after 730 (docs/monitoring.md).
 # Everything in it is crypt ciphertext from the gateway.
 resource "aws_s3_bucket" "sync" {
   bucket = "unorouter-sync"

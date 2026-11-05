@@ -98,6 +98,78 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
   at boot: `rollout restart` after a change, ArgoCD only updates the
   ConfigMap.
 
+## Fingerprint autoban (fp-autoban)
+
+`infra/monitoring/extras/alerting/fp-autoban.yaml`, a Deployment in `monitoring`, DRY RUN
+(`FP_LIVE=0`): candidates post to Discord with the Cloudflare expression it would add. Inputs,
+read from Loki every minute: the gateway's ` | fp ` field on its `[GIN]` line, the site's `[fp]`
+line (anonymous documents that reached Next) and the site's `[fp-shed]` line (renders the
+admission gate in `unorouter/patches/next-bun-compile@*.patch` answered 503 before Next ran,
+sampled: first 3 per second, then every 20th, at most 10 lines per second per pod). Each shed
+line carries `w`, the shed requests it stands for; the controller counts it `w` times, so request
+totals are real and only distinct address counts are a sample. Before `[fp-shed]` existed a flood
+left almost nothing: the 2026-11-05 17:35 wave (about 330k requests in a minute) wrote 47 lines.
+
+Tiers, on the 10 minute window, never for a fingerprint a logged in request carried (window or
+7 day baseline): `strong` (Chrome 110+ with one ciphers and extensions pair on 2 or more
+addresses AND a hello Chrome never sends, at `FP_STRONG_MIN_REQUESTS` 30), `fixed` (that pair on
+`FP_FIXED_IPS` 5 addresses, `FP_FIXED_MIN_REQUESTS` 40), `short` (Chrome 131+ or Firefox 132+
+hello under 1000 bytes, `FP_SHORT_MIN_REQUESTS` 60 from `FP_SHORT_MIN_IPS` 3), `base` (any signal
+at `FP_MIN_REQUESTS` 120 from `FP_MIN_IPS` 5). The ciphers hash alone does not vary per
+connection (34 values in an hour of logged in Chrome), the extensions hash does (2,754 values in
+2,757 pairs), so the PAIR is what a fixed stack repeats. Firefox and Safari repeat pairs on their
+own and get no `fixed` tier. Replayed against the logged in baseline: the 2026-11-04 21:03 wave
+(Chrome/121 and /125 user agents, hello 274 and 513) is a candidate at 21:05, the 2026-11-05
+wave at 17:36 (first full minute, the controller would post at about 17:37:30), and three hours of
+normal traffic (2026-11-05 12:00 to 15:00) plus two crawler bursts give none. Lower thresholds only
+add logged in API clients, which the exclusion drops.
+
+### Archive
+
+Through the s3-gateway into the unlocked, versioned `unorouter-sync` bucket (crypt ciphertext,
+names in clear), writer pair `secret/s3gw` in the `fp-autoban` ExternalSecret:
+
+- `fp-autoban/runs/YYYY/MM/DD/HHMM.jsonl.gz`: one object per 10 runs (and on SIGTERM), never
+  overwritten, one JSON line per run: `t`, `code` (sha256 of `autoban.py`), `thresholds`,
+  `baseline`, `window` totals, `top_asn` with shares, `candidates` (tier, signals, counts,
+  exclusion, evidence, would be expression), `wave`, and `minutes`: every group of each new
+  minute with counts, shed weight, ASNs, top user agents, paths and whether it was in the
+  baseline, so a replay rebuilds any window. About 25 MB a day. Lifecycle `fp-autoban-runs-180d`.
+- `fp-autoban/waves/<YYYYMMDDTHHMMZ>/`: when a minute has a candidate, a fingerprint with 300
+  anonymous requests (`FP_WAVE_ANON_PER_MINUTE`) or 200 shed renders (`FP_WAVE_SHED_PER_MINUTE`),
+  `lines.jsonl.gz` holds the raw lines of the whole window, `lines-HHMM.jsonl.gz` each further
+  window while it lasts (closed after a quiet window), `run.json.gz` the run that opened it.
+  Lifecycle `fp-autoban-waves-730d`.
+- No address reaches the archive: every IP becomes `h:` plus an HMAC whose key is random, lives
+  only in the pod's memory and changes every UTC day (and on restart), so minutes of one day join
+  and nothing older is reversible. That is why it may outlive the 90 day PII retention of Loki.
+- Lifecycle rules are bucket config, not Tofu (`tofu/buckets.tf`): GET the whole configuration
+  with the `secret/pg-s3` pair, add to it, PUT it back, never PUT a partial one.
+- `FingerprintAutobanArchiveFailing` (warning) after six failed writes in a row; the pod keeps
+  at most 120 unwritten runs.
+
+### Replay and tuning
+
+`scripts/fp-replay.py` runs the controller's own code (read from the manifest) offline, minute
+by minute, and prints the first minute each candidate appears. It never calls Cloudflare or the
+cluster; `list` and `fetch` read the bucket with rclone and the crypt keys from an OpenBao
+reader session, `loki` needs `tsh-grafana`.
+
+```bash
+scripts/fp-replay.py list waves                                     # wave folders
+scripts/fp-replay.py fetch wave 20261105T1727Z ./fp                 # one wave
+scripts/fp-replay.py fetch runs 2026-11-05 2026-11-06 ./fp          # runs of a date range
+scripts/fp-replay.py loki 2026-11-05T17:20 2026-11-05T17:50 w.jsonl.gz   # before the archive existed
+kubectl -n monitoring get cm fp-autoban-state -o jsonpath='{.data}' > state.json   # logged in baseline
+scripts/fp-replay.py score --state state.json ./fp/fp-autoban/waves/20261105T1727Z
+scripts/fp-replay.py score ./fp/fp-autoban/runs                     # runs carry their own baseline verdicts
+scripts/fp-replay.py score --set FP_FIXED_IPS=3 --sweep FP_STRONG_MIN_REQUESTS=10,20,30,60 w.jsonl.gz
+```
+
+A threshold change goes into the Deployment env with the replay that justifies it. The pod reads
+`autoban.py` at start: after ArgoCD updates the ConfigMap, `kubectl -n monitoring rollout restart
+deploy/fp-autoban`.
+
 ## Cloudflare edge
 
 `infra/cloudflare/unorouter.com/`: `rules.sops.yaml` (normal), `rules.attack.sops.yaml` (attack),
@@ -116,3 +188,40 @@ per-IP auto-ban catches single-source floods. Details: `incidents/2026-09-03-l7-
 - Header-name checks must use `lower(http.request.headers.names[*])`.
 - 504s with origin status 0 and a UA containing "early hints" are Cloudflare synthetics, filter them out
   before reading any 5xx rate.
+
+### Cloudflare Logpush
+
+Origin logs only what the edge lets through (47 of about 330k bot requests in the 2026-11-05
+17:35 UTC wave), so the edge's own request log is pushed into the cluster:
+Logpush (zone `unorouter.com`, dataset `http_requests`) POSTs gzip NDJSON batches every 30 s to
+`https://logpush.unorouter.com/ingest/http_requests` (proxied CNAME to the ops tunnel, cloudflared
+routes only that path) with `Authorization: Bearer <OpenBao cloudflare-edge logpush_secret>`.
+`infra/monitoring/extras/cf-logpush.yaml` (Bun, two replicas) refuses anything else, writes the
+raw batch through the s3-gateway into the locked `unorouter-logs` under
+`logpush/http_requests/YYYY/MM/DD/<HHMMSS>-<hash>.ndjson.gz` (encrypted, 90 day lifecycle; no
+plaintext bucket because the records carry visitor addresses), and only then pushes each record
+to Loki. A Loki refusal during a wave drops the Loki copy (`cf_logpush_loki_dropped_total`), never
+the batch: the archive is complete, a 5xx would make Logpush resend it.
+
+- **Jobs**: `security-events` keeps every record whose `SecurityAction` is a block, challenge,
+  connection close, log or solved or failed challenge (list in the Deployment's
+  `SECURITY_ACTIONS`), or whose `EdgeResponseStatus` is 400 or above; `sample-1pct` takes 1% of
+  everything else (Logpush deliveries themselves excluded). `challengeBypassed` (a clearance
+  cookie) counts as the rest. Fields: `EdgeStartTimestamp RayID ClientIP ClientASN ClientCountry
+  ClientRequestHost EdgeRequestHost ClientRequestMethod ClientRequestPath ClientRequestProtocol
+  ClientRequestUserAgent ClientRequestReferer ClientSSLCipher ClientSSLProtocol
+  ClientTLSKeyExchangeGroup EdgeResponseStatus OriginResponseStatus CacheCacheStatus
+  SecurityAction SecurityActions SecuritySources SecurityRuleIDs`. Path only, never the query
+  string (relay keys travel as `key=`). JA3, JA4 and BotScore need Bot Management (Enterprise).
+  Custom fields (the `x-uno-tls-*` headers from the late transform) are refused on Pro: the
+  `http_log_custom_fields` phase answers 50002 "not entitled".
+- **Edge**: two custom rules right after the host allowlists block every request on the logpush
+  host but POST to the ingest path and let that POST skip bot fight and security level (rate
+  limits still apply). The collector's 401 is the real gate.
+- **Query**: `{app="cf-logpush", kind="security"} | json | SecurityAction="block"`; labels are
+  `host` (known hosts by name, anything else `other`) and `kind` (`security`, `error`, `sample`).
+  Count per source over a wave: `topk(20, sum by (ClientIP) (count_over_time({app="cf-logpush"}
+  | json [5m])))`. The archive reads with the rclone crypt remote from `docs/dr.md`.
+- **Alerts**: `CfLogpushSilent` (no batch for an hour), `CfLogpushArchiveFailing`,
+  `CfLogpushUnauthorized`. Token: Zone Logs Edit on the `cloudflare-edge` token.
+- Logpush is billed per GB after the first 25 GB a month (0.10 USD per GB).

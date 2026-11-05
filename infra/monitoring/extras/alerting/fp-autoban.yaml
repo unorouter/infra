@@ -1,10 +1,17 @@
 # Bot cluster detection by TLS fingerprint. Every minute it reads the edge fingerprint lines the
-# gateway (`| fp `) and the site (`[fp]`) write to Loki, keeps a 10 minute window grouped by
-# (ciphers hash, extensions hash, hello length, HTTP version, user agent family), and flags a group
-# that many addresses share while no logged in request ever carried it. Real Chrome permutes its
-# extensions per connection, so a "Chrome" group whose extensions hash repeats across addresses, or
-# a "Chrome" hello under 512 bytes, is a script wearing a browser user agent. Until the 7 day
-# baseline of logged in fingerprints is full, that mismatch is required.
+# gateway (`| fp `), the site (`[fp]`) and the site's admission gate (`[fp-shed]`, sampled, each
+# line weighted by its `w`) write to Loki, keeps a 10 minute window grouped by (ciphers hash,
+# extensions hash, hello length, HTTP version, user agent family), and flags a group no logged in
+# request ever carried once it passes one tier: strong (one ciphers and extensions pair on two
+# addresses AND a hello too short for the claimed browser), fixed (that pair on FP_FIXED_IPS
+# addresses: real Chrome permutes its extensions per connection), short (Chrome 131+ or Firefox
+# 132+ hello under 1000 bytes), or base (any of those at FP_MIN_REQUESTS from FP_MIN_IPS). Until
+# the 7 day baseline of logged in fingerprints is full, one of those signals is required.
+# Thresholds come from `scripts/fp-replay.py` over the 2026-11-04 and 2026-11-05 waves.
+#
+# Archive (docs/monitoring.md): every run as JSONL in s3-gateway `unorouter-sync/fp-autoban/runs/`,
+# and the raw lines of every wave window in `fp-autoban/waves/`, addresses replaced by a keyed hash
+# whose key never leaves memory.
 #
 # DRY RUN by default: candidates go to Discord through Alertmanager with the Cloudflare expression
 # it would add, and nothing calls Cloudflare. FP_LIVE=1 edits exactly one custom rule, found by
@@ -29,6 +36,10 @@ spec:
   data:
     - secretKey: OWN_SOURCES
       remoteRef: { key: cloudflare-edge, property: own_sources }
+    - secretKey: ARCHIVE_ACCESS_KEY
+      remoteRef: { key: s3gw, property: ACCESS_KEY_ID }
+    - secretKey: ARCHIVE_SECRET_KEY
+      remoteRef: { key: s3gw, property: ACCESS_SECRET_KEY }
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -72,18 +83,33 @@ metadata:
   namespace: monitoring
 data:
   autoban.py: |
-    import hashlib, json, os, re, ssl, sys, time, urllib.error, urllib.parse, urllib.request
+    import gzip, hashlib, hmac, json, os, re, secrets, signal, ssl, sys, time, urllib.error, urllib.parse, urllib.request
     from collections import Counter, defaultdict
     import notify
 
     LOKI = os.environ.get("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100")
     SOURCES = {"api": '{namespace="services",app="new-api"} |= " | fp "',
-               "site": '{namespace="services",app="unorouter"} |= "[fp]"'}
+               "site": r'{namespace="services",app="unorouter"} |~ `\[fp(-shed)?\] `'}
     WINDOW = int(os.environ.get("FP_WINDOW_MINUTES", "10"))
     LAG = int(os.environ.get("FP_LAG_SECONDS", "30"))
     MAX_PAGES = int(os.environ.get("FP_MAX_PAGES", "10"))
     MIN_REQ = int(os.environ.get("FP_MIN_REQUESTS", "120"))
     MIN_IPS = int(os.environ.get("FP_MIN_IPS", "5"))
+    # Chrome permutes its extensions on every connection, so one ciphers and extensions pair on this
+    # many addresses is one fixed TLS stack wearing a Chrome user agent.
+    FIXED_IPS = int(os.environ.get("FP_FIXED_IPS", "5"))
+    FIXED_MIN_REQ = int(os.environ.get("FP_FIXED_MIN_REQUESTS", "40"))
+    STRONG_MIN_REQ = int(os.environ.get("FP_STRONG_MIN_REQUESTS", "30"))
+    SHORT_MIN_REQ = int(os.environ.get("FP_SHORT_MIN_REQUESTS", "60"))
+    SHORT_MIN_IPS = int(os.environ.get("FP_SHORT_MIN_IPS", "3"))
+    WAVE_ANON_PER_MINUTE = int(os.environ.get("FP_WAVE_ANON_PER_MINUTE", "300"))
+    WAVE_SHED_PER_MINUTE = int(os.environ.get("FP_WAVE_SHED_PER_MINUTE", "200"))
+    ARCHIVE = os.environ.get("ARCHIVE_ENDPOINT", "").rstrip("/")
+    ARCHIVE_BUCKET = os.environ.get("ARCHIVE_BUCKET", "")
+    ARCHIVE_PREFIX = os.environ.get("ARCHIVE_PREFIX", "fp-autoban")
+    ARCHIVE_FLUSH_RUNS = int(os.environ.get("FP_ARCHIVE_FLUSH_RUNS", "10"))
+    THRESHOLDS = {k: v for k, v in globals().items() if k in ("WINDOW", "MIN_REQ", "MIN_IPS", "FIXED_IPS", "FIXED_MIN_REQ",
+                  "STRONG_MIN_REQ", "SHORT_MIN_REQ", "SHORT_MIN_IPS", "WAVE_ANON_PER_MINUTE", "WAVE_SHED_PER_MINUTE")}
     POSTS_PER_HOUR = int(os.environ.get("FP_POSTS_PER_HOUR", "3"))
     REPOST_HOURS = int(os.environ.get("FP_REPOST_HOURS", "12"))
     BASELINE_DAYS = 7
@@ -106,11 +132,15 @@ data:
 
     API_LINE = re.compile(r'\| (\d{3}) \|[^|]*\|\s*(\S+) \|\s*(\S+) (\S*) \| fp c=(\S*) l=(\d*) e=(\S*) h=(\S*) asn=(\d*) u=(\d+) ua=(".*")\s*$')
     SITE_LINE = re.compile(r'\[fp\] (\d{3}) (\S+) c=(\S*) l=(\d*) e=(\S*) h=(\S*) asn=(\d*)(?: ip=(\S*))? ua=(".*")\s*$')
+    SHED_LINE = re.compile(r'\[fp-shed\] (\d{3}) (\S+) w=(\d+) c=(\S*) l=(\d*) e=(\S*) h=(\S*) asn=(\d*) ip=(\S*) ua=(".*")\s*$')
     CRAWLER = re.compile(r"bot\b|crawl|spider|slurp|Googlebot|bingbot|facebookexternalhit|Discordbot|Twitterbot|compatible;", re.I)
     CHROME_V = re.compile(r"Chrome/(\d+)")
     FIREFOX_V = re.compile(r"Firefox/(\d+)")
 
     def log(**kv): print(json.dumps({"kind": "fp-autoban", **kv}, separators=(",", ":")), flush=True)
+
+    # the replay tool sets this to the minute it is scoring
+    def clock(): return time.time()
 
     def family(ua):
         if not ua: return "empty"
@@ -145,12 +175,13 @@ data:
     def fpkey(c, l, e): return hashlib.sha1(f"{c}|{l}|{e}".encode()).hexdigest()[:12]
 
     class Agg:
-        __slots__ = ("n", "authed", "ips", "paths", "asn", "ua", "src", "minutes")
+        __slots__ = ("n", "authed", "shed", "lines", "ips", "paths", "asn", "ua", "src", "minutes", "bl")
         def __init__(self):
-            self.n = 0; self.authed = 0; self.ips = Counter(); self.paths = set(); self.asn = Counter()
-            self.ua = Counter(); self.src = Counter(); self.minutes = set()
+            self.n = 0; self.authed = 0; self.shed = 0; self.lines = 0; self.ips = Counter(); self.paths = set()
+            self.asn = Counter(); self.ua = Counter(); self.src = Counter(); self.minutes = set(); self.bl = False
         def merge(self, o):
-            self.n += o.n; self.authed += o.authed; self.ips.update(o.ips); self.asn.update(o.asn); self.src.update(o.src)
+            self.n += o.n; self.authed += o.authed; self.shed += o.shed; self.lines += o.lines; self.bl = self.bl or o.bl
+            self.ips.update(o.ips); self.asn.update(o.asn); self.src.update(o.src)
             self.minutes |= o.minutes
             if len(self.paths) < 500: self.paths |= o.paths
             for k, v in o.ua.items():
@@ -168,36 +199,54 @@ data:
             cursor = max(ts for ts, _ in got) + 1
         return out, True
 
+    def parse(src, line):
+        if src == "api":
+            m = API_LINE.search(line)
+            if not m: return None
+            status, ip, method, path, c, l, e, h, asn, u, ua = m.groups()
+            return path, c, l, e, h, asn, ip, int(u), ua, 1, False
+        m = SHED_LINE.search(line)
+        if m:
+            status, path, w, c, l, e, h, asn, ip, ua = m.groups()
+            return path, c, l, e, h, asn, ip, 0, ua, max(1, int(w)), True
+        m = SITE_LINE.search(line)
+        if not m: return None
+        status, path, c, l, e, h, asn, ip, ua = m.groups()
+        return path, c, l, e, h, asn, ip or "", 0, ua, 1, False
+
+    # lines are (ts_ns, src, line); a shed line stands for w requests, so it counts w times everywhere
+    def minute_from_lines(t_end, lines, truncated=()):
+        groups, pending_authed, parsed, skipped, raw = defaultdict(Agg), defaultdict(set), 0, 0, []
+        for ts, src, line in lines:
+            p = parse(src, line)
+            if not p: skipped += 1; continue
+            path, c, l, e, h, asn, ip, u, ua, w, shed = p
+            # Workers subrequests arrive with no handshake to fingerprint
+            if not c or l in ("", "0") or own(ip): continue
+            parsed += 1
+            raw.append((ts, src, line))
+            # site lines before 2026-11-05 carry no address; a distinct ASN is at least a distinct address
+            ip = ip or "asn:" + asn
+            ua = unquote(ua)
+            fam = family(ua)
+            g = groups[(c, int(l), e, h, fam)]
+            g.n += w; g.lines += 1; g.ips[ip] += w; g.asn[asn] += w; g.src[src] += w; g.minutes.add(t_end)
+            if shed: g.shed += w
+            if len(g.paths) < 500: g.paths.add(path.split("?", 1)[0][:80])
+            if ua in g.ua or len(g.ua) < 20: g.ua[ua[:200]] += w
+            if u:
+                g.authed += 1
+                pending_authed[fpkey(c, l, e)].add(ip)
+        return {"t": t_end, "groups": groups, "authed": pending_authed, "truncated": list(truncated), "parsed": parsed,
+                "skipped": skipped, "raw": raw}
+
     def bucket_minute(t_end):
-        groups, pending_authed, truncated, parsed, skipped = defaultdict(Agg), defaultdict(set), [], 0, 0
-        start, end = (t_end - 60) * 10**9, t_end * 10**9
+        start, end, lines, truncated = (t_end - 60) * 10**9, t_end * 10**9, [], []
         for src, query in SOURCES.items():
-            lines, cut = loki_lines(query, start, end)
+            got, cut = loki_lines(query, start, end)
             if cut: truncated.append(src)
-            for _, line in lines:
-                if src == "api":
-                    m = API_LINE.search(line)
-                    if not m: skipped += 1; continue
-                    status, ip, method, path, c, l, e, h, asn, u, ua = m.groups()
-                    u = int(u)
-                else:
-                    m = SITE_LINE.search(line)
-                    if not m: skipped += 1; continue
-                    status, path, c, l, e, h, asn, ip, ua = m.groups()
-                    u, ip = 0, ip or ""
-                # Workers subrequests arrive with no handshake to fingerprint
-                if not c or l in ("", "0") or own(ip): continue
-                parsed += 1
-                ua = unquote(ua)
-                fam = family(ua)
-                g = groups[(c, int(l), e, h, fam)]
-                g.n += 1; g.ips[ip] += 1; g.asn[asn] += 1; g.src[src] += 1; g.minutes.add(t_end)
-                if len(g.paths) < 500: g.paths.add(path.split("?", 1)[0][:80])
-                if ua in g.ua or len(g.ua) < 20: g.ua[ua[:200]] += 1
-                if u:
-                    g.authed += 1
-                    pending_authed[fpkey(c, l, e)].add(ip)
-        return {"t": t_end, "groups": groups, "authed": pending_authed, "truncated": truncated, "parsed": parsed, "skipped": skipped}
+            lines += [(ts, src, line) for ts, line in got]
+        return minute_from_lines(t_end, lines, truncated)
 
     def k8s(method, path, body=None, ctype="application/json"):
         host = os.environ["KUBERNETES_SERVICE_HOST"]; port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
@@ -246,7 +295,7 @@ data:
         except Exception: return True
 
     def learn_baseline(st, minute):
-        bl, day = st["baseline"]["k"], int(time.time() // 86400)
+        bl, day = st["baseline"]["k"], int(clock() // 86400)
         # Browsers get a fresh extensions hash on most connections (Chrome on every one, HTTP/3
         # included), about 800 keys per 10 minutes that no bot can share, so a browser key is kept
         # only once two addresses showed it; a single address is covered by the window itself.
@@ -257,17 +306,27 @@ data:
                 bl[k] = day
         for k in [k for k, d in bl.items() if d < day - BASELINE_DAYS]: del bl[k]
 
-    def mismatch(c, l, e, h, fam, g):
+    # fixed: one ciphers and extensions pair on several addresses; short: a hello too small for the claimed browser
+    def signals(c, l, e, h, fam, g):
         ua = g.ua.most_common(1)[0][0] if g.ua else ""
+        out, ips = {}, len(g.ips)
         if fam == "chrome":
             m = CHROME_V.search(ua); v = int(m.group(1)) if m else 0
-            if l < 512: return f"Chrome user agent with a {l} byte hello (Chrome pads every hello to at least 512)"
-            if v >= 131 and l < 1000: return f"Chrome/{v} user agent with a {l} byte hello (Chrome 131+ sends ML-KEM, about 1700+)"
-            if v >= 110 and h in ("HTTP/1.1", "HTTP/2") and len(g.ips) >= 2:
-                return f"Chrome/{v} user agent with one extensions hash on {len(g.ips)} addresses over {h} (Chrome 110+ permutes per connection)"
+            if l < 512: out["short"] = f"Chrome user agent with a {l} byte hello (Chrome pads every hello to at least 512)"
+            elif v >= 131 and l < 1000: out["short"] = f"Chrome/{v} user agent with a {l} byte hello (Chrome 131+ sends ML-KEM, about 1700+)"
+            if v >= 110 and h in ("HTTP/1.1", "HTTP/2") and ips >= 2:
+                out["fixed"] = f"Chrome/{v} user agent with one ciphers and extensions pair on {ips} addresses over {h} (Chrome 110+ permutes per connection)"
         if fam == "firefox":
             m = FIREFOX_V.search(ua); v = int(m.group(1)) if m else 0
-            if v >= 132 and l < 1000: return f"Firefox/{v} user agent with a {l} byte hello (Firefox 132+ sends ML-KEM)"
+            if v >= 132 and l < 1000: out["short"] = f"Firefox/{v} user agent with a {l} byte hello (Firefox 132+ sends ML-KEM)"
+        return out
+
+    def tier(g, sig):
+        n, ips = g.n, len(g.ips)
+        if "fixed" in sig and "short" in sig and n >= STRONG_MIN_REQ: return "strong"
+        if "fixed" in sig and ips >= FIXED_IPS and n >= FIXED_MIN_REQ: return "fixed"
+        if "short" in sig and ips >= SHORT_MIN_IPS and n >= SHORT_MIN_REQ: return "short"
+        if sig and n >= MIN_REQ and ips >= MIN_IPS: return "base"
         return ""
 
     def expression(c, l, e, h, fam, g):
@@ -285,24 +344,27 @@ data:
             for k, g in m["groups"].items(): groups[k].merge(g)
             for k, ips in m["authed"].items(): authed_now[k] |= ips
         bl = st["baseline"]["k"]
-        ready = time.time() - st["baseline"]["since"] >= BASELINE_DAYS * 86400
+        ready = clock() - st["baseline"]["since"] >= BASELINE_DAYS * 86400
+        floor = min(MIN_REQ, FIXED_MIN_REQ, STRONG_MIN_REQ, SHORT_MIN_REQ)
         out = []
         for key, g in groups.items():
             c, l, e, h, fam = key
-            if g.n < MIN_REQ or len(g.ips) < MIN_IPS: continue
+            if g.n < floor or len(g.ips) < 2: continue
             k = fpkey(c, l, e)
-            why = mismatch(*key, g)
+            sig = signals(*key, g)
+            t = tier(g, sig)
             # Without a full baseline an unknown fingerprint is not enough on its own.
-            heavy = ready and g.n >= 5 * MIN_REQ and len(g.ips) >= 4 * MIN_IPS
-            if not why and not heavy: continue
-            excluded = "in the logged in baseline" if k in bl else "logged in requests in the window" if (g.authed or k in authed_now) else ""
+            if not t and ready and g.n >= 5 * MIN_REQ and len(g.ips) >= 4 * MIN_IPS: t = "heavy"
+            if not t: continue
+            # g.bl is the baseline verdict an archived minute carries into a replay
+            excluded = "in the logged in baseline" if k in bl or g.bl else "logged in requests in the window" if (g.authed or k in authed_now) else ""
             # every request in the window with the same handshake and a matching user agent, logged in or not
             same = [x for kk, x in groups.items() if kk[:4] == key[:4] and ua_matches(kk[4], fam)]
             authed_hits = sum(x.authed for x in same)
+            why = "; ".join(sig.values()) or f"{g.n} requests from {len(g.ips)} addresses, unknown fingerprint after a full baseline"
             out.append({"id": hashlib.sha1(expression(*key, g).encode()).hexdigest()[:8], "key": key, "fpkey": k, "g": g,
-                        "why": why or f"{g.n} requests from {len(g.ips)} addresses, unknown fingerprint after a full baseline",
-                        "excluded": excluded, "authed_hits": authed_hits, "expr": expression(*key, g),
-                        "ready": ready})
+                        "why": why, "tier": t, "signals": sorted(sig), "excluded": excluded, "authed_hits": authed_hits,
+                        "expr": expression(*key, g), "ready": ready})
         return groups, sorted(out, key=lambda x: -x["g"].n)
 
     def evidence(x, st):
@@ -311,8 +373,8 @@ data:
         asn = ", ".join(f"AS{a} {100 * n // g.n}%" for a, n in top_asn)
         ua = g.ua.most_common(1)[0][0][:90] if g.ua else ""
         bl = st["baseline"]
-        age = (time.time() - bl["since"]) / 86400
-        return (f"[{x['id']}] {g.n} req ({g.src.get('site', 0)} site, {g.src.get('api', 0)} api) from {ips} addresses "
+        age = (clock() - bl["since"]) / 86400
+        return (f"[{x['id']}] {x['tier']}: {g.n} req ({g.src.get('site', 0)} site, {g.shed} of them shed, {g.src.get('api', 0)} api) from {ips} addresses "
                 f"({g.n / ips:.1f} per address, busiest {g.ips.most_common(1)[0][1]}), {len(g.asn)} ASNs ({asn}), "
                 f"{len(g.paths)}{'+' if len(g.paths) >= 500 else ''} paths, {h} hello {l}, ua {ua!r}\n"
                 f"why: {x['why']}\n"
@@ -424,19 +486,137 @@ data:
                      f"{f', {expired} expired' if expired else ''}; rule now {new['action']} with {len(live)} entries",
                      severity="info", ttl=3600)
 
+    CODE = hashlib.sha256(open(__file__, "rb").read()).hexdigest()[:12]
+    _salt = {"day": -1, "key": b""}
+
+    # Addresses never reach the archive: a keyed hash whose key lives in memory for one UTC day, so
+    # minutes of a day still join and nothing older can be turned back into an address.
+    def pseudo(ip):
+        day = int(time.time() // 86400)
+        if _salt["day"] != day: _salt.update(day=day, key=secrets.token_bytes(16))
+        return "h:" + hmac.new(_salt["key"], ip.encode(), "sha256").hexdigest()[:10]
+
+    def s3_put(key, body):
+        host, path = urllib.parse.urlparse(ARCHIVE).netloc, "/" + ARCHIVE_BUCKET + "/" + urllib.parse.quote(key)
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()); day = stamp[:8]
+        digest = hashlib.sha256(body).hexdigest()
+        signed = {"host": host, "x-amz-content-sha256": digest, "x-amz-date": stamp}
+        names = sorted(signed)
+        canonical = "\n".join(["PUT", path, "", *[f"{n}:{signed[n]}" for n in names], "", ";".join(names), digest])
+        scope = f"{day}/auto/s3/aws4_request"
+        to_sign = "\n".join(["AWS4-HMAC-SHA256", stamp, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+        k = ("AWS4" + os.environ["ARCHIVE_SECRET_KEY"]).encode()
+        for part in (day, "auto", "s3", "aws4_request"): k = hmac.new(k, part.encode(), "sha256").digest()
+        sig = hmac.new(k, to_sign.encode(), "sha256").hexdigest()
+        auth = f"AWS4-HMAC-SHA256 Credential={os.environ['ARCHIVE_ACCESS_KEY']}/{scope}, SignedHeaders={';'.join(names)}, Signature={sig}"
+        req = urllib.request.Request(ARCHIVE + path, data=body, method="PUT", headers={
+            "x-amz-content-sha256": digest, "x-amz-date": stamp, "Authorization": auth, "Content-Type": "application/gzip"})
+        with urllib.request.urlopen(req, timeout=60) as r: r.read()
+
+    def gz_lines(items): return gzip.compress("".join(json.dumps(x, separators=(",", ":")) + "\n" for x in items).encode(), 6)
+
+    def utc(t, fmt): return time.strftime(fmt, time.gmtime(t))
+
+    _runs, _wave, _archive_failures = [], {"id": "", "until": 0, "last": 0, "saved": False}, [0]
+
+    def archive_failed(key, e):
+        _archive_failures[0] += 1
+        log(event="archive_error", key=key, error=str(e)[:300], failures=_archive_failures[0], buffered=len(_runs))
+        if _archive_failures[0] == 6:
+            notify.alert("FingerprintAutobanArchiveFailing", f"fp-autoban could not write {key} six times in a row: {str(e)[:300]}",
+                         severity="warning", ttl=3600)
+
+    def archive_flush():
+        if not ARCHIVE or not _runs: return
+        key = f"{ARCHIVE_PREFIX}/runs/{utc(_runs[0]['t'] - 60, '%Y/%m/%d/%H%M')}.jsonl.gz"
+        try:
+            s3_put(key, gz_lines(_runs)); log(event="archived", key=key, runs=len(_runs)); _runs.clear(); _archive_failures[0] = 0
+        except Exception as e:
+            archive_failed(key, e)
+            del _runs[:-120]
+
+    def wave_lines(minutes):
+        out = []
+        for m in minutes:
+            for ts, src, line in m["raw"]:
+                p = parse(src, line)
+                ip = p[6] if p else ""
+                out.append({"ts": ts, "src": src, "line": line.replace(ip, pseudo(ip)) if ip else line})
+        return out
+
+    # A wave folder starts with the whole window (the run up matters), then one part per window
+    # while it lasts, and closes once a full window passes without a wave.
+    def archive_wave(window, record):
+        t = window[-1]["t"]
+        if record["wave"]:
+            _wave["last"] = t
+            if not _wave["id"]: _wave.update(id=utc(window[0]["t"] - 60, "%Y%m%dT%H%MZ"), saved=False)
+        if not _wave["id"]: return
+        pending = [m for m in window if m["t"] > _wave["until"]]
+        first, ended = not _wave["saved"], t - _wave["last"] >= WINDOW * 60
+        if pending and (first or ended or len(pending) >= WINDOW):
+            base = f"{ARCHIVE_PREFIX}/waves/{_wave['id']}/"
+            name = "lines.jsonl.gz" if first else f"lines-{utc(pending[0]['t'] - 60, '%H%M')}.jsonl.gz"
+            try:
+                s3_put(base + name, gz_lines(wave_lines(pending)))
+                if first: s3_put(base + "run.json.gz", gz_lines([record]))
+                _wave.update(until=pending[-1]["t"], saved=True)
+                log(event="wave_archived", key=base + name, minutes=len(pending), reason=record["wave"])
+            except Exception as e:
+                archive_failed(base + name, e)
+        if ended: _wave["id"] = ""
+
+    def minute_record(m, bl):
+        return {"t": m["t"], "parsed": m["parsed"], "unparsed": m["skipped"], "truncated": m["truncated"], "groups": [
+            {"c": c, "l": l, "e": e, "h": h, "fam": fam, "n": g.n, "authed": g.authed, "shed": g.shed, "lines": g.lines,
+             "nips": len(g.ips), "ips": {pseudo(ip): n for ip, n in g.ips.most_common(500)}, "asn": dict(g.asn.most_common(5)),
+             "src": dict(g.src), "ua": dict(g.ua.most_common(3)), "paths": sorted(g.paths)[:10], "bl": fpkey(c, l, e) in bl}
+            for (c, l, e, h, fam), g in m["groups"].items()]}
+
+    def wave_reason(m, cands):
+        anon = max((g.n - g.authed for g in m["groups"].values()), default=0)
+        shed = sum(g.shed for g in m["groups"].values())
+        if any(not x["excluded"] for x in cands): return "candidate"
+        if anon >= WAVE_ANON_PER_MINUTE: return f"one fingerprint sent {anon} anonymous requests in a minute"
+        if shed >= WAVE_SHED_PER_MINUTE: return f"{shed} anonymous renders shed in a minute"
+        return ""
+
+    def run_record(window, st, groups, cands, top_asn):
+        bl, total = st["baseline"], sum(g.n for g in groups.values())
+        return {"v": 1, "t": window[-1]["t"], "code": CODE, "live": LIVE, "thresholds": THRESHOLDS,
+                "baseline": {"keys": len(bl["k"]), "age_days": round((clock() - bl["since"]) / 86400, 2),
+                             "ready": clock() - bl["since"] >= BASELINE_DAYS * 86400},
+                "window": {"minutes": len(window), "groups": len(groups), "requests": total,
+                           "authed": sum(g.authed for g in groups.values()), "shed": sum(g.shed for g in groups.values())},
+                "top_asn": top_asn,
+                "candidates": [{"id": x["id"], "tier": x["tier"], "signals": x["signals"], "key": list(x["key"]), "fpkey": x["fpkey"],
+                                "n": x["g"].n, "shed": x["g"].shed, "ips": len(x["g"].ips), "asn": dict(x["g"].asn.most_common(5)),
+                                "excluded": x["excluded"], "authed_hits": x["authed_hits"], "expr": x["expr"],
+                                "evidence": evidence(x, st)} for x in cands[:20]],
+                "wave": wave_reason(window[-1], cands),
+                "minutes": [minute_record(m, bl["k"]) for m in window if not m.get("archived")]}
+
     def run_once(window, st):
         groups, cands = score(window, st)
         by_asn = defaultdict(lambda: [0, set(), 0])
         for (c, l, e, h, fam), g in groups.items():
             for a, n in g.asn.items(): by_asn[a][0] += n; by_asn[a][1].add((c, l, e))
             by_asn[a][2] += g.authed
+        total = sum(g.n for g in groups.values()) or 1
+        top_asn = [{"asn": a, "n": v[0], "share": round(v[0] / total, 4), "fingerprints": len(v[1]), "authed": v[2]}
+                   for a, v in sorted(by_asn.items(), key=lambda kv: -kv[1][0])[:8]]
         log(event="run", groups=len(groups), requests=sum(g.n for g in groups.values()),
             parsed=sum(m["parsed"] for m in window), unparsed=sum(m["skipped"] for m in window),
             truncated=sorted({s for m in window for s in m["truncated"]}), minutes=len(window),
-            baseline=len(st["baseline"]["k"]), candidates=[{"id": x["id"], "n": x["g"].n, "ips": len(x["g"].ips),
-            "excluded": x["excluded"], "why": x["why"][:80]} for x in cands[:10]],
-            top_asn=[{"asn": a, "n": v[0], "fingerprints": len(v[1]), "authed": v[2]} for a, v in sorted(by_asn.items(), key=lambda kv: -kv[1][0])[:8]],
-            live=LIVE)
+            shed=sum(g.shed for g in groups.values()),
+            baseline=len(st["baseline"]["k"]), candidates=[{"id": x["id"], "tier": x["tier"], "n": x["g"].n, "ips": len(x["g"].ips),
+            "excluded": x["excluded"], "why": x["why"][:80]} for x in cands[:10]], top_asn=top_asn, live=LIVE)
+        if ARCHIVE:
+            record = run_record(window, st, groups, cands, top_asn)
+            for m in window: m["archived"] = True
+            _runs.append(record)
+            archive_wave(window, record)
+            if len(_runs) >= ARCHIVE_FLUSH_RUNS: archive_flush()
         post_dry(cands, st)
         if LIVE: live_apply(cands, st)
         return cands
@@ -451,7 +631,14 @@ data:
         if "--once" in sys.argv:
             for x in run_once(window, st):
                 print(evidence(x, st) + (f"\nEXCLUDED: {x['excluded']}" if x["excluded"] else "") + "\n", flush=True)
-            save_state(st); return
+            save_state(st); archive_flush(); return
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        try:
+            loop(window, last, saved, failures, st)
+        finally:
+            archive_flush()
+
+    def loop(window, last, saved, failures, st):
         while True:
             try:
                 t = int(time.time()) - LAG; t -= t % 60
@@ -509,6 +696,10 @@ spec:
               value: "0"
             - name: FP_KILL
               value: "0"
+            - name: ARCHIVE_ENDPOINT
+              value: https://s3.unorouter.com
+            - name: ARCHIVE_BUCKET
+              value: unorouter-sync
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -523,7 +714,7 @@ spec:
         - name: lib
           configMap: { name: watch-lib }
 ---
-# Dry run reaches only Loki and Alertmanager (the API server comes from the clusterwide policy).
+# Dry run reaches only Loki, Alertmanager and the s3-gateway (the API server and DNS come from the clusterwide policies).
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -541,3 +732,7 @@ spec:
         - matchLabels: { app.kubernetes.io/name: alertmanager }
       toPorts:
         - ports: [{ port: "9093", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: s3-gateway, app: s3-gateway }
+      toPorts:
+        - ports: [{ port: "8443", protocol: TCP }]
