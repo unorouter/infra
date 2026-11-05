@@ -330,7 +330,7 @@ spec:
                   value: bc178db579d52011b4b2998da622b9e3:unorouter.com,09567baf778ae9946a29a034811323c6:unorouter.ai,f56ce8ac5c1e8e621fe2d420591a78e3:coding-global.com
                 # every real name under the strict zones; a request to any other name is a guess
                 - name: KNOWN_HOSTS
-                  value: unorouter.com,www.unorouter.com,api.unorouter.com,bot.unorouter.com,mcp.unorouter.com,teleport.unorouter.com,dex.unorouter.com,s3.unorouter.com,cards.unorouter.com,status.unorouter.com,grafana.unorouter.com,argocd.unorouter.com,openbao.unorouter.com,import.unorouter.com,unorouter.ai,www.unorouter.ai,api.unorouter.ai
+                  value: unorouter.com,www.unorouter.com,api.unorouter.com,bot.unorouter.com,mcp.unorouter.com,teleport.unorouter.com,dex.unorouter.com,s3.unorouter.com,cards.unorouter.com,status.unorouter.com,grafana.unorouter.com,argocd.unorouter.com,openbao.unorouter.com,import.unorouter.com,logpush.unorouter.com,unorouter.ai,www.unorouter.ai,api.unorouter.ai
               resources:
                 requests: { cpu: 10m, memory: 48Mi }
                 limits: { memory: 192Mi }

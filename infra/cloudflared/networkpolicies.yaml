@@ -122,6 +122,10 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: dex, app: dex }
       toPorts:
         - ports: [{ port: "5556", protocol: TCP }]
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app: cf-logpush }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
     - toCIDR: [198.41.192.0/24, 198.41.200.0/24]
       toPorts:
         - ports:
