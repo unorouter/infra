@@ -151,7 +151,7 @@ names in clear), writer pair `secret/s3gw` in the `fp-autoban` ExternalSecret:
   `FP_EDGE_LAG_SECONDS` (300) before it, weighted by `sampleInterval` and summed per action,
   outcome (`challenged`, `solved`, `bypassed`, `failed`, `blocked`, `skip`, `log`), source, rule,
   HTTP protocol, host, ASN and user agent family, plus the 300 busiest addresses (hashed) with
-  their outcomes. Not scored; the `run` log line carries its totals.
+  their outcomes (about 10 KB a minute). Not scored; the `run` log line carries its totals.
 
 ### Replay and tuning
 

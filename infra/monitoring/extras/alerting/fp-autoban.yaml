@@ -9,6 +9,10 @@
 # the 7 day baseline of logged in fingerprints is full, one of those signals is required.
 # Thresholds come from `scripts/fp-replay.py` over the 2026-11-04 and 2026-11-05 waves.
 #
+# Edge input (not scored): the cf-analytics firewall event lines ({app="cf-firewall"}) of the
+# minute FP_EDGE_LAG_SECONDS before, summed per action, rule, protocol and address and archived
+# with each minute of the run, so a replay can weigh challenge outcomes next to the fingerprints.
+#
 # Archive (docs/monitoring.md): every run as JSONL in s3-gateway `unorouter-sync/fp-autoban/runs/`,
 # and the raw lines of every wave window in `fp-autoban/waves/`, addresses replaced by a keyed hash
 # whose key never leaves memory.
@@ -90,6 +94,10 @@ data:
     LOKI = os.environ.get("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100")
     SOURCES = {"api": '{namespace="services",app="new-api"} |= " | fp "',
                "site": r'{namespace="services",app="unorouter"} |~ `\[fp(-shed)?\] `'}
+    EDGE_QUERY = os.environ.get("FP_EDGE_QUERY", '{app="cf-firewall"}')
+    # cf-analytics writes a minute about 4 minutes after it ends
+    EDGE_LAG = int(os.environ.get("FP_EDGE_LAG_SECONDS", "300"))
+    EDGE_TOP_IPS = 300
     WINDOW = int(os.environ.get("FP_WINDOW_MINUTES", "10"))
     LAG = int(os.environ.get("FP_LAG_SECONDS", "30"))
     MAX_PAGES = int(os.environ.get("FP_MAX_PAGES", "10"))
@@ -187,17 +195,60 @@ data:
             for k, v in o.ua.items():
                 if k in self.ua or len(self.ua) < 20: self.ua[k] += v
 
-    def loki_lines(query, start, end):
-        out, cursor = [], start
+    def loki_pages(query, start, end, cut):
+        cursor = start
         for _ in range(MAX_PAGES):
             q = urllib.parse.urlencode({"query": query, "start": cursor, "end": end, "limit": 5000, "direction": "forward"})
             with urllib.request.urlopen(LOKI + "/loki/api/v1/query_range?" + q, timeout=60) as r:
                 d = json.load(r)
             got = [(int(ts), line) for s in d["data"]["result"] for ts, line in s["values"]]
-            out += got
-            if len(got) < 5000: return out, False
+            yield got
+            if len(got) < 5000: return
             cursor = max(ts for ts, _ in got) + 1
-        return out, True
+        cut.append(True)
+
+    def loki_lines(query, start, end):
+        cut = []
+        out = [x for page in loki_pages(query, start, end, cut) for x in page]
+        return out, bool(cut)
+
+    def edge_outcome(action):
+        if action.endswith("_solved"): return "solved"
+        if action.endswith("_bypassed"): return "bypassed"
+        if action.endswith("_failed"): return "failed"
+        if action.endswith("challenge"): return "challenged"
+        if action in ("block", "connection_close", "force_connection_close"): return "blocked"
+        return action or "unknown"
+
+    # Read page by page: a wave minute is tens of thousands of lines, only the sums are kept.
+    def edge_minute(t_end):
+        e = {"t": t_end, "rows": 0, "events": 0, "action": Counter(), "outcome": Counter(), "source": Counter(), "proto": Counter(),
+             "host": Counter(), "rule": Counter(), "fam": Counter(), "asn": Counter(), "ips": defaultdict(Counter), "truncated": False}
+        cut = []
+        for page in loki_pages(EDGE_QUERY, (t_end - 60) * 10**9, t_end * 10**9, cut):
+            for _, line in page:
+                try: x = json.loads(line)
+                except ValueError: continue
+                ip = x.get("clientIP", "")
+                if own(ip): continue
+                w, a = int(x.get("sampleInterval") or 1), x.get("action", "")
+                o = edge_outcome(a)
+                e["rows"] += 1; e["events"] += w; e["action"][a] += w; e["outcome"][o] += w
+                e["source"][x.get("source", "")] += w; e["proto"][x.get("clientRequestHTTPProtocol", "")] += w
+                e["host"][x.get("clientRequestHTTPHost", "")] += w; e["asn"][x.get("clientAsn", "")] += w
+                e["fam"][family(x.get("userAgent", ""))] += w
+                if o != "skip": e["rule"][f"{x.get('source', '')}:{x.get('ruleId', '')[:8]}:{o}"] += w
+                e["ips"][ip][o] += w
+        e["truncated"] = bool(cut)
+        e["nips"] = len(e["ips"])
+        e["ips"] = dict(sorted(e["ips"].items(), key=lambda kv: -sum(kv[1].values()))[:EDGE_TOP_IPS])
+        return e
+
+    def edge_record(e):
+        if not e: return None
+        return {"t": e["t"], "rows": e["rows"], "events": e["events"], "nips": e["nips"], "truncated": e["truncated"],
+                **{k: dict(e[k].most_common(20)) for k in ("action", "outcome", "source", "proto", "host", "rule", "fam", "asn")},
+                "ips": {pseudo(ip): dict(c) for ip, c in e["ips"].items()}}
 
     def parse(src, line):
         if src == "api":
@@ -246,7 +297,10 @@ data:
             got, cut = loki_lines(query, start, end)
             if cut: truncated.append(src)
             lines += [(ts, src, line) for ts, line in got]
-        return minute_from_lines(t_end, lines, truncated)
+        m = minute_from_lines(t_end, lines, truncated)
+        try: m["edge"] = edge_minute(t_end - EDGE_LAG)
+        except Exception as e: log(event="edge_error", error=str(e)[:300])
+        return m
 
     def k8s(method, path, body=None, ctype="application/json"):
         host = os.environ["KUBERNETES_SERVICE_HOST"]; port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
@@ -571,7 +625,7 @@ data:
             {"c": c, "l": l, "e": e, "h": h, "fam": fam, "n": g.n, "authed": g.authed, "shed": g.shed, "lines": g.lines,
              "nips": len(g.ips), "ips": {pseudo(ip): n for ip, n in g.ips.most_common(500)}, "asn": dict(g.asn.most_common(5)),
              "src": dict(g.src), "ua": dict(g.ua.most_common(3)), "paths": sorted(g.paths)[:10], "bl": fpkey(c, l, e) in bl}
-            for (c, l, e, h, fam), g in m["groups"].items()]}
+            for (c, l, e, h, fam), g in m["groups"].items()], "edge": edge_record(m.get("edge"))}
 
     def wave_reason(m, cands):
         anon = max((g.n - g.authed for g in m["groups"].values()), default=0)
@@ -609,6 +663,7 @@ data:
             parsed=sum(m["parsed"] for m in window), unparsed=sum(m["skipped"] for m in window),
             truncated=sorted({s for m in window for s in m["truncated"]}), minutes=len(window),
             shed=sum(g.shed for g in groups.values()),
+            edge={k: v for k, v in (edge_record(window[-1].get("edge")) or {}).items() if k in ("t", "rows", "events", "nips", "outcome", "truncated")},
             baseline=len(st["baseline"]["k"]), candidates=[{"id": x["id"], "tier": x["tier"], "n": x["g"].n, "ips": len(x["g"].ips),
             "excluded": x["excluded"], "why": x["why"][:80]} for x in cands[:10]], top_asn=top_asn, live=LIVE)
         if ARCHIVE:
@@ -674,6 +729,8 @@ spec:
   template:
     metadata:
       labels: { app: fp-autoban }
+      # python reads autoban.py once at start: bump with every ConfigMap change so ArgoCD rolls the pod
+      annotations: { config-rev: "1" }
     spec:
       serviceAccountName: fp-autoban
       securityContext:
