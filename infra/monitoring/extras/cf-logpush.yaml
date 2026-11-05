@@ -157,8 +157,8 @@ data:
         const gz = body[0] === 0x1f && body[1] === 0x8b ? body : Bun.gzipSync(body);
         const text = new TextDecoder().decode(gz === body ? Bun.gunzipSync(body) : body);
         const lines = text.split("\n").filter((l) => l.length > 0);
-        // Logpush validates a new destination with one {"content":"tests"} line.
-        if (lines.length === 1 && lines[0].includes('"content":"tests"')) {
+        // Destination checks send one {"content":"test"} (validate API) or {"content":"tests"} (job creation) line.
+        if (lines.length === 1 && /^\{"content":"tests?"\}$/.test(lines[0].trim())) {
           m.tests++;
           console.log(JSON.stringify({ event: "test_batch" }));
           return new Response("ok");
@@ -205,7 +205,7 @@ spec:
     metadata:
       labels: { app: cf-logpush }
       # bun reads server.ts once at start: bump with every ConfigMap change so ArgoCD rolls the pod
-      annotations: { config-rev: "1" }
+      annotations: { config-rev: "2" }
     spec:
       serviceAccountName: cf-logpush
       automountServiceAccountToken: false
