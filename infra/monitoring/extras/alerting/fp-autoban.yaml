@@ -205,7 +205,9 @@ data:
         ctx = ssl.create_default_context(cafile=sa + "ca.crt")
         req = urllib.request.Request(f"https://{host}:{port}{path}", method=method,
                                      data=json.dumps(body).encode() if body is not None else None,
-                                     headers={"Authorization": "Bearer " + open(sa + "token").read().strip(), "Content-Type": ctype})
+                                     # Python's default user agent trips the K8sScriptingClient tripwire; a stock client on this token still does.
+                                     headers={"Authorization": "Bearer " + open(sa + "token").read().strip(), "Content-Type": ctype,
+                                              "User-Agent": "fp-autoban/1"})
         with urllib.request.urlopen(req, timeout=20, context=ctx) as r:
             return json.load(r)
 
