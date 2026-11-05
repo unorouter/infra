@@ -10,7 +10,7 @@ Rendering needs git plus the break-glass age key (`talos/README.md`). Access pat
 
 Stateful placement: Grafana and Loki on node12 (label `unorouter.com/monitoring`), Prometheus
 replicas on node12 and node13, Alertmanager one replica per node; OpenBao, ArgoCD and Teleport wherever their PV landed; CNPG
-newapi-pg 3 instances and bot-pg 2, ClickHouse 3 replicas and its Keeper 3 members, one per
+newapi-pg 3 instances and bot-pg 2, ClickHouse 2 replicas and its Keeper 3 members, one per
 node, all on local-path PVs. Losing a node loses those PVs.
 
 ## Rules that hold in every scenario

@@ -14,3 +14,7 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: --kubelet-insecure-tls
+      # upstream asks 200Mi; the working set peaked at 46Mi over 30 days (2026-11-05)
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 64Mi

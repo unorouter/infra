@@ -122,7 +122,8 @@ data:
       <!-- defaults are 5 GiB each, sized for a big host: the gateway's token lookups filled them
            past the server cap and the overcommit tracker stopped inserts (2026-10-04) -->
       <mark_cache_size>536870912</mark_cache_size>
-      <index_mark_cache_size>134217728</index_mark_cache_size>
+      <index_mark_cache_size>67108864</index_mark_cache_size>
+      <query_condition_cache_size>33554432</query_condition_cache_size>
       <uncompressed_cache_size>0</uncompressed_cache_size>
       <!-- Altinity's low memory profile (kb.altinity.com, configure_clickhouse_for_low_mem_envs):
            the defaults assume 32 GiB and up. Fetch and schedule pools stay above its single node
@@ -231,7 +232,6 @@ data:
             <internal_replication>true</internal_replication>
             <replica><host>clickhouse-0.clickhouse-headless.databases.svc.cluster.local</host><port>9000</port><user>admin</user><password from_env="CLICKHOUSE_PASSWORD"/></replica>
             <replica><host>clickhouse-1.clickhouse-headless.databases.svc.cluster.local</host><port>9000</port><user>admin</user><password from_env="CLICKHOUSE_PASSWORD"/></replica>
-            <replica><host>clickhouse-2.clickhouse-headless.databases.svc.cluster.local</host><port>9000</port><user>admin</user><password from_env="CLICKHOUSE_PASSWORD"/></replica>
           </shard>
         </logs>
       </remote_servers>
@@ -339,7 +339,9 @@ metadata:
   namespace: databases
 spec:
   serviceName: clickhouse-headless
-  replicas: 3
+  # two copies on two nodes still survive losing either; a third cost 2 GiB of the memory the
+  # cluster needs to reschedule onto two nodes (clickhouse-2 dropped 2026-11-05)
+  replicas: 2
   selector:
     matchLabels: { app: clickhouse }
   template:
@@ -349,7 +351,7 @@ spec:
         # the local volume is restorable from the nightly ClickHouse backup; Velero would copy it twice
         backup.velero.io/backup-volumes-excludes: data
         # pool sizes are read once at start: bump with every config change so the replicas roll
-        config-rev: "3"
+        config-rev: "4"
     spec:
       automountServiceAccountToken: false
       # one replica per node; each local-path volume pins its pod to the node it was made on
@@ -401,9 +403,9 @@ spec:
             periodSeconds: 30
             failureThreshold: 6
           resources:
-            # peak 2.3 GiB on the replica that runs the backups once metric_log was gone; the
+            # steady 2 GiB (caches full), peak 2.7 GiB on the replica running the backup; the
             # server caps itself at 75 % (3 GiB) and a refused insert goes to the spool
-            requests: { cpu: 250m, memory: 1536Mi }
+            requests: { cpu: 250m, memory: 2Gi }
             limits: { memory: 4Gi }
           securityContext:
             allowPrivilegeEscalation: false
