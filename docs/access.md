@@ -16,6 +16,10 @@ printed URL, `systemctl --user restart tsh-kube tsh-openbao tsh-grafana`. Withou
 OpenBao still logs in through Dex: `bao login -method=oidc role=admin|reader` (GitHub team
 `unorouter:admins`).
 
+The `admin` policy lives only in OpenBao: `path "*" { capabilities = ["create", "read",
+"update", "patch", "delete", "list", "sudo"] }`. Without `patch`, `bao kv patch` silently
+falls back to reading the whole secret and writing it back, which races a concurrent writer.
+
 ## Break-glass (Teleport, GitHub or Dex down)
 
 Every path is account-free and pages on use.
