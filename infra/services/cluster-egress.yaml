@@ -33,7 +33,7 @@ spec:
         values: [argocd, cert-manager, cloudflared, cnpg-system, databases, dex, external-secrets, monitoring, openbao, s3-gateway, services, teleport, teleport-agent, uno-import, velero]
       - key: io.cilium.k8s.policy.serviceaccount
         operator: NotIn
-        values: [default, argocd-repo-server, cloudflared, kps-alertmanager, cf-logpush]
+        values: [default, argocd-repo-server, cloudflared, kps-alertmanager]
   egress:
     - toEntities: [host, remote-node, kube-apiserver]
       toPorts:

@@ -45,10 +45,6 @@ data:
       # Direct, not behind Teleport: discovery and JWKS must be publicly fetchable.
       - hostname: dex.unorouter.com
         service: http://dex.dex.svc.cluster.local:5556
-      # Cloudflare Logpush deliveries (infra/monitoring/extras/cf-logpush.yaml); the collector checks the secret.
-      - hostname: logpush.unorouter.com
-        path: ^/ingest/http_requests$
-        service: http://cf-logpush.monitoring.svc.cluster.local:8080
       - service: http_status:404
 ---
 apiVersion: apps/v1
@@ -67,7 +63,7 @@ spec:
     metadata:
       labels: { app: cloudflared-ops, app.kubernetes.io/part-of: cloudflared }
       # cloudflared reads its ingress rules once at start: bump with every ConfigMap change
-      annotations: { config-rev: "1" }
+      annotations: { config-rev: "2" }
     spec:
       affinity:
         podAntiAffinity:

@@ -18,7 +18,6 @@ spec:
         - matchLabels: { app: ntfy-bridge }
         - matchLabels: { app: edge-probe-watch }
         - matchLabels: { app: fp-autoban }
-        - matchLabels: { app: cf-logpush }
       toPorts:
         - ports: [{ port: "3100", protocol: TCP }]
     # kubelet readiness probe
