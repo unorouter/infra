@@ -598,8 +598,9 @@ data:
             labels: { page: "true", severity: critical, source: k8s-audit-watch, burn_in: "until-2026-10-11" }
             annotations:
               summary: "Teleport impersonated system:masters for {{ $labels.actor }} x{{ $value }}"
-          # A service account reading a Secret in another namespace. Platform controllers and the
-          # ESO reader that mirrors the CNPG CA into teleport-agent are the routine.
+          # A service account reading a Secret in another namespace. Platform controllers, the
+          # ESO reader that mirrors the CNPG CA into teleport-agent, and the one mirroring the
+          # teleport-pg password and CA into teleport (only those two names) are the routine.
           - alert: K8sSecretRead
             expr: >-
               sum by (actor, objectRef_namespace, objectRef_name, src) (
@@ -615,6 +616,7 @@ data:
                     | actor!~"system:serviceaccount:(external-secrets|argocd|cnpg-system|cert-manager|kube-system|velero):.*"
                     | actor!="system:serviceaccount:monitoring:kps-operator"
                     | actor!="system:serviceaccount:teleport-agent:eso-db-ca-reader"
+                    | (actor!="system:serviceaccount:teleport:eso-teleport-pg-reader" or objectRef_namespace!="databases" or objectRef_name!~"teleport-pg-app|teleport-pg-ca")
                     | label_format actor_ns=`{{ regexReplaceAll "^system:serviceaccount:([^:]+):.*$" .actor "${1}" }}`
                     | label_format own=`{{ if eq .actor_ns .objectRef_namespace }}1{{ else }}0{{ end }}`
                     | own="0"
