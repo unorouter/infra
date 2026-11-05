@@ -305,11 +305,12 @@ kube-state-metrics:
 
 prometheus-node-exporter:
   # DaemonSet by design: every node needs its own exporter (that is the point).
-  # CPU limit deliberately generous relative to usage: scrape bursts are short and spiky,
-  # and a tight limit throttles them into permanent CPUThrottlingHigh noise.
+  # No CPU limit: each scrape runs every collector in parallel across all cores, a burst far
+  # above any sane limit for a 10m average; with two Prometheus replicas scraping, 400m still
+  # throttled 37% of periods into CPUThrottlingHigh (2026-11-05).
   resources:
     requests: { cpu: 20m, memory: 32Mi }
-    limits: { cpu: 400m, memory: 96Mi }
+    limits: { memory: 96Mi }
 
 # --- control plane scrape posture (Talos) ---
 # kube-proxy does not exist (Cilium replaces it). Scheduler and controller-manager run as
