@@ -1,0 +1,442 @@
+# The edge's own record of unorouter.com from the free GraphQL Analytics API (Logpush is usage
+# billed). Origin only sees what the edge let through: 47 of about 330k bot requests in the
+# 2026-11-05 17:35 UTC wave. Every minute, for the window ending CF_LAG_SECONDS ago (the adaptive
+# datasets fill in late):
+#   firewallEventsAdaptive: every raw event, one Loki line {app="cf-firewall", host, action},
+#     re-reading CF_OVERLAP_SECONDS and deduplicating on (rayName, source, ruleId, action). A full
+#     page is split at its last second and the rest read from there.
+#   httpRequestsAdaptiveGroups: one Loki line per (client address, host, protocol, TLS, content
+#     type, security action, status, user agent) and minute {app="cf-http", host}, plus low
+#     cardinality totals as Prometheus counters. A full page splits the minute in halves.
+# Limits, fields and queries: docs/monitoring.md "Cloudflare analytics (cf-analytics)".
+# Token: cloudflare-edge analytics_token (Zone Analytics Read), shared with edge-probe-watch.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: cf-analytics
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { name: vault-platform, kind: ClusterSecretStore }
+  target:
+    name: cf-analytics
+    creationPolicy: Owner
+  data:
+    - secretKey: CF_API_TOKEN
+      remoteRef: { key: cloudflare-edge, property: analytics_token }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cf-analytics
+  namespace: monitoring
+data:
+  poller.py: |
+    import hashlib, json, os, re, signal, sys, threading, time, urllib.error, urllib.request
+    from collections import defaultdict
+    from datetime import datetime, timezone
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    TOKEN = os.environ["CF_API_TOKEN"]
+    ZONE = os.environ.get("CF_ZONE_ID", "bc178db579d52011b4b2998da622b9e3")
+    LOKI = os.environ.get("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100")
+    KNOWN = {h.strip() for h in os.environ.get("KNOWN_HOSTS", "").split(",") if h.strip()}
+    LAG = int(os.environ.get("CF_LAG_SECONDS", "180"))
+    OVERLAP = int(os.environ.get("CF_OVERLAP_SECONDS", "120"))
+    CATCHUP = int(os.environ.get("CF_CATCHUP_MINUTES", "15"))
+    PAGE = int(os.environ.get("CF_PAGE_SIZE", "10000"))
+    # Cloudflare allows 300 GraphQL queries per 5 minutes per user, and edge-probe-watch spends the same token
+    QPM = int(os.environ.get("CF_MAX_QUERIES_PER_MINUTE", "40"))
+
+    FW_FIELDS = ("datetime rayName action source ruleId rulesetId description kind matchIndex sampleInterval clientIP clientIPClass "
+                 "clientAsn clientASNDescription clientCountryName clientRequestHTTPHost clientRequestHTTPMethodName "
+                 "clientRequestHTTPProtocol clientRequestScheme clientRequestPath clientRequestQuery clientRefererHost "
+                 "httpApplicationVersion userAgent edgeColoName edgeResponseStatus originResponseStatus verifiedBotCategory originatorRayName")
+    IP_DIMS = ("clientIP clientAsn clientCountryName clientRequestHTTPHost clientRequestHTTPProtocol clientSSLProtocol "
+               "clientTLSKeyExchangeGroup edgeResponseContentTypeName securityAction edgeResponseStatus userAgent")
+    TOTAL_DIMS = ("clientRequestHTTPHost clientRequestHTTPProtocol clientSSLProtocol clientTLSKeyExchangeGroup securityAction "
+                  "requestSource edgeResponseStatus edgeResponseContentTypeName")
+    # relay keys and OAuth codes travel in the query string
+    SECRET_PARAM = re.compile(r"(?i)([?&](?:key|api_?key|token|access_token|refresh_token|id_token|secret|client_secret|password|sig|signature|code|state|session)=)[^&#]*")
+
+    def log(**kv): print(json.dumps({"kind": "cf-analytics", **kv}, separators=(",", ":")), flush=True)
+
+    LOCK = threading.Lock()
+    METRICS = defaultdict(float)
+    TYPES = {}
+
+    def esc(v): return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+    def inc(name, v=1, **labels):
+        TYPES[name] = "counter"
+        with LOCK: METRICS[(name, tuple(sorted(labels.items())))] += v
+
+    def gauge(name, v, **labels):
+        TYPES[name] = "gauge"
+        with LOCK: METRICS[(name, tuple(sorted(labels.items())))] = v
+
+    def render():
+        with LOCK: items = sorted(METRICS.items())
+        out, typed = [], set()
+        for (name, labels), v in items:
+            if name not in typed: out.append(f"# TYPE {name} {TYPES[name]}"); typed.add(name)
+            lab = ",".join(f'{k}="{esc(x)}"' for k, x in labels)
+            val = str(int(v)) if float(v).is_integer() else repr(v)
+            out.append(f"{name}{{{lab}}} {val}" if lab else f"{name} {val}")
+        return "\n".join(out) + "\n"
+
+    def iso(t): return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    def epoch(s): return int(datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
+    def host_label(h): return h if h in KNOWN else "other"
+
+    def status_class(s):
+        try: return f"{int(s) // 100}xx"
+        except (TypeError, ValueError): return "unknown"
+
+    class Deferred(Exception): pass
+
+    _sent, _cool = [], {"until": 0.0, "strikes": 0}
+
+    def gql(dataset, query, variables):
+        now = time.time()
+        if now < _cool["until"]: raise Deferred(f"rate limited, cooling down {int(_cool['until'] - now)}s")
+        _sent[:] = [t for t in _sent if t > now - 60]
+        if len(_sent) >= QPM: raise Deferred(f"query budget of {QPM} a minute spent")
+        _sent.append(now)
+        req = urllib.request.Request("https://api.cloudflare.com/client/v4/graphql",
+                                     data=json.dumps({"query": query, "variables": variables}).encode(),
+                                     headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json",
+                                              "User-Agent": "cf-analytics/1"})
+        limited = False
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r: d = json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code != 429: inc("cf_analytics_queries_total", dataset=dataset, result=f"http_{e.code}"); raise RuntimeError(f"GraphQL HTTP {e.code}")
+            limited, d = True, {}
+        errors = d.get("errors") or []
+        if limited or any(re.search(r"rate.?limit|too many", str(x.get("message", "")), re.I) for x in errors):
+            _cool["strikes"] += 1
+            _cool["until"] = time.time() + min(900, 60 * 2 ** (_cool["strikes"] - 1))
+            inc("cf_analytics_queries_total", dataset=dataset, result="rate_limited")
+            inc("cf_analytics_rate_limited_total")
+            raise Deferred("rate limited by Cloudflare")
+        if errors:
+            inc("cf_analytics_queries_total", dataset=dataset, result="error")
+            raise RuntimeError("GraphQL: " + "; ".join(str(x.get("message", ""))[:200] for x in errors[:3]))
+        _cool["strikes"] = 0
+        inc("cf_analytics_queries_total", dataset=dataset, result="ok")
+        return d["data"]["viewer"]["zones"][0]
+
+    def loki_push(streams):
+        # Under Loki's 3MB per stream push limit even when one host carries a whole wave.
+        chunks, cur, size = [], [], 0
+        for labels, values in streams.items():
+            for i in range(0, len(values), 2000):
+                part = values[i:i + 2000]
+                cur.append({"stream": dict(labels), "values": part}); size += sum(len(v[1]) + 40 for v in part)
+                if size >= 1_500_000: chunks.append(cur); cur, size = [], 0
+        if cur: chunks.append(cur)
+        for c in chunks:
+            body = json.dumps({"streams": c}, separators=(",", ":")).encode()
+            for attempt in range(4):
+                if attempt: time.sleep(2 ** attempt)
+                try:
+                    with urllib.request.urlopen(urllib.request.Request(LOKI + "/loki/api/v1/push", data=body,
+                                                headers={"Content-Type": "application/json"}), timeout=30) as r: r.read()
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code < 429: raise RuntimeError(f"Loki refused a push: {e.code} {e.read()[:200]!r}")
+                except OSError: pass
+            else:
+                n = sum(len(s["values"]) for s in c)
+                inc("cf_analytics_loki_dropped_total", n, app=c[0]["stream"]["app"])
+                raise RuntimeError("Loki push failed four times")
+            for s in c: inc("cf_analytics_loki_lines_total", len(s["values"]), app=s["stream"]["app"])
+
+    # A fixed offset inside the window per line keeps timestamps distinct, so a reader paging by
+    # timestamp never skips lines that share a second, and a resent line lands on the same one.
+    def ts_ns(start, width, ident):
+        return str(start * 10**9 + int(hashlib.sha1(ident.encode()).hexdigest()[:15], 16) % (width * 10**9))
+
+    FW_QUERY = ("query($z:String!,$s:Time!,$e:Time!){viewer{zones(filter:{zoneTag:$z}){firewallEventsAdaptive("
+                "filter:{datetime_geq:$s,datetime_lt:$e},limit:%d,orderBy:[datetime_ASC]){%s}}}}" % (PAGE, FW_FIELDS))
+
+    fw = {"end": None, "floor": None}
+    seen = {}
+
+    def fw_key(r): return f"{r.get('rayName')}|{r.get('source')}|{r.get('ruleId')}|{r.get('action')}"
+
+    def fw_line(r):
+        x = {k: v for k, v in r.items() if v not in ("", None)}
+        if "clientRequestQuery" in x: x["clientRequestQuery"] = SECRET_PARAM.sub(r"\1[redacted]", x["clientRequestQuery"])[:500]
+        if "description" in x: x["description"] = x["description"][:80]
+        if "userAgent" in x: x["userAgent"] = x["userAgent"][:400]
+        return json.dumps(x, separators=(",", ":"))
+
+    def fw_emit(rows, stats):
+        streams, fresh, batch = defaultdict(list), [], set()
+        for r in rows:
+            k = fw_key(r)
+            if k in seen or k in batch: stats["dupes"] += 1; continue
+            batch.add(k); fresh.append((k, r))
+            labels = (("app", "cf-firewall"), ("host", host_label(r.get("clientRequestHTTPHost", ""))), ("action", r.get("action") or "unknown"))
+            streams[labels].append([ts_ns(epoch(r["datetime"]), 1, k), fw_line(r)])
+        if streams: loki_push(streams)
+        for k, r in fresh:
+            seen[k] = epoch(r["datetime"])
+            inc("cf_firewall_events_total", int(r.get("sampleInterval") or 1), host=host_label(r.get("clientRequestHTTPHost", "")),
+                action=r.get("action") or "unknown", source=r.get("source") or "unknown")
+        inc("cf_analytics_rows_total", len(fresh), dataset="firewall")
+        stats["new"] += len(fresh)
+
+    def firewall(target):
+        if fw["end"] is None: fw["floor"] = fw["end"] = target - 60
+        start = max(fw["end"] - OVERLAP, fw["floor"], target - CATCHUP * 60)
+        if fw["end"] < target - CATCHUP * 60: inc("cf_analytics_skipped_seconds_total", target - CATCHUP * 60 - fw["end"], dataset="firewall")
+        stats, s = {"new": 0, "dupes": 0, "pages": 0, "splits": 0, "truncated": 0}, start
+        while s < target:
+            rows = gql("firewall", FW_QUERY, {"z": ZONE, "s": iso(s), "e": iso(target)})["firewallEventsAdaptive"]
+            stats["pages"] += 1; inc("cf_analytics_pages_total", dataset="firewall")
+            nxt = target
+            if len(rows) >= PAGE:
+                last = epoch(rows[-1]["datetime"])
+                if last > s:
+                    rows, nxt = [r for r in rows if epoch(r["datetime"]) < last], last
+                    stats["splits"] += 1; inc("cf_analytics_splits_total", dataset="firewall")
+                else:
+                    nxt = s + 1
+                    stats["truncated"] += 1; inc("cf_analytics_truncated_total", dataset="firewall")
+            fw_emit(rows, stats)
+            s = nxt
+            fw["end"] = max(fw["end"], s)
+        for k in [k for k, t in seen.items() if t < start]: del seen[k]
+        gauge("cf_analytics_rows_per_minute", stats["new"], dataset="firewall")
+        gauge("cf_analytics_window_end_timestamp_seconds", target, dataset="firewall")
+        return stats
+
+    def groups_query(dims, flt):
+        return ("query($z:String!,$s:Time!,$e:Time!){viewer{zones(filter:{zoneTag:$z}){httpRequestsAdaptiveGroups("
+                "filter:{AND:[{datetime_geq:$s},{datetime_lt:$e}" + flt + "]},limit:%d){count avg{sampleInterval} "
+                "sum{visits edgeResponseBytes} dimensions{%s}}}}}" % (PAGE, dims))
+
+    IP_QUERY = groups_query(IP_DIMS, ',{requestSource:"eyeball"}')
+    TOTAL_QUERY = groups_query(TOTAL_DIMS, "")
+
+    def groups(dataset, query, s, e, stats):
+        rows = gql(dataset, query, {"z": ZONE, "s": iso(s), "e": iso(e)})["httpRequestsAdaptiveGroups"]
+        stats["pages"] += 1; inc("cf_analytics_pages_total", dataset=dataset)
+        if len(rows) >= PAGE:
+            if e - s > 1:
+                stats["splits"] += 1; inc("cf_analytics_splits_total", dataset=dataset)
+                mid = (s + e) // 2
+                return groups(dataset, query, s, mid, stats) + groups(dataset, query, mid, e, stats)
+            stats["truncated"] += 1; inc("cf_analytics_truncated_total", dataset=dataset)
+        return [(s, e, r) for r in rows]
+
+    http = {"next": None}
+
+    # count in the Adaptive groups is already the sample-weighted estimate (it equals the sum of
+    # sampleInterval over the raw rows); only raw firewall rows are weighted here
+    def http_minute(m, stats):
+        per_ip = groups("http_ip", IP_QUERY, m, m + 60, stats)
+        totals = groups("http_total", TOTAL_QUERY, m, m + 60, stats)
+        streams, ips = defaultdict(list), set()
+        for s, e, r in per_ip:
+            d = r["dimensions"]
+            ips.add(d.get("clientIP"))
+            x = {"t": iso(s), **({"secs": e - s} if e - s != 60 else {}), **{k: v for k, v in d.items() if v not in ("", None)},
+                 "count": r["count"], "visits": r["sum"]["visits"], "edgeResponseBytes": r["sum"]["edgeResponseBytes"],
+                 "sampleInterval": round(r["avg"]["sampleInterval"], 3)}
+            if "userAgent" in x: x["userAgent"] = x["userAgent"][:400]
+            line = json.dumps(x, separators=(",", ":"))
+            streams[(("app", "cf-http"), ("host", host_label(d.get("clientRequestHTTPHost", ""))))].append([ts_ns(s, e - s, line), line])
+        if streams: loki_push(streams)
+        for _, _, r in totals:
+            d, n, h = r["dimensions"], r["count"], host_label(r["dimensions"].get("clientRequestHTTPHost", ""))
+            inc("cf_http_requests_total", n, host=h, protocol=d.get("clientRequestHTTPProtocol", ""), tls=d.get("clientSSLProtocol", ""),
+                kex=d.get("clientTLSKeyExchangeGroup", ""), source=d.get("requestSource", ""), status=status_class(d.get("edgeResponseStatus")))
+            inc("cf_http_requests_by_action_total", n, host=h, action=d.get("securityAction", ""), source=d.get("requestSource", ""))
+            inc("cf_http_requests_by_content_total", n, host=h, content=d.get("edgeResponseContentTypeName", ""))
+            if r["sum"]["visits"]: inc("cf_http_visits_total", r["sum"]["visits"], host=h)
+        inc("cf_analytics_rows_total", len(per_ip), dataset="http_ip")
+        inc("cf_analytics_rows_total", len(totals), dataset="http_total")
+        gauge("cf_analytics_rows_per_minute", len(per_ip), dataset="http_ip")
+        gauge("cf_analytics_rows_per_minute", len(totals), dataset="http_total")
+        gauge("cf_http_client_addresses", len(ips))
+        stats["groups"] += len(per_ip)
+
+    def http_minutes(target):
+        if http["next"] is None: http["next"] = target - 60
+        if http["next"] < target - CATCHUP * 60:
+            inc("cf_analytics_skipped_seconds_total", target - CATCHUP * 60 - http["next"], dataset="http")
+            http["next"] = target - CATCHUP * 60
+        stats = {"minutes": 0, "groups": 0, "pages": 0, "splits": 0, "truncated": 0}
+        while http["next"] + 60 <= target:
+            http_minute(http["next"], stats)
+            http["next"] += 60; stats["minutes"] += 1
+            gauge("cf_analytics_window_end_timestamp_seconds", http["next"], dataset="http")
+        return stats
+
+    state = {"tick": 0.0}
+
+    def tick():
+        target = (int(time.time()) - LAG) // 60 * 60
+        out = {"window_end": iso(target)}
+        for name, fn in (("firewall", firewall), ("http", http_minutes)):
+            t0 = time.time()
+            try:
+                out[name] = fn(target)
+                gauge("cf_analytics_last_success_timestamp_seconds", time.time(), dataset=name)
+            except Deferred as e:
+                inc("cf_analytics_deferred_total", dataset=name); out[name] = {"deferred": str(e)}
+            except Exception as e:
+                inc("cf_analytics_errors_total", dataset=name); out[name] = {"error": str(e)[:300]}
+            gauge("cf_analytics_run_seconds", round(time.time() - t0, 3), dataset=name)
+        gauge("cf_analytics_queries_last_minute", len([t for t in _sent if t > time.time() - 60]))
+        state["tick"] = time.time()
+        log(event="run", **out)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/metrics": body, code = render().encode(), 200
+            elif self.path == "/healthz":
+                ok = time.time() - state["tick"] < 600
+                body, code = (b"ok" if ok else b"no run for 10 minutes"), (200 if ok else 503)
+            else: body, code = b"", 404
+            self.send_response(code); self.send_header("Content-Type", "text/plain; version=0.0.4"); self.end_headers(); self.wfile.write(body)
+        def log_message(self, *a): pass
+
+    if __name__ == "__main__":
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        state["tick"] = time.time()
+        threading.Thread(target=ThreadingHTTPServer(("", 8080), Handler).serve_forever, daemon=True).start()
+        log(event="start", lag=LAG, overlap=OVERLAP, page=PAGE, max_queries_per_minute=QPM)
+        while True:
+            tick()
+            time.sleep(65 - time.time() % 60)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cf-analytics
+  namespace: monitoring
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: cf-analytics }
+  template:
+    metadata:
+      labels: { app: cf-analytics }
+      # python reads poller.py once at start: bump with every ConfigMap change so ArgoCD rolls the pod
+      annotations: { config-rev: "1" }
+    spec:
+      serviceAccountName: poller
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: poller
+          image: python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
+          command: ["python3", "-u", "/app/poller.py"]
+          envFrom: [{ secretRef: { name: cf-analytics } }]
+          env:
+            - name: KNOWN_HOSTS
+              value: unorouter.com,www.unorouter.com,api.unorouter.com,bot.unorouter.com,mcp.unorouter.com,teleport.unorouter.com,dex.unorouter.com,s3.unorouter.com,cards.unorouter.com,status.unorouter.com,grafana.unorouter.com,argocd.unorouter.com,openbao.unorouter.com,openbao-ci.unorouter.com,import.unorouter.com
+          ports:
+            - { name: http, containerPort: 8080 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          # a wave page is 10000 rows, held twice while it is serialized and pushed
+          resources:
+            requests: { cpu: 10m, memory: 48Mi }
+            limits: { memory: 256Mi }
+          volumeMounts: [{ name: app, mountPath: /app, readOnly: true }]
+      volumes:
+        - name: app
+          configMap: { name: cf-analytics }
+---
+# The poller account already reaches Alertmanager and the internet on 443 (policy watchers).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: cf-analytics
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app: cf-analytics }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8080", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: loki }
+      toPorts:
+        - ports: [{ port: "3100", protocol: TCP }]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cf-analytics
+  namespace: monitoring
+  labels: { release: kps }
+spec:
+  selector:
+    matchLabels: { app: cf-analytics }
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 60s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cf-analytics
+  namespace: monitoring
+  labels: { release: kps }
+spec:
+  groups:
+    - name: cf-analytics
+      rules:
+        - alert: CfAnalyticsStale
+          expr: >-
+            (time() - max by (dataset) (cf_analytics_last_success_timestamp_seconds) > 900)
+            or (time() - max by (dataset) (cf_analytics_window_end_timestamp_seconds) > 1200)
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "cf-analytics {{ $labels.dataset }} is {{ $value | humanizeDuration }} behind: the edge record is not arriving in Loki"
+        - alert: CfAnalyticsMissing
+          expr: absent(up{job=~".*cf-analytics.*"} == 1)
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "cf-analytics is not scraped: the poller is down or gone"
+        - alert: CfAnalyticsFailing
+          expr: sum by (dataset) (increase(cf_analytics_errors_total[15m])) >= 5
+          labels: { severity: warning }
+          annotations:
+            summary: "cf-analytics {{ $labels.dataset }} failed {{ $value }} runs in 15 minutes (pod log kind=cf-analytics)"
+        - alert: CfAnalyticsRateLimited
+          expr: increase(cf_analytics_rate_limited_total[15m]) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "Cloudflare answered cf-analytics with a rate limit: the token's 300 queries per 5 minutes are shared with edge-probe-watch"
+        - alert: CfAnalyticsTruncated
+          expr: sum by (dataset) (increase(cf_analytics_truncated_total[30m])) > 0
+          labels: { severity: info }
+          annotations:
+            summary: "cf-analytics {{ $labels.dataset }} hit a full page it could not split further: events of that second are missing"

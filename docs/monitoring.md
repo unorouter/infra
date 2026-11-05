@@ -147,6 +147,11 @@ names in clear), writer pair `secret/s3gw` in the `fp-autoban` ExternalSecret:
   with the `secret/pg-s3` pair, add to it, PUT it back, never PUT a partial one.
 - `FingerprintAutobanArchiveFailing` (warning) after six failed writes in a row; the pod keeps
   at most 120 unwritten runs.
+- Each archived minute also carries `edge`: the cf-analytics firewall events of the minute
+  `FP_EDGE_LAG_SECONDS` (300) before it, weighted by `sampleInterval` and summed per action,
+  outcome (`challenged`, `solved`, `bypassed`, `failed`, `blocked`, `skip`, `log`), source, rule,
+  HTTP protocol, host, ASN and user agent family, plus the 300 busiest addresses (hashed) with
+  their outcomes. Not scored; the `run` log line carries its totals.
 
 ### Replay and tuning
 
@@ -188,3 +193,79 @@ per-IP auto-ban catches single-source floods. Details: `incidents/2026-09-03-l7-
 - Header-name checks must use `lower(http.request.headers.names[*])`.
 - 504s with origin status 0 and a UA containing "early hints" are Cloudflare synthetics, filter them out
   before reading any 5xx rate.
+
+### Cloudflare analytics (cf-analytics)
+
+Origin logs only what the edge lets through (47 of about 330k bot requests in the 2026-11-05
+17:35 UTC wave). `infra/monitoring/extras/pollers/cf-analytics.yaml` (Python, one replica, token
+`cloudflare-edge analytics_token`) reads the edge's own record from the GraphQL Analytics API,
+which is free on Pro; Logpush is a usage billed subscription and was declined.
+
+Limits of zone `unorouter.com` (`viewer.zones.settings`, read 2026-11-05):
+
+| dataset | max window | retention | page | fields |
+| --- | --- | --- | --- | --- |
+| `firewallEventsAdaptive` | 30 d | 31 d | 10000 | 40 |
+| `firewallEventsAdaptiveGroups` | 1 d | 3 d | 10000 | 30 |
+| `httpRequestsAdaptive` | 30 d | 31 d | 10000 | 70 |
+| `httpRequestsAdaptiveGroups` | 30 d | 31 d | 10000 | 40 |
+
+Queries: 300 per 5 minutes per user, shared with edge-probe-watch (4 to 7 per 5 minutes). The
+poller spends 3 a minute when quiet and caps itself at `CF_MAX_QUERIES_PER_MINUTE` (40); a 429
+cools it down 1, 2, 4 up to 15 minutes. No JA3, JA4 or bot score on Pro (`ja3Hash` is refused).
+Both Adaptive groups datasets return `count` already weighted: it equals the sum of
+`sampleInterval` over the raw rows (7811 for 6560 skip rows, 2026-11-05 18:52). Raw firewall
+rows are sampled too (`sampleInterval` 1 to 10 seen) and every count from them is weighted by it.
+
+Every minute, for the window ending 3 minutes ago (`CF_LAG_SECONDS`):
+
+- **`{app="cf-firewall", host, action}`**: every firewall event, one JSON line with the
+  Cloudflare field names: `datetime rayName action source ruleId rulesetId description kind
+  matchIndex sampleInterval clientIP clientIPClass clientAsn clientASNDescription
+  clientCountryName clientRequestHTTPHost clientRequestHTTPMethodName clientRequestHTTPProtocol
+  clientRequestScheme clientRequestPath clientRequestQuery clientRefererHost
+  httpApplicationVersion userAgent edgeColoName edgeResponseStatus originResponseStatus
+  verifiedBotCategory originatorRayName` (empty fields left out). Actions are snake case
+  (`managed_challenge_non_interactive_solved`, `managed_challenge_bypassed`). The dataset has no
+  TLS fields. The query string has `key`, `token`, `code`, `state` and similar values replaced by
+  `[redacted]`. It re-reads the last 2 minutes (`CF_OVERLAP_SECONDS`) and drops events already
+  sent by (rayName, source, ruleId, action); a full page is cut at its last second and the read
+  continues from there. About 2200 lines a minute on a quiet evening, 98% of them `skip` (the
+  logged in browsers rule and the machine surface skips).
+- **`{app="cf-http", host}`**: client requests (`requestSource` eyeball) grouped per minute by
+  `clientIP clientAsn clientCountryName clientRequestHTTPHost clientRequestHTTPProtocol
+  clientSSLProtocol clientTLSKeyExchangeGroup edgeResponseContentTypeName securityAction
+  edgeResponseStatus userAgent`, one line per group with `t`, `count`, `visits`,
+  `edgeResponseBytes`, `sampleInterval` (`secs` when a full page split the minute). About 1100
+  lines a minute.
+- **Prometheus** (no addresses, hosts outside `KNOWN_HOSTS` are `other`):
+  `cf_http_requests_total{host,protocol,tls,kex,source,status}`,
+  `cf_http_requests_by_action_total{host,action,source}`,
+  `cf_http_requests_by_content_total{host,content}`, `cf_http_visits_total{host}`,
+  `cf_http_client_addresses`, `cf_firewall_events_total{host,action,source}`, and for the
+  poller itself `cf_analytics_rows_total`, `cf_analytics_rows_per_minute`,
+  `cf_analytics_pages_total`, `cf_analytics_splits_total`, `cf_analytics_truncated_total`,
+  `cf_analytics_queries_total{result}`, `cf_analytics_rate_limited_total`,
+  `cf_analytics_loki_lines_total`.
+- **Alerts**: `CfAnalyticsStale` (a dataset 15 minutes without a good run or 20 minutes behind),
+  `CfAnalyticsMissing`, `CfAnalyticsFailing`, `CfAnalyticsRateLimited`, `CfAnalyticsTruncated`
+  (info). Run log: `{namespace="monitoring", app="cf-analytics"} |= "cf-analytics"`.
+
+Behavior signals (Loki keeps at most 500 series per query, so per address queries need `topk`):
+
+```logql
+# assets per document per address: a browser loads tens of js, css and images per html page
+topk(20, sum by (clientIP) (sum_over_time({app="cf-http", host="unorouter.com"} | json | edgeResponseContentTypeName!="html" | unwrap count [10m]))
+  / sum by (clientIP) (sum_over_time({app="cf-http", host="unorouter.com"} | json | edgeResponseContentTypeName="html" | unwrap count [10m])))
+# HTTP protocol and key exchange mix: Chrome 131+ offers X25519MLKEM768 and speaks h2 or h3
+sum by (clientRequestHTTPProtocol, clientTLSKeyExchangeGroup) (sum_over_time({app="cf-http"} | json | userAgent=~".*Chrome/1[3-9][0-9].*" | unwrap count [10m]))
+# requests per address and per user agent
+topk(20, sum by (clientIP) (sum_over_time({app="cf-http"} | json | unwrap count [5m])))
+topk(20, sum by (userAgent) (sum_over_time({app="cf-http"} | json | unwrap count [5m])))
+# challenges issued, solved and bypassed (a clearance cookie from an earlier solve)
+sum by (action) (sum_over_time({app="cf-firewall", action=~".*challenge.*"} | json | unwrap sampleInterval [1h]))
+# addresses challenged that never solved
+topk(20, sum by (clientIP) (count_over_time({app="cf-firewall", action="managed_challenge"} | json [1h])))
+```
+
+fp-autoban reads `{app="cf-firewall"}` as its edge input (see its Archive section).
