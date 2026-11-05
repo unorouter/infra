@@ -779,13 +779,18 @@ data:
           # A container process opened Talos machine secrets or state, etcd data, kubelet PKI or
           # kubernetes config on the host (TracingPolicy sensitive-host-files): it reached the
           # host filesystem, the way the 2026-09-29 pods did through hostPID and /proc/1/root.
+          # Skipped: host PID 1 with no pod, as rebuilt from /proc when Tetragon starts. For a few
+          # seconds after a restart etcd's own reads carry that identity and miss the binary
+          # exclusion (2026-11-05 22:15, every node); no container process is ever host PID 1.
           - alert: TetragonHostSecretAccess
             expr: >-
               sum by (node, t_ns, t_pod, t_bin, t_path) (
                 count_over_time(
                   {namespace="kube-system", container="export-stdout"} |= "security_file_permission"
                     | json t_ns="process_kprobe.process.pod.namespace", t_pod="process_kprobe.process.pod.name",
-                           t_bin="process_kprobe.process.binary", t_path="process_kprobe.args[0].file_arg.path"
+                           t_bin="process_kprobe.process.binary", t_path="process_kprobe.args[0].file_arg.path",
+                           t_pid="process_kprobe.process.pid", t_flags="process_kprobe.process.flags"
+                    | t_pid != "1" or t_pod != "" or t_flags !~ ".*procFS.*"
                   [5m]
                 )
               ) > 0
