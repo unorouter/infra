@@ -2,7 +2,8 @@
 # billed). Origin only sees what the edge let through: 47 of about 330k bot requests in the
 # 2026-11-05 17:35 UTC wave. Every minute, for the window ending CF_LAG_SECONDS ago (the adaptive
 # datasets fill in late):
-#   firewallEventsAdaptive: every raw event, one Loki line {app="cf-firewall", host, action},
+#   firewallEventsAdaptive: every raw event except skips (98% of them, counted in Prometheus only,
+#     the cf-http groups below already carry that traffic per address), one Loki line {app="cf-firewall", host, action},
 #     re-reading CF_OVERLAP_SECONDS and deduplicating on (rayName, source, ruleId, action). A full
 #     page is split at its last second and the rest read from there.
 #   httpRequestsAdaptiveGroups: one Loki line per (client address, host, protocol, TLS, content
@@ -179,6 +180,7 @@ data:
             k = fw_key(r)
             if k in seen or k in batch: stats["dupes"] += 1; continue
             batch.add(k); fresh.append((k, r))
+            if r.get("action") == "skip": continue
             labels = (("app", "cf-firewall"), ("host", host_label(r.get("clientRequestHTTPHost", ""))), ("action", r.get("action") or "unknown"))
             streams[labels].append([ts_ns(epoch(r["datetime"]), 1, k), fw_line(r)])
         if streams: loki_push(streams)

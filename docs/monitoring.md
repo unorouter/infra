@@ -219,7 +219,7 @@ rows are sampled too (`sampleInterval` 1 to 10 seen) and every count from them i
 
 Every minute, for the window ending 3 minutes ago (`CF_LAG_SECONDS`):
 
-- **`{app="cf-firewall", host, action}`**: every firewall event, one JSON line with the
+- **`{app="cf-firewall", host, action}`**: every firewall event except `skip`, one JSON line with the
   Cloudflare field names: `datetime rayName action source ruleId rulesetId description kind
   matchIndex sampleInterval clientIP clientIPClass clientAsn clientASNDescription
   clientCountryName clientRequestHTTPHost clientRequestHTTPMethodName clientRequestHTTPProtocol
@@ -230,8 +230,9 @@ Every minute, for the window ending 3 minutes ago (`CF_LAG_SECONDS`):
   TLS fields. The query string has `key`, `token`, `code`, `state` and similar values replaced by
   `[redacted]`. It re-reads the last 2 minutes (`CF_OVERLAP_SECONDS`) and drops events already
   sent by (rayName, source, ruleId, action); a full page is cut at its last second and the read
-  continues from there. About 2200 lines a minute on a quiet evening, 98% of them `skip` (the
-  logged in browsers rule and the machine surface skips).
+  continues from there. Skips were 98% of about 2200 events a minute on a quiet evening (the
+  logged in browsers rule and the machine surface skips): they only feed `cf_firewall_events_total`
+  (per host, source), since the `cf-http` groups already carry that traffic per address.
 - **`{app="cf-http", host}`**: client requests (`requestSource` eyeball) grouped per minute by
   `clientIP clientAsn clientCountryName clientRequestHTTPHost clientRequestHTTPProtocol
   clientSSLProtocol clientTLSKeyExchangeGroup edgeResponseContentTypeName securityAction
