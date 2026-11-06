@@ -274,12 +274,13 @@ spec:
               and look for logins as the edited users immediately afterwards.
 
     # B2. Money. The Discord bot issues $0.01-$0.50 grants hundreds of times a day, so
-    # the signal is SIZE, not volume: no automated path on this platform grants $5 or
-    # more.
+    # the signal is SIZE, not volume: the only automated path that grants $5 or more is
+    # the bot's one time level 7 reward, which pages only when several land at once.
     - name: newapi.security.quota
       rules:
         - alert: LargeQuotaGrant
-          expr: cnpg_newapi_quota_grant_large > 0
+          expr: >-
+            (cnpg_newapi_quota_grant_large unless cnpg_newapi_quota_grant_large{usd="5", detail=~"level 7: reached level .*"}) > 0
           for: 0m
           labels: { page: "true", severity: critical }
           annotations:
@@ -292,6 +293,18 @@ spec:
               means a caller that does not send one (an old bot build or a direct API
               call), which needs a human to confirm. Bot ledger: reward_grants in
               unorouter-bot-db (bot-pg), new_api_user_id = {{ $labels.user_id }}.
+        # A forged reason would need the bot's service token; a real level 7 reaches one
+        # member at a time (1 in 30 days to 2026-11-06).
+        - alert: LevelRewardBurst
+          expr: >-
+            count(cnpg_newapi_quota_grant_large{usd="5", detail=~"level 7: reached level .*"}) > 2
+          for: 0m
+          labels: { page: "true", severity: critical }
+          annotations:
+            summary: "{{ $value }} level 7 rewards ($5 each) in 5 minutes"
+            description: >-
+              More level 7 rewards at once than members level up. Compare reward_grants in
+              unorouter-bot-db (bot-pg) with the members' message history before trusting them.
     # B3. Partner money movement. These routes convert an account's own balance into
     # value that leaves it: a gift card is a bearer code, and a grant is irreversible
     # once it lands. They accept a PAT by design, because partners script them, so a
