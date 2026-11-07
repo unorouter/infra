@@ -2,7 +2,7 @@
 # the Cloudflare zone into attack mode, resolved switches back after a hold, and every switch is
 # posted to Discord. It edits a few live rules in place, found by description, so the encrypted
 # rule files in infra/cloudflare stay the source of truth; apply.sh attack|normal does the same
-# by hand except the HTTP/2 challenge, which only exists here. Thresholds come from the same OpenBao
+# by hand except the attack challenge, which is inserted from here. Thresholds come from the same OpenBao
 # secret as the token, not from this file.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
@@ -58,11 +58,14 @@ data:
                "expression": BROWSER_HOSTS, "action_parameters": {"security_level": "under_attack"}}
     # The 2026-11-04 botnets spoke only HTTP/2, while real Chrome moves to HTTP/3 after its first
     # visit. A challenge, not a block: a first visit is HTTP/2 too, and blocking it turned away about
-    # 8.8k real requests an hour. Sessions skip it (placed after their skip).
+    # 8.8k real requests an hour. HTTP/1 too: no current browser loads pages over it, and the
+    # 2026-11-07 trigger was one client on HTTP/1.1 that an HTTP/2 only challenge never touched
+    # while it challenged about 1,900 real visitors. Sessions, our prefixes and our tools'
+    # x-edge-dev header skip it (placed after both skips).
     H2_RULE = {"ref": "edge_mode_attack_h2", "action": "managed_challenge", "enabled": True,
-               "description": "ATTACK MODE: challenge anonymous HTTP/2 page requests on browser hosts",
+               "description": "ATTACK MODE: challenge anonymous HTTP/1 and HTTP/2 page requests on browser hosts",
                "expression": ('(http.host in {"unorouter.com" "www.unorouter.com" "status.unorouter.com"} '
-                              'and http.request.version eq "HTTP/2" '
+                              'and http.request.version in {"HTTP/1.0" "HTTP/1.1" "HTTP/2"} '
                               'and not cf.client.bot '
                               'and not ends_with(http.request.uri.path, ".webmanifest") '
                               'and not http.request.uri.path in {"/robots.txt" "/sitemap.xml" "/favicon.ico" "/llms.txt"} '
@@ -73,6 +76,7 @@ data:
                               'and not starts_with(http.request.uri.path, "/icons/") '
                               'and not starts_with(http.request.uri.path, "/sw-worker/"))')}
     SESSION_SKIP = "logged-in browsers"
+    HOME_SKIP = "home networks"
     COOKIELESS = "frontend host: challenge cookie-less"
     RATE = {"normal": int(os.environ["EDGE_RATE_NORMAL"]), "attack": int(os.environ["EDGE_RATE_ATTACK"])}
     state = {"mode": None, "timer": None, "changed": None, "why": None}
@@ -123,6 +127,7 @@ data:
                 # A challenge ends evaluation for a bot holding clearance, so it goes after the blocks that follow the skip.
                 at += 1
                 while at < len(custom) and custom[at].get("action") == "block": at += 1
+                if at < len(custom) and custom[at]["description"].startswith(HOME_SKIP): at += 1
                 custom.insert(at, H2_RULE)
         cf("PUT", "/http_request_firewall_custom/entrypoint", {"rules": custom})
         rl = [strip(r) for r in cf("GET", "/http_ratelimit/entrypoint")["rules"]]
@@ -151,7 +156,7 @@ data:
                 log(f"FAILED {mode}: {e}")
                 discord(f"edge-mode FAILED to switch to {mode} ({why}): {e}"[:256], 0xE74C3C); return
         if mode == "attack":
-            discord(f"Edge ATTACK MODE on ({why}): anonymous HTTP/2 pages challenged, burst guard {RATE['attack']}/min, "
+            discord(f"Edge ATTACK MODE on ({why}): anonymous HTTP/1 and HTTP/2 pages challenged, burst guard {RATE['attack']}/min, "
                     f"cookie-less visitors challenged. Back to normal {HOLD // 60} min after the alerts resolve."[:256], 0xE74C3C)
         else:
             discord(f"Edge back to normal ({why}): burst guard {RATE['normal']}/min"[:256], 0x2ECC71)
@@ -202,7 +207,7 @@ spec:
   template:
     metadata:
       labels: { app: edge-mode }
-      annotations: { config-rev: "3" }
+      annotations: { config-rev: "4" }
     spec:
       affinity:
         nodeAffinity:
