@@ -78,7 +78,6 @@ spec:
   ingress:
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: cloudflared, app: cloudflared }
-        - matchLabels: { app: unorouter }
       toPorts:
         - ports: [{ port: "3000", protocol: TCP }]
     - fromEntities: [host]
@@ -87,9 +86,16 @@ spec:
   egress:
     - toEndpoints:
         - matchLabels: { app: new-api }
-        - matchLabels: { app: unorouter }
       toPorts:
         - ports: [{ port: "3000", protocol: TCP }]
+    # chat resume mirror (unorouter src/server/ai/chat/stream-mirror.ts); replicas no longer
+    # call each other, a resume naming a peer pod was the 2026-11-10 DoS
+    - toEndpoints:
+        - matchLabels: { app: newapi-redis-ha }
+      toPorts:
+        - ports:
+            - { port: "6379", protocol: TCP }
+            - { port: "26379", protocol: TCP }
     - toEndpoints:
         - matchLabels: { app: unorouter-bot }
       toPorts:
@@ -203,6 +209,7 @@ spec:
   ingress:
     - fromEndpoints:
         - matchLabels: { app: new-api }
+        - matchLabels: { app: unorouter }
         - matchLabels: { app: newapi-redis-ha }
       toPorts:
         - ports:
