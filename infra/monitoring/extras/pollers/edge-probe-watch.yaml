@@ -64,7 +64,7 @@ data:
         {clientRequestQuery_like:"%evil%"},{clientRequestQuery_like:"%25%0d%"},{clientRequestQuery_like:"%25%0a%"},{clientRequestQuery_like:"%code=bogus%"},
         {clientRequestQuery_like:"%code=x%"},{clientRequestQuery_like:"%169.254%"},{clientRequestQuery_like:"%localhost%"},{clientRequestQuery_like:"%127.0.0.1%"},
         {clientRequestPath_like:"%..%"},{clientRequestPath_like:"/v1/webapi/github/callback%"},{clientRequestQuery_like:"%redirect_ur%http%"}]}"""
-    FULL_DIMS = "clientIP clientAsn clientASNDescription clientCountryName userAgent clientRequestHTTPHost clientRequestHTTPMethodName clientRequestPath clientRequestQuery edgeResponseStatus"
+    FULL_DIMS = "clientIP clientAsn clientASNDescription clientCountryName userAgent clientRequestHTTPHost clientRequestHTTPMethodName clientRequestPath clientRequestQuery edgeResponseStatus securityAction"
     # Zones on the Free plan expose neither the query string nor the network in this dataset.
     LITE_FILTER = """{OR:[{edgeResponseStatus_geq:400},{clientRequestPath_like:"%..%"}]}"""
     LITE_DIMS = "clientIP clientCountryName userAgent clientRequestHTTPHost clientRequestHTTPMethodName clientRequestPath edgeResponseStatus"
@@ -88,7 +88,7 @@ data:
         rows = d["data"]["viewer"]["zones"][0]["httpRequestsAdaptiveGroups"]
         for r in rows:
             x = r["dimensions"]
-            x.setdefault("clientRequestQuery", ""); x.setdefault("clientAsn", 0); x.setdefault("clientASNDescription", "")
+            x.setdefault("clientRequestQuery", ""); x.setdefault("clientAsn", 0); x.setdefault("clientASNDescription", ""); x.setdefault("securityAction", "")
         return rows
 
     # Free plan zones carry no network, so AS0 means unknown
@@ -96,7 +96,7 @@ data:
         return f"{r['country']} AS{r['asn']} {r['asn_name'][:width]}" if r["asn"] else r["country"]
 
     def score(rows):
-        by = defaultdict(lambda: {"n": 0, "n4xx": 0, "hosts": set(), "payload": 0, "noise": 0, "tamper": 0, "unknown_host": 0, "samples": defaultdict(int), "ua": defaultdict(int)})
+        by = defaultdict(lambda: {"n": 0, "n4xx": 0, "hosts": set(), "payload": 0, "noise": 0, "tamper": 0, "unknown_host": 0, "samples": defaultdict(int), "ua": defaultdict(int), "passed": defaultdict(int)})
         for r in rows:
             x, c = r["dimensions"], r["count"]
             if own(x["clientIP"]):
@@ -114,6 +114,12 @@ data:
             if any(t.search(url) for t in TAMPER): p["tamper"] += c
             if KNOWN and ("." + host).endswith(STRICT_ZONES) and host not in KNOWN: p["unknown_host"] += c
             p["samples"][(host, x["clientRequestHTTPMethodName"], (path + qs)[:160], st)] += c
+            act = x["securityAction"]
+            if act != "block" and not act.endswith("challenge"):
+                p["passed"]["n"] += c
+                if PAYLOAD.search(path + qs): p["passed"]["payload"] += c
+                if any(t.search(url) for t in TAMPER): p["passed"]["tamper"] += c
+                if INTERNAL.search(path + qs): p["passed"]["internal"] += c
         return by
 
     # Teleport sees only cloudflared and proxy pod addresses, so the client address of a sign-in
@@ -196,12 +202,14 @@ data:
     CRAWLER = re.compile(r"Googlebot|bingbot|ClaudeBot|Claude-User|GPTBot|OAI-SearchBot|PerplexityBot|Applebot|DuckDuckBot|YandexBot|Baiduspider", re.I)
 
     # what reaches Discord: a probe aimed at internal addresses (the 2026-09-29 entry was a
-    # metadata fetch) or heavy payload/auth tampering; every other sweep is only recorded
+    # metadata fetch) or heavy payload/auth tampering, counted only over requests the edge let
+    # through. Blocked and challenged sweeps were 368 posts in the week to 2026-11-10 and are
+    # only recorded.
     INTERNAL = re.compile(r"169\.254\.|metadata\.google|localhost|127\.0\.0\.1|0x7f0|\[::1\]|oast\.|interact\.sh|burpcollaborator|file://|gopher://|dict://|\$\{jndi", re.I)
 
     def suspicious(r):
-        internal = sum(n for h, m, u, s, n in r["samples"] if INTERNAL.search(u))
-        return internal >= 1 or r["tamper"] >= 20 or r["payload"] >= 50, internal
+        ps = r["passed"]
+        return ps.get("internal", 0) >= 1 or ps.get("tamper", 0) >= 20 or ps.get("payload", 0) >= 50, ps.get("internal", 0)
 
     def verdict(p):
         targeted = p["payload"] + p["tamper"] + p["unknown_host"]
@@ -221,7 +229,7 @@ data:
             rec = {"kind": "edge-probe", "verdict": kind, "window": start, "ip": ip, "asn": p["asn"], "asn_name": p["asn_name"],
                    "country": p["country"], "requests": p["n"], "n4xx": p["n4xx"], "hosts": sorted(p["hosts"]),
                    "payload": p["payload"], "tamper": p["tamper"], "unknown_host": p["unknown_host"], "noise": p["noise"],
-                   "user_agent": max(p["ua"], key=p["ua"].get),
+                   "user_agent": max(p["ua"], key=p["ua"].get), "passed": dict(p["passed"]),
                    "samples": [[h, m, u, s, n] for (h, m, u, s), n in sorted(p["samples"].items(), key=lambda kv: -kv[1])[:30]]}
             found.append(rec)
             if emit:
@@ -244,7 +252,7 @@ data:
             import notify
             notify.alert("EdgeProbeSweep", severity="warning", ttl=1800, summary="; ".join(
                 f"{r['ip']} ({net(r, 30)}): {r['requests']} req, {len(r['hosts'])} hosts, {n} at internal addresses, "
-                f"{r['payload']} payload, {r['tamper']} auth tampering, {r['unknown_host']} unknown host" for r, n in loud[:5]))
+                f"{r['payload']} payload, {r['tamper']} auth tampering, {r['unknown_host']} unknown host, {r['passed'].get('n', 0)} past the edge" for r, n in loud[:5]))
         seen = signins(f(start), f(end))
         # one address and an operator's own GitHub login next to it is the operator signing in;
         # several addresses, or a session without a fresh login, stay a warning

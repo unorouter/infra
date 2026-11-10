@@ -58,6 +58,25 @@ spec:
         groupInterval: 1m
         repeatInterval: 10m
         continue: true
+      # The operator's own Teleport identity echoing its routine work (exec, kube changes, secret
+      # listings, dbadmin sessions, OpenBao reads) was about 300 info posts a week. A stolen
+      # session shows at sign-in (TeleportLogins, TeleportSignin, failed logins stay), and the
+      # break-glass `admin` identity keeps paging, so only these info echoes are dropped.
+      - receiver: "null"
+        matchers:
+          - { name: severity, value: info }
+          - { name: alertname, matchType: "=~", value: "K8sPodExec|K8sUnexpectedAccess|K8sSecretList" }
+          - { name: actor, value: 0-don }
+      - receiver: "null"
+        matchers:
+          - { name: severity, value: info }
+          - { name: alertname, value: TeleportDbAdminSession }
+          - { name: user, value: 0-don }
+      - receiver: "null"
+        matchers:
+          - { name: severity, value: info }
+          - { name: alertname, value: OpenBaoNonRoutineActivity }
+          - { name: auth_display_name, value: jwt-teleport-0-don }
       # Pollers speak only to Alertmanager (extras/pollers/watch-lib.yaml), so this is the single
       # Discord path for them. Digests are severity info: Discord only, never [RESOLVED],
       # one alert per distinct text so an unchanged window is not reposted. The Loki k8s-audit
