@@ -263,12 +263,22 @@ data:
         # A login belongs to the address whose callback landed within a minute of it, not to every
         # address in the window: on 2026-11-10 a scanner's forged callbacks two minutes before an
         # invited user's real login named her as the scanner.
+        # The edge reports minutes only, so each login goes to the nearest callback (at most a minute
+        # off), never to every address close enough.
         minute = lambda t: datetime.strptime(t[:16], "%Y-%m-%dT%H:%M")
-        def matched(r):
-            return sorted({e["user"] for e in nearby if e["ok"] and e["user"] and e["time"]
-                           and any(abs((minute(e["time"]) - minute(c)).total_seconds()) <= 60 for c in r["callbacks"])})
         for r in seen:
-            r["logins"] = matched(r)
+            r["logins"] = []
+        for e in nearby:
+            if not (e["ok"] and e["user"] and e["time"]):
+                continue
+            gap = {r["ip"]: min((abs((minute(e["time"]) - minute(c)).total_seconds()) for c in r["callbacks"]), default=None)
+                   for r in seen}
+            near = min((v for v in gap.values() if v is not None), default=None)
+            if near is None or near > 60:
+                continue
+            for r in seen:
+                if gap[r["ip"]] == near and e["user"] not in r["logins"]:
+                    r["logins"].append(e["user"])
         # a web session outlives its login, so a session check is matched to the logins of the
         # session lifetime before it
         holders = []
