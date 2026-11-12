@@ -109,7 +109,7 @@ spec:
           # (cloudflared #1777), and on 2026-11-04 a flood filled them until the edge closed every connection.
           image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
           resources:
-            requests: { cpu: 250m, memory: 128Mi }
+            requests: { cpu: 250m, memory: 64Mi }
             limits: { memory: 2Gi }
           ports:
             - name: metrics
