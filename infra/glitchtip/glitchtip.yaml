@@ -110,7 +110,8 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
 ---
-# In: the Teleport agent (UI for SSO users) and the site (its tunnel route and server SDK).
+# In: the Teleport agent (UI for SSO users), the site (its tunnel route and server SDK) and the
+# source map upload Job after each site deploy.
 # Out: its database and the internet on 443 for Discord alert webhooks.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -124,6 +125,7 @@ spec:
     - fromEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
         - matchLabels: { io.kubernetes.pod.namespace: services, app: unorouter }
+        - matchLabels: { io.kubernetes.pod.namespace: services, app: sourcemaps-upload }
       toPorts:
         - ports: [{ port: "8000", protocol: TCP }]
     - fromEntities: [host]

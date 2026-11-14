@@ -227,3 +227,18 @@ spec:
         - ports:
             - { port: "6379", protocol: TCP }
             - { port: "26379", protocol: TCP }
+---
+# Source map upload after each site deploy (unorouter k8s/sourcemaps.yaml): out only to GlitchTip.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: sourcemaps-upload
+  namespace: services
+spec:
+  endpointSelector:
+    matchLabels: { app: sourcemaps-upload }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: glitchtip, app: glitchtip }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
