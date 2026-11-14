@@ -74,6 +74,9 @@ apps:
     rewrite:
       redirect:
         - glitchtip.glitchtip.svc.cluster.local
+      # GlitchTip builds its SSO callback from Host; the internal name made Dex refuse it
+      headers:
+        - "Host: glitchtip.unorouter.com"
   # The gateway's log store over HTTP for runbook SQL and the laptop's new-api-sync reconcile
   # (`tsh proxy app clickhouse --port 18123`, then ClickHouse's own `reader` login). No DNS
   # record, like openbao-jwt.
