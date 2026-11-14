@@ -1,0 +1,125 @@
+# Once a day, the site's error tracker in one Discord digest: every unresolved issue seen in
+# the last 24 hours with its event count, new ones marked. GlitchTip itself posts nothing.
+# Credentials: OpenBao secret/glitchtip-report token, a GlitchTip API token with event:read only.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: glitchtip-report
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-platform
+    kind: ClusterSecretStore
+  target:
+    name: glitchtip-report
+    creationPolicy: Owner
+  data:
+    - secretKey: GLITCHTIP_TOKEN
+      remoteRef: { key: glitchtip-report, property: token }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glitchtip-report
+  namespace: monitoring
+data:
+  report.py: |
+    import json, os, urllib.parse, urllib.request
+    from datetime import datetime, timedelta, timezone
+    import notify
+
+    API = os.environ["GLITCHTIP_URL"].rstrip("/") + "/api/0/organizations/" + os.environ["GLITCHTIP_ORG"]
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    def get(path, params):
+        req = urllib.request.Request(API + path + "?" + urllib.parse.urlencode(params, doseq=True),
+                                     headers={"Authorization": "Bearer " + os.environ["GLITCHTIP_TOKEN"]})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.load(r)
+
+    at = lambda ts: datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    issues = [i for i in get("/issues/", {"query": "is:unresolved", "sort": "-last_seen", "limit": 100})
+              if at(i["lastSeen"]) >= since]
+    counts = {}
+    if issues:
+        for s in get("/issues-stats/", {"groups": [i["id"] for i in issues], "statsPeriod": "24h"}):
+            counts[str(s["id"])] = sum(n for _, n in s["stats"]["24h"])
+    issues.sort(key=lambda i: -counts.get(str(i["id"]), 0))
+    total = sum(counts.values())
+    lines = []
+    for i in issues[:20]:
+        new = "new " if at(i["firstSeen"]) >= since else ""
+        lines.append(f"{counts.get(str(i['id']), 0):>4}x {new}#{i['id']} {i['title'][:70]}")
+    if len(issues) > 20:
+        lines.append(f"... {len(issues) - 20} more")
+    if issues:
+        new_count = sum(1 for i in issues if at(i["firstSeen"]) >= since)
+        notify.digest("GlitchTipDaily",
+                      f"glitchtip last 24h: {total} events in {len(issues)} issues ({new_count} new), {os.environ['GLITCHTIP_PUBLIC']}",
+                      lines, ttl=3600)
+    print(f"issues={len(issues)} events={total}", flush=True)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: glitchtip-report
+  namespace: monitoring
+spec:
+  schedule: "0 8 * * *"
+  timeZone: Europe/Berlin
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels: { app: glitchtip-report }
+        spec:
+          restartPolicy: Never
+          serviceAccountName: poller
+          automountServiceAccountToken: false
+          containers:
+            - name: report
+              image: python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
+              command: ["python3", "-u", "/app/report.py"]
+              envFrom: [{ secretRef: { name: glitchtip-report } }]
+              env:
+                - name: WATCH_NAME
+                  value: glitchtip-report
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
+                - name: GLITCHTIP_URL
+                  value: http://glitchtip.glitchtip.svc.cluster.local:8000
+                - name: GLITCHTIP_ORG
+                  value: unorouter
+                - name: GLITCHTIP_PUBLIC
+                  value: https://glitchtip.unorouter.com/unorouter/issues
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 128Mi }
+              volumeMounts: [{ name: app, mountPath: /app }, { name: lib, mountPath: /app/lib }]
+          volumes:
+            - name: app
+              configMap: { name: glitchtip-report }
+            - name: lib
+              configMap: { name: watch-lib }
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: glitchtip-report
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { app: glitchtip-report }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: glitchtip, app: glitchtip }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]

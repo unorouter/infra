@@ -70,7 +70,7 @@ spec:
             - { name: GLITCHTIP_MAX_EVENT_LIFE_DAYS, value: "30" }
             # source maps come from inside the cluster (the site's upload Job), never via the UI host
             - { name: GLITCHTIP_CHUNK_UPLOAD_USE_RELATIVE_URL, value: "true" }
-            # alerts go to Discord webhooks; mail is not configured
+            # no alert rules: monitoring/glitchtip-report posts one daily digest; mail is not configured
             - { name: EMAIL_URL, value: "consolemail://" }
             - { name: DEFAULT_FROM_EMAIL, value: "glitchtip@unorouter.com" }
             - { name: VTASKS_CONCURRENCY, value: "4" }
@@ -108,9 +108,9 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
 ---
-# In: the Teleport agent (UI for SSO users), the site (its tunnel route and server SDK) and the
-# source map upload Job after each site deploy.
-# Out: its database and the internet on 443 for Discord alert webhooks.
+# In: the Teleport agent (UI for SSO users), the site (its tunnel route and server SDK), the
+# source map upload Job after each site deploy and the daily report in monitoring.
+# Out: its database and the internet on 443 for the Dex login.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -124,6 +124,7 @@ spec:
         - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
         - matchLabels: { io.kubernetes.pod.namespace: services, app: unorouter }
         - matchLabels: { io.kubernetes.pod.namespace: services, app: sourcemaps-upload }
+        - matchLabels: { io.kubernetes.pod.namespace: monitoring, app: glitchtip-report }
       toPorts:
         - ports: [{ port: "8000", protocol: TCP }]
     - fromEntities: [host]
