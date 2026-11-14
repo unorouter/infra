@@ -104,3 +104,38 @@ spec:
         - ports:
             - { port: "53", protocol: UDP }
             - { port: "53", protocol: TCP }
+---
+# These namespaces fetch URLs that users or providers choose (custom provider endpoints, images,
+# card imports), so no pod in them may reach a private or reserved address outside the cluster,
+# whatever a hostname resolves to: checking DNS in the app leaves a rebinding window, the kernel
+# does not. CIDR rules never match cluster endpoints or nodes (policy-cidr-match-mode unset), so
+# pods, services and nodes stay reachable through the allow rules. Deny wins over every allow.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: private-egress-deny
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: io.kubernetes.pod.namespace
+        operator: In
+        values: [services, uno-import]
+  enableDefaultDeny:
+    egress: false
+    ingress: false
+  egressDeny:
+    - toCIDR:
+        - 0.0.0.0/8
+        - 10.0.0.0/8
+        - 100.64.0.0/10
+        - 127.0.0.0/8
+        - 169.254.0.0/16
+        - 172.16.0.0/12
+        - 192.0.0.0/24
+        - 192.0.2.0/24
+        - 192.168.0.0/16
+        - 198.18.0.0/15
+        - 198.51.100.0/24
+        - 203.0.113.0/24
+        - 224.0.0.0/4
+        - 240.0.0.0/4
