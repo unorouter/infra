@@ -1,6 +1,7 @@
 # Self-hosted error tracking (Sentry SDK compatible) for the site's browser and server errors.
 # One all-in-one process (web, task worker, scheduler) on Postgres only, no Valkey. The UI is
-# reached through Teleport (glitchtip.unorouter.com); events arrive only from the site pods
+# reached through Teleport (glitchtip.unorouter.com) and logs in only through Dex SSO (no account
+# has a password; registration is off, SSO users join the UnoRouter org); events arrive only from the site pods
 # (its tunnel route and its server SDK), never from the internet. Database: databases/glitchtip-pg.
 apiVersion: v1
 kind: Namespace
@@ -24,14 +25,11 @@ spec:
       data:
         SECRET_KEY: "{{ .SECRET_KEY }}"
         DATABASE_URL: "postgres://glitchtip:{{ .DB_PASSWORD }}@glitchtip-pg-rw.databases.svc.cluster.local:5432/glitchtip"
-        DJANGO_SUPERUSER_PASSWORD: "{{ .ADMIN_PASSWORD }}"
   data:
     - secretKey: SECRET_KEY
       remoteRef: { key: glitchtip, property: SECRET_KEY }
     - secretKey: DB_PASSWORD
       remoteRef: { key: glitchtip, property: DB_PASSWORD }
-    - secretKey: ADMIN_PASSWORD
-      remoteRef: { key: glitchtip, property: ADMIN_PASSWORD }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -75,8 +73,6 @@ spec:
             # alerts go to Discord webhooks; mail is not configured
             - { name: EMAIL_URL, value: "consolemail://" }
             - { name: DEFAULT_FROM_EMAIL, value: "glitchtip@unorouter.com" }
-            - { name: DJANGO_SUPERUSER_USERNAME, value: "admin" }
-            - { name: DJANGO_SUPERUSER_EMAIL, value: "support@unorouter.com" }
             - { name: VTASKS_CONCURRENCY, value: "4" }
             - { name: GRANIAN_WORKERS, value: "1" }
           resources:
