@@ -1,0 +1,31 @@
+# GlitchTip error tracking (infra/glitchtip); its database is databases/glitchtip-pg.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: glitchtip
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
+    argocd.argoproj.io/sync-wave: '2'
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/unorouter/infra.git
+    targetRevision: main
+    path: infra/glitchtip
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: glitchtip
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    - ServerSideApply=true
+    - RespectIgnoreDifferences=true
+  ignoreDifferences:
+  - group: external-secrets.io
+    kind: ExternalSecret
+    managedFieldsManagers:
+    - external-secrets

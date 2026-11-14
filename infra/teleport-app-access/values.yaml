@@ -67,6 +67,13 @@ apps:
     rewrite:
       redirect:
         - monitoring-grafana.monitoring.svc.cluster.local
+  - name: glitchtip
+    uri: http://glitchtip.glitchtip.svc.cluster.local:8000
+    public_addr: glitchtip.unorouter.com
+    labels: { env: internal, tier: observability }
+    rewrite:
+      redirect:
+        - glitchtip.glitchtip.svc.cluster.local
   # The gateway's log store over HTTP for runbook SQL and the laptop's new-api-sync reconcile
   # (`tsh proxy app clickhouse --port 18123`, then ClickHouse's own `reader` login). No DNS
   # record, like openbao-jwt.

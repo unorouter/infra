@@ -1,0 +1,49 @@
+# GlitchTip's events, issues and settings (infra/glitchtip). One instance and no backups on
+# purpose: error events are disposable and rebuild from new traffic, and losing the node only
+# loses past errors and the alert settings (recreate them in the UI).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: glitchtip-pg-owner
+  namespace: databases
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-platform
+    kind: ClusterSecretStore
+  target:
+    name: glitchtip-pg-owner
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/basic-auth
+      data:
+        username: glitchtip
+        password: "{{ .DB_PASSWORD }}"
+  data:
+    - secretKey: DB_PASSWORD
+      remoteRef: { key: glitchtip, property: DB_PASSWORD }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: glitchtip-pg
+  namespace: databases
+spec:
+  inheritedMetadata:
+    annotations:
+      backup.velero.io/backup-volumes-excludes: pgdata,scratch-data,shm
+  imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-bookworm@sha256:045f843b885679b7f1265c2961f3fa66c2d374e9ebe1dfcc4aa7fb3b8e58bd1f
+  instances: 1
+  resources:
+    requests: { cpu: 50m, memory: 256Mi }
+  storage:
+    size: 4Gi
+    storageClass: local-path
+  postgresql:
+    parameters:
+      shared_buffers: 64MB
+  bootstrap:
+    initdb:
+      database: glitchtip
+      owner: glitchtip
+      secret: { name: glitchtip-pg-owner }

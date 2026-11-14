@@ -1,0 +1,139 @@
+# Self-hosted error tracking (Sentry SDK compatible) for the site's browser and server errors.
+# One all-in-one process (web, task worker, scheduler) on Postgres only, no Valkey. The UI is
+# reached through Teleport (glitchtip.unorouter.com); events arrive only from the site pods
+# (its tunnel route and its server SDK), never from the internet. Database: databases/glitchtip-pg.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: glitchtip
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: glitchtip
+  namespace: glitchtip
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-platform
+    kind: ClusterSecretStore
+  target:
+    name: glitchtip
+    creationPolicy: Owner
+    template:
+      data:
+        SECRET_KEY: "{{ .SECRET_KEY }}"
+        DATABASE_URL: "postgres://glitchtip:{{ .DB_PASSWORD }}@glitchtip-pg-rw.databases.svc.cluster.local:5432/glitchtip"
+        DJANGO_SUPERUSER_PASSWORD: "{{ .ADMIN_PASSWORD }}"
+  data:
+    - secretKey: SECRET_KEY
+      remoteRef: { key: glitchtip, property: SECRET_KEY }
+    - secretKey: DB_PASSWORD
+      remoteRef: { key: glitchtip, property: DB_PASSWORD }
+    - secretKey: ADMIN_PASSWORD
+      remoteRef: { key: glitchtip, property: ADMIN_PASSWORD }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glitchtip
+  namespace: glitchtip
+spec:
+  replicas: 1
+  # the embedded scheduler must not run twice during a rollout
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: glitchtip }
+  template:
+    metadata:
+      labels: { app: glitchtip }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 5000
+        runAsGroup: 5000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: glitchtip
+          image: glitchtip/glitchtip:6.2.6@sha256:a3d8eb1b36c1e1603d55ab32711ea3dd8115874742a781a57391a62a16e0dff6
+          ports:
+            - { name: http, containerPort: 8000 }
+          envFrom:
+            - secretRef: { name: glitchtip }
+          env:
+            - { name: GLITCHTIP_DOMAIN, value: "https://glitchtip.unorouter.com" }
+            - { name: CSRF_TRUSTED_ORIGINS, value: "https://glitchtip.unorouter.com" }
+            - { name: GLITCHTIP_EMBED_WORKER, value: "true" }
+            # empty: task queue, cache and sessions live in Postgres
+            - { name: VALKEY_URL, value: "" }
+            - { name: ENABLE_USER_REGISTRATION, value: "false" }
+            - { name: ENABLE_ORGANIZATION_CREATION, value: "false" }
+            - { name: GLITCHTIP_MAX_EVENT_LIFE_DAYS, value: "30" }
+            # alerts go to Discord webhooks; mail is not configured
+            - { name: EMAIL_URL, value: "consolemail://" }
+            - { name: DEFAULT_FROM_EMAIL, value: "glitchtip@unorouter.com" }
+            - { name: DJANGO_SUPERUSER_USERNAME, value: "admin" }
+            - { name: DJANGO_SUPERUSER_EMAIL, value: "support@unorouter.com" }
+            - { name: VTASKS_CONCURRENCY, value: "4" }
+            - { name: GRANIAN_WORKERS, value: "1" }
+          resources:
+            requests: { cpu: 100m, memory: 384Mi }
+            limits: { memory: 1536Mi }
+          readinessProbe:
+            httpGet: { path: /_health/, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glitchtip
+  namespace: glitchtip
+spec:
+  selector: { app: glitchtip }
+  ports:
+    - { name: http, port: 8000, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: glitchtip
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# In: the Teleport agent (UI for SSO users) and the site (its tunnel route and server SDK).
+# Out: its database and the internet on 443 for Discord alert webhooks.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: glitchtip
+  namespace: glitchtip
+spec:
+  endpointSelector:
+    matchLabels: { app: glitchtip }
+  ingress:
+    - fromEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: teleport-agent, app: teleport-app-access }
+        - matchLabels: { io.kubernetes.pod.namespace: services, app: unorouter }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+    - fromEntities: [host]
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: databases, cnpg.io/cluster: glitchtip-pg, cnpg.io/podRole: instance }
+      toPorts:
+        - ports: [{ port: "5432", protocol: TCP }]
+    - toEntities: [world]
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]

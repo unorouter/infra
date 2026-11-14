@@ -11,6 +11,7 @@ resources:
   - postgres/dr-drill.yaml
   - postgres/ip-retention.yaml
   - postgres/teleport-pg.yaml
+  - postgres/glitchtip-pg.yaml
   - clickhouse/clickhouse.yaml
   - clickhouse/keeper.yaml
   - clickhouse/security-exporter.yaml

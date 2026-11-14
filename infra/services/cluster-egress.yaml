@@ -12,7 +12,7 @@ spec:
     matchExpressions:
       - key: io.kubernetes.pod.namespace
         operator: In
-        values: [argocd, cert-manager, cloudflared, cnpg-system, databases, dex, external-secrets, monitoring, openbao, s3-gateway, services, teleport, teleport-agent, uno-import, velero]
+        values: [argocd, cert-manager, cloudflared, cnpg-system, databases, dex, external-secrets, glitchtip, monitoring, openbao, s3-gateway, services, teleport, teleport-agent, uno-import, velero]
   egress:
     - toEndpoints:
         - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
@@ -106,7 +106,7 @@ spec:
             - { port: "53", protocol: TCP }
 ---
 # These namespaces fetch URLs that users or providers choose (custom provider endpoints, images,
-# card imports), so no pod in them may reach a private or reserved address outside the cluster,
+# card imports, GlitchTip alert webhooks), so no pod in them may reach a private or reserved address outside the cluster,
 # whatever a hostname resolves to: checking DNS in the app leaves a rebinding window, the kernel
 # does not. CIDR rules never match cluster endpoints or nodes (policy-cidr-match-mode unset), so
 # pods, services and nodes stay reachable through the allow rules. Deny wins over every allow.
@@ -119,7 +119,7 @@ spec:
     matchExpressions:
       - key: io.kubernetes.pod.namespace
         operator: In
-        values: [services, uno-import]
+        values: [glitchtip, services, uno-import]
   enableDefaultDeny:
     egress: false
     ingress: false

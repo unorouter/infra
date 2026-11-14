@@ -100,6 +100,11 @@ spec:
         - matchLabels: { app: unorouter-bot }
       toPorts:
         - ports: [{ port: "4000", protocol: TCP }]
+    # error reports: the browser tunnel route and the server SDK (infra/glitchtip)
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: glitchtip, app: glitchtip }
+      toPorts:
+        - ports: [{ port: "8000", protocol: TCP }]
     - toEntities: [world]
       toPorts:
         - ports:

@@ -42,6 +42,9 @@ data:
       - hostname: grafana.unorouter.com
         service: https://teleport.teleport.svc.cluster.local:443
         originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
+      - hostname: glitchtip.unorouter.com
+        service: https://teleport.teleport.svc.cluster.local:443
+        originRequest: { originServerName: teleport.unorouter.com, noTLSVerify: true }
       # Direct, not behind Teleport: discovery and JWKS must be publicly fetchable.
       - hostname: dex.unorouter.com
         service: http://dex.dex.svc.cluster.local:5556
@@ -63,7 +66,7 @@ spec:
     metadata:
       labels: { app: cloudflared-ops, app.kubernetes.io/part-of: cloudflared }
       # cloudflared reads its ingress rules once at start: bump with every ConfigMap change
-      annotations: { config-rev: "2" }
+      annotations: { config-rev: "3" }
     spec:
       affinity:
         podAntiAffinity:
