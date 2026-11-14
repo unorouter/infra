@@ -1,6 +1,5 @@
 # Bot cluster detection by TLS fingerprint. Every minute it reads the edge fingerprint lines the
-# gateway (`| fp `), the site (`[fp]`) and the site's admission gate (`[fp-shed]`, sampled, each
-# line weighted by its `w`) write to Loki, keeps a 10 minute window grouped by (ciphers hash,
+# gateway (`| fp `) and the site (`[fp]`) write to Loki, keeps a 10 minute window grouped by (ciphers hash,
 # extensions hash, hello length, HTTP version, user agent family), and flags a group no logged in
 # request ever carried once it passes one tier: strong (one ciphers and extensions pair on two
 # addresses AND a hello too short for the claimed browser), fixed (that pair on FP_FIXED_IPS
@@ -93,7 +92,7 @@ data:
 
     LOKI = os.environ.get("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100")
     SOURCES = {"api": '{namespace="services",app="new-api"} |= " | fp "',
-               "site": r'{namespace="services",app="unorouter"} |~ `\[fp(-shed)?\] `'}
+               "site": r'{namespace="services",app="unorouter"} |= `[fp] `'}
     EDGE_QUERY = os.environ.get("FP_EDGE_QUERY", '{app="cf-firewall"}')
     # cf-analytics writes a minute about 4 minutes after it ends
     EDGE_LAG = int(os.environ.get("FP_EDGE_LAG_SECONDS", "300"))
@@ -111,13 +110,12 @@ data:
     SHORT_MIN_REQ = int(os.environ.get("FP_SHORT_MIN_REQUESTS", "60"))
     SHORT_MIN_IPS = int(os.environ.get("FP_SHORT_MIN_IPS", "3"))
     WAVE_ANON_PER_MINUTE = int(os.environ.get("FP_WAVE_ANON_PER_MINUTE", "300"))
-    WAVE_SHED_PER_MINUTE = int(os.environ.get("FP_WAVE_SHED_PER_MINUTE", "200"))
     ARCHIVE = os.environ.get("ARCHIVE_ENDPOINT", "").rstrip("/")
     ARCHIVE_BUCKET = os.environ.get("ARCHIVE_BUCKET", "")
     ARCHIVE_PREFIX = os.environ.get("ARCHIVE_PREFIX", "fp-autoban")
     ARCHIVE_FLUSH_RUNS = int(os.environ.get("FP_ARCHIVE_FLUSH_RUNS", "10"))
     THRESHOLDS = {k: v for k, v in globals().items() if k in ("WINDOW", "MIN_REQ", "MIN_IPS", "FIXED_IPS", "FIXED_MIN_REQ",
-                  "STRONG_MIN_REQ", "SHORT_MIN_REQ", "SHORT_MIN_IPS", "WAVE_ANON_PER_MINUTE", "WAVE_SHED_PER_MINUTE")}
+                  "STRONG_MIN_REQ", "SHORT_MIN_REQ", "SHORT_MIN_IPS", "WAVE_ANON_PER_MINUTE")}
     POSTS_PER_HOUR = int(os.environ.get("FP_POSTS_PER_HOUR", "3"))
     REPOST_HOURS = int(os.environ.get("FP_REPOST_HOURS", "12"))
     BASELINE_DAYS = 7
@@ -140,7 +138,6 @@ data:
 
     API_LINE = re.compile(r'\| (\d{3}) \|[^|]*\|\s*(\S+) \|\s*(\S+) (\S*) \| fp c=(\S*) l=(\d*) e=(\S*) h=(\S*) asn=(\d*) u=(\d+) ua=(".*")\s*$')
     SITE_LINE = re.compile(r'\[fp\] (\d{3}) (\S+) c=(\S*) l=(\d*) e=(\S*) h=(\S*) asn=(\d*)(?: ip=(\S*))? ua=(".*")\s*$')
-    SHED_LINE = re.compile(r'\[fp-shed\] (\d{3}) (\S+) w=(\d+) c=(\S*) l=(\d*) e=(\S*) h=(\S*) asn=(\d*) ip=(\S*) ua=(".*")\s*$')
     CRAWLER = re.compile(r"bot\b|crawl|spider|slurp|Googlebot|bingbot|facebookexternalhit|Discordbot|Twitterbot|compatible;", re.I)
     CHROME_V = re.compile(r"Chrome/(\d+)")
     FIREFOX_V = re.compile(r"Firefox/(\d+)")
@@ -183,12 +180,12 @@ data:
     def fpkey(c, l, e): return hashlib.sha1(f"{c}|{l}|{e}".encode()).hexdigest()[:12]
 
     class Agg:
-        __slots__ = ("n", "authed", "shed", "lines", "ips", "paths", "asn", "ua", "src", "minutes", "bl")
+        __slots__ = ("n", "authed", "lines", "ips", "paths", "asn", "ua", "src", "minutes", "bl")
         def __init__(self):
-            self.n = 0; self.authed = 0; self.shed = 0; self.lines = 0; self.ips = Counter(); self.paths = set()
+            self.n = 0; self.authed = 0; self.lines = 0; self.ips = Counter(); self.paths = set()
             self.asn = Counter(); self.ua = Counter(); self.src = Counter(); self.minutes = set(); self.bl = False
         def merge(self, o):
-            self.n += o.n; self.authed += o.authed; self.shed += o.shed; self.lines += o.lines; self.bl = self.bl or o.bl
+            self.n += o.n; self.authed += o.authed; self.lines += o.lines; self.bl = self.bl or o.bl
             self.ips.update(o.ips); self.asn.update(o.asn); self.src.update(o.src)
             self.minutes |= o.minutes
             if len(self.paths) < 500: self.paths |= o.paths
@@ -255,23 +252,19 @@ data:
             m = API_LINE.search(line)
             if not m: return None
             status, ip, method, path, c, l, e, h, asn, u, ua = m.groups()
-            return path, c, l, e, h, asn, ip, int(u), ua, 1, False
-        m = SHED_LINE.search(line)
-        if m:
-            status, path, w, c, l, e, h, asn, ip, ua = m.groups()
-            return path, c, l, e, h, asn, ip, 0, ua, max(1, int(w)), True
+            return path, c, l, e, h, asn, ip, int(u), ua
         m = SITE_LINE.search(line)
         if not m: return None
         status, path, c, l, e, h, asn, ip, ua = m.groups()
-        return path, c, l, e, h, asn, ip or "", 0, ua, 1, False
+        return path, c, l, e, h, asn, ip or "", 0, ua
 
-    # lines are (ts_ns, src, line); a shed line stands for w requests, so it counts w times everywhere
+    # lines are (ts_ns, src, line)
     def minute_from_lines(t_end, lines, truncated=()):
         groups, pending_authed, parsed, skipped, raw = defaultdict(Agg), defaultdict(set), 0, 0, []
         for ts, src, line in lines:
             p = parse(src, line)
             if not p: skipped += 1; continue
-            path, c, l, e, h, asn, ip, u, ua, w, shed = p
+            path, c, l, e, h, asn, ip, u, ua = p
             # Workers subrequests arrive with no handshake to fingerprint
             if not c or l in ("", "0") or own(ip): continue
             parsed += 1
@@ -281,10 +274,9 @@ data:
             ua = unquote(ua)
             fam = family(ua)
             g = groups[(c, int(l), e, h, fam)]
-            g.n += w; g.lines += 1; g.ips[ip] += w; g.asn[asn] += w; g.src[src] += w; g.minutes.add(t_end)
-            if shed: g.shed += w
+            g.n += 1; g.lines += 1; g.ips[ip] += 1; g.asn[asn] += 1; g.src[src] += 1; g.minutes.add(t_end)
             if len(g.paths) < 500: g.paths.add(path.split("?", 1)[0][:80])
-            if ua in g.ua or len(g.ua) < 20: g.ua[ua[:200]] += w
+            if ua in g.ua or len(g.ua) < 20: g.ua[ua[:200]] += 1
             if u:
                 g.authed += 1
                 pending_authed[fpkey(c, l, e)].add(ip)
@@ -428,7 +420,7 @@ data:
         ua = g.ua.most_common(1)[0][0][:90] if g.ua else ""
         bl = st["baseline"]
         age = (clock() - bl["since"]) / 86400
-        return (f"[{x['id']}] {x['tier']}: {g.n} req ({g.src.get('site', 0)} site, {g.shed} of them shed, {g.src.get('api', 0)} api) from {ips} addresses "
+        return (f"[{x['id']}] {x['tier']}: {g.n} req ({g.src.get('site', 0)} site, {g.src.get('api', 0)} api) from {ips} addresses "
                 f"({g.n / ips:.1f} per address, busiest {g.ips.most_common(1)[0][1]}), {len(g.asn)} ASNs ({asn}), "
                 f"{len(g.paths)}{'+' if len(g.paths) >= 500 else ''} paths, {h} hello {l}, ua {ua!r}\n"
                 f"why: {x['why']}\n"
@@ -622,17 +614,15 @@ data:
 
     def minute_record(m, bl):
         return {"t": m["t"], "parsed": m["parsed"], "unparsed": m["skipped"], "truncated": m["truncated"], "groups": [
-            {"c": c, "l": l, "e": e, "h": h, "fam": fam, "n": g.n, "authed": g.authed, "shed": g.shed, "lines": g.lines,
+            {"c": c, "l": l, "e": e, "h": h, "fam": fam, "n": g.n, "authed": g.authed, "lines": g.lines,
              "nips": len(g.ips), "ips": {pseudo(ip): n for ip, n in g.ips.most_common(500)}, "asn": dict(g.asn.most_common(5)),
              "src": dict(g.src), "ua": dict(g.ua.most_common(3)), "paths": sorted(g.paths)[:10], "bl": fpkey(c, l, e) in bl}
             for (c, l, e, h, fam), g in m["groups"].items()], "edge": edge_record(m.get("edge"))}
 
     def wave_reason(m, cands):
         anon = max((g.n - g.authed for g in m["groups"].values()), default=0)
-        shed = sum(g.shed for g in m["groups"].values())
         if any(not x["excluded"] for x in cands): return "candidate"
         if anon >= WAVE_ANON_PER_MINUTE: return f"one fingerprint sent {anon} anonymous requests in a minute"
-        if shed >= WAVE_SHED_PER_MINUTE: return f"{shed} anonymous renders shed in a minute"
         return ""
 
     def run_record(window, st, groups, cands, top_asn):
@@ -641,10 +631,10 @@ data:
                 "baseline": {"keys": len(bl["k"]), "age_days": round((clock() - bl["since"]) / 86400, 2),
                              "ready": clock() - bl["since"] >= BASELINE_DAYS * 86400},
                 "window": {"minutes": len(window), "groups": len(groups), "requests": total,
-                           "authed": sum(g.authed for g in groups.values()), "shed": sum(g.shed for g in groups.values())},
+                           "authed": sum(g.authed for g in groups.values())},
                 "top_asn": top_asn,
                 "candidates": [{"id": x["id"], "tier": x["tier"], "signals": x["signals"], "key": list(x["key"]), "fpkey": x["fpkey"],
-                                "n": x["g"].n, "shed": x["g"].shed, "ips": len(x["g"].ips), "asn": dict(x["g"].asn.most_common(5)),
+                                "n": x["g"].n, "ips": len(x["g"].ips), "asn": dict(x["g"].asn.most_common(5)),
                                 "excluded": x["excluded"], "authed_hits": x["authed_hits"], "expr": x["expr"],
                                 "evidence": evidence(x, st)} for x in cands[:20]],
                 "wave": wave_reason(window[-1], cands),
@@ -662,7 +652,6 @@ data:
         log(event="run", groups=len(groups), requests=sum(g.n for g in groups.values()),
             parsed=sum(m["parsed"] for m in window), unparsed=sum(m["skipped"] for m in window),
             truncated=sorted({s for m in window for s in m["truncated"]}), minutes=len(window),
-            shed=sum(g.shed for g in groups.values()),
             edge={k: v for k, v in (edge_record(window[-1].get("edge")) or {}).items() if k in ("t", "rows", "events", "nips", "outcome", "truncated")},
             baseline=len(st["baseline"]["k"]), candidates=[{"id": x["id"], "tier": x["tier"], "n": x["g"].n, "ips": len(x["g"].ips),
             "excluded": x["excluded"], "why": x["why"][:80]} for x in cands[:10]], top_asn=top_asn, live=LIVE)

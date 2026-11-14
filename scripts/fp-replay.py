@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline replay of the fp-autoban scorer (infra/monitoring/extras/alerting/fp-autoban.yaml).
 
-  fp-replay.py loki START END OUT.jsonl.gz     pull [fp], [fp-shed] and gateway fp lines once (LOKI_ADDR)
+  fp-replay.py loki START END OUT.jsonl.gz     pull [fp] and gateway fp lines once (LOKI_ADDR)
   fp-replay.py list runs|waves [YYYY/MM/DD]    list the archive (OpenBao session for the keys)
   fp-replay.py fetch runs DAY [LAST_DAY] DIR   download archived runs, DAY as YYYY-MM-DD
   fp-replay.py fetch wave ID DIR               download one wave folder (ID from list waves)
@@ -66,7 +66,7 @@ def minutes_from_runs(ab, recs):
             groups, authed = defaultdict(ab.Agg), defaultdict(set)
             for x in m["groups"]:
                 g = groups[(x["c"], x["l"], x["e"], x["h"], x["fam"])]
-                g.n, g.authed, g.shed, g.lines, g.bl = x["n"], x["authed"], x["shed"], x["lines"], x["bl"]
+                g.n, g.authed, g.lines, g.bl = x["n"], x["authed"], x["lines"], x["bl"]
                 g.ips = Counter(x["ips"])
                 # past 500 addresses only the count was kept
                 for i in range(x["nips"] - len(x["ips"])): g.ips[f"x:{m['t']}:{i}"] = 1
@@ -132,7 +132,7 @@ def cmd_score(a):
     st = state_from(ab, a.state, minutes, rb)
     print(f"{len(minutes)} minutes {hhmm(minutes[0]['t'])} to {hhmm(minutes[-1]['t'])} UTC, "
           f"{sum(g.n for m in minutes for g in m['groups'].values())} requests, "
-          f"{sum(g.shed for m in minutes for g in m['groups'].values())} shed, baseline {len(st['baseline']['k'])} keys, "
+          f"baseline {len(st['baseline']['k'])} keys, "
           f"thresholds {json.dumps(ab.THRESHOLDS)}\n")
     first = replay(ab, minutes, st, learn=not rb)
     live = [x for _, x in first.values() if not x["excluded"]]
@@ -141,7 +141,7 @@ def cmd_score(a):
 
 def cmd_loki(a):
     base = os.environ.get("LOKI_ADDR", "http://127.0.0.1:18300/api/datasources/proxy/uid/loki")
-    queries = {"site": r'{namespace="services",app="unorouter"} |~ `\[fp(-shed)?\] `',
+    queries = {"site": r'{namespace="services",app="unorouter"} |= `[fp] `',
                "api": '{namespace="services",app="new-api"} |= " | fp "'}
     ns = lambda s: int(datetime.datetime.fromisoformat(s).replace(tzinfo=datetime.UTC).timestamp()) * 10**9
     start, end, n = ns(a.start), ns(a.end), 0
