@@ -17,7 +17,6 @@ spec:
         - matchLabels: { app.kubernetes.io/name: prometheus }
         - matchLabels: { app: ntfy-bridge }
         - matchLabels: { app: edge-probe-watch }
-        - matchLabels: { app: fp-autoban }
         - matchLabels: { app: cf-analytics }
       toPorts:
         - ports: [{ port: "3100", protocol: TCP }]

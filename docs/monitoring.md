@@ -98,83 +98,6 @@ routing, rules, ntfy-bridge, responders), `pollers/` (CronJobs reading external 
   at boot: `rollout restart` after a change, ArgoCD only updates the
   ConfigMap.
 
-## Fingerprint autoban (fp-autoban)
-
-`infra/monitoring/extras/alerting/fp-autoban.yaml`, a Deployment in `monitoring`, DRY RUN
-(`FP_LIVE=0`): candidates post to Discord with the Cloudflare expression it would add. Inputs,
-read from Loki every minute: the gateway's ` | fp ` field on its `[GIN]` line, the site's `[fp]`
-line (anonymous documents that reached Next) and the site's `[fp-shed]` line (renders the
-admission gate in `unorouter/patches/next-bun-compile@*.patch` answered 503 before Next ran,
-sampled: first 3 per second, then every 20th, at most 10 lines per second per pod). Each shed
-line carries `w`, the shed requests it stands for; the controller counts it `w` times, so request
-totals are real and only distinct address counts are a sample. Before `[fp-shed]` existed a flood
-left almost nothing: the 2026-11-05 17:35 wave (about 330k requests in a minute) wrote 47 lines.
-
-Tiers, on the 10 minute window, never for a fingerprint a logged in request carried (window or
-7 day baseline): `strong` (Chrome 110+ with one ciphers and extensions pair on 2 or more
-addresses AND a hello Chrome never sends, at `FP_STRONG_MIN_REQUESTS` 30), `fixed` (that pair on
-`FP_FIXED_IPS` 5 addresses, `FP_FIXED_MIN_REQUESTS` 40), `short` (Chrome 131+ or Firefox 132+
-hello under 1000 bytes, `FP_SHORT_MIN_REQUESTS` 60 from `FP_SHORT_MIN_IPS` 3), `base` (any signal
-at `FP_MIN_REQUESTS` 120 from `FP_MIN_IPS` 5). The ciphers hash alone does not vary per
-connection (34 values in an hour of logged in Chrome), the extensions hash does (2,754 values in
-2,757 pairs), so the PAIR is what a fixed stack repeats. Firefox and Safari repeat pairs on their
-own and get no `fixed` tier. Replayed against the logged in baseline: the 2026-11-04 21:03 wave
-(Chrome/121 and /125 user agents, hello 274 and 513) is a candidate at 21:05, the 2026-11-05
-wave at 17:36 (first full minute, the controller would post at about 17:37:30), and three hours of
-normal traffic (2026-11-05 12:00 to 15:00) plus two crawler bursts give none. Lower thresholds only
-add logged in API clients, which the exclusion drops.
-
-### Archive
-
-Through the s3-gateway into the unlocked, versioned `unorouter-sync` bucket (crypt ciphertext,
-names in clear), writer pair `secret/s3gw` in the `fp-autoban` ExternalSecret:
-
-- `fp-autoban/runs/YYYY/MM/DD/HHMM.jsonl.gz`: one object per 10 runs (and on SIGTERM), never
-  overwritten, one JSON line per run: `t`, `code` (sha256 of `autoban.py`), `thresholds`,
-  `baseline`, `window` totals, `top_asn` with shares, `candidates` (tier, signals, counts,
-  exclusion, evidence, would be expression), `wave`, and `minutes`: every group of each new
-  minute with counts, shed weight, ASNs, top user agents, paths and whether it was in the
-  baseline, so a replay rebuilds any window. About 25 MB a day. Lifecycle `fp-autoban-runs-180d`.
-- `fp-autoban/waves/<YYYYMMDDTHHMMZ>/`: when a minute has a candidate, a fingerprint with 300
-  anonymous requests (`FP_WAVE_ANON_PER_MINUTE`) or 200 shed renders (`FP_WAVE_SHED_PER_MINUTE`),
-  `lines.jsonl.gz` holds the raw lines of the whole window, `lines-HHMM.jsonl.gz` each further
-  window while it lasts (closed after a quiet window), `run.json.gz` the run that opened it.
-  Lifecycle `fp-autoban-waves-730d`.
-- No address reaches the archive: every IP becomes `h:` plus an HMAC whose key is random, lives
-  only in the pod's memory and changes every UTC day (and on restart), so minutes of one day join
-  and nothing older is reversible. That is why it may outlive the 90 day PII retention of Loki.
-- Lifecycle rules are bucket config, not Tofu (`tofu/buckets.tf`): GET the whole configuration
-  with the `secret/pg-s3` pair, add to it, PUT it back, never PUT a partial one.
-- `FingerprintAutobanArchiveFailing` (warning) after six failed writes in a row; the pod keeps
-  at most 120 unwritten runs.
-- Each archived minute also carries `edge`: the cf-analytics firewall events of the minute
-  `FP_EDGE_LAG_SECONDS` (300) before it, weighted by `sampleInterval` and summed per action,
-  outcome (`challenged`, `solved`, `bypassed`, `failed`, `blocked`, `skip`, `log`), source, rule,
-  HTTP protocol, host, ASN and user agent family, plus the 300 busiest addresses (hashed) with
-  their outcomes (about 10 KB a minute). Not scored; the `run` log line carries its totals.
-
-### Replay and tuning
-
-`scripts/fp-replay.py` runs the controller's own code (read from the manifest) offline, minute
-by minute, and prints the first minute each candidate appears. It never calls Cloudflare or the
-cluster; `list` and `fetch` read the bucket with rclone and the crypt keys from an OpenBao
-reader session, `loki` needs `tsh-grafana`.
-
-```bash
-scripts/fp-replay.py list waves                                     # wave folders
-scripts/fp-replay.py fetch wave 20261105T1727Z ./fp                 # one wave
-scripts/fp-replay.py fetch runs 2026-11-05 2026-11-06 ./fp          # runs of a date range
-scripts/fp-replay.py loki 2026-11-05T17:20 2026-11-05T17:50 w.jsonl.gz   # before the archive existed
-kubectl -n monitoring get cm fp-autoban-state -o jsonpath='{.data}' > state.json   # logged in baseline
-scripts/fp-replay.py score --state state.json ./fp/fp-autoban/waves/20261105T1727Z
-scripts/fp-replay.py score ./fp/fp-autoban/runs                     # runs carry their own baseline verdicts
-scripts/fp-replay.py score --set FP_FIXED_IPS=3 --sweep FP_STRONG_MIN_REQUESTS=10,20,30,60 w.jsonl.gz
-```
-
-A threshold change goes into the Deployment env with the replay that justifies it. The pod reads
-`autoban.py` at start: after ArgoCD updates the ConfigMap, `kubectl -n monitoring rollout restart
-deploy/fp-autoban`.
-
 ## Cloudflare edge
 
 `infra/cloudflare/unorouter.com/`: `rules.sops.yaml` (normal), `rules.attack.sops.yaml` (attack),
@@ -269,4 +192,3 @@ sum by (action) (sum_over_time({app="cf-firewall", action=~".*challenge.*"} | js
 topk(20, sum by (clientIP) (count_over_time({app="cf-firewall", action="managed_challenge"} | json [1h])))
 ```
 
-fp-autoban reads `{app="cf-firewall"}` as its edge input (see its Archive section).

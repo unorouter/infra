@@ -310,7 +310,6 @@ spec:
         - matchLabels: {io.kubernetes.pod.namespace: databases, app: clickhouse}
         - matchLabels: {io.kubernetes.pod.namespace: teleport, app.kubernetes.io/component: auth}
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: pat-audit-archive}
-        - matchLabels: {io.kubernetes.pod.namespace: monitoring, app: fp-autoban}
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: loki}
         - matchLabels: {io.kubernetes.pod.namespace: monitoring, app.kubernetes.io/name: vector}
         - matchLabels: {io.kubernetes.pod.namespace: services, app: new-api-sync}
