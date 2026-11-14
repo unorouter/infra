@@ -33,6 +33,8 @@ spec:
       remoteRef: { key: dex-sso, property: openbaoClientSecret }
     - secretKey: GRAFANA_CLIENT_SECRET
       remoteRef: { key: dex-sso, property: grafanaClientSecret }
+    - secretKey: GLITCHTIP_CLIENT_SECRET
+      remoteRef: { key: dex-sso, property: glitchtipClientSecret }
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -78,6 +80,11 @@ data:
         redirectURIs:
           - https://grafana.unorouter.com/login/generic_oauth
         secret: "{{ .Env.GRAFANA_CLIENT_SECRET }}"
+      - id: glitchtip
+        name: GlitchTip
+        redirectURIs:
+          - https://glitchtip.unorouter.com/accounts/oidc/dex/login/callback/
+        secret: "{{ .Env.GLITCHTIP_CLIENT_SECRET }}"
 ---
 apiVersion: apps/v1
 kind: Deployment
