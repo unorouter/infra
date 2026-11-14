@@ -70,6 +70,8 @@ spec:
             - { name: ENABLE_USER_REGISTRATION, value: "false" }
             - { name: ENABLE_ORGANIZATION_CREATION, value: "false" }
             - { name: GLITCHTIP_MAX_EVENT_LIFE_DAYS, value: "30" }
+            # source maps come from inside the cluster (the site's upload Job), never via the UI host
+            - { name: GLITCHTIP_CHUNK_UPLOAD_USE_RELATIVE_URL, value: "true" }
             # alerts go to Discord webhooks; mail is not configured
             - { name: EMAIL_URL, value: "consolemail://" }
             - { name: DEFAULT_FROM_EMAIL, value: "glitchtip@unorouter.com" }
