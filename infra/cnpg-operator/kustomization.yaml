@@ -3,7 +3,7 @@ kind: Kustomization
 # CNPG operator + Barman Cloud plugin (CNPG-I). Pinned. In-tree barmanObjectStore is
 # deprecated since 1.26 -- we use the plugin. Plugin needs cert-manager (TLS plugin<->operator).
 resources:
-  - https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.0/cnpg-1.30.0.yaml # sha256:f8bede43fe4ee0d478c2355b204a36876b2ae4faac60f2a9452280b293da3b88
+  - https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.1/cnpg-1.30.1.yaml # sha256:37237f145d8138256ea25ae830f87759255665ff08f8d552fdd8224a5ec032fb
   - https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.15.0/manifest.yaml # sha256:1c483eae12a7424ad28ac66bdfee771b510ee8e234cb8756c3ade7254cef2fad
   - networkpolicies.yaml
 patches:
