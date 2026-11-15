@@ -32,6 +32,8 @@ spec:
     - { group: policy, kind: PodDisruptionBudget }
     - { group: autoscaling, kind: HorizontalPodAutoscaler }
     - { group: batch, kind: CronJob }
+    # Sync hooks (the site's source map upload after each deploy); no more reach than a CronJob.
+    - { group: batch, kind: Job }
     - { group: external-secrets.io, kind: ExternalSecret }
     - { group: postgresql.cnpg.io, kind: Cluster }
     - { group: postgresql.cnpg.io, kind: ScheduledBackup }
