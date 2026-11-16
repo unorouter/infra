@@ -65,6 +65,23 @@ data:
       # committed key inventory, the snapshot job for the raft snapshot). Anything on a sensitive
       # path posts regardless. No standing root token exists since 2026-09-08 (dr.sh mints one
       # from the unseal keys for DR), so root policy in use is break-glass or a breach.
+      - name: postgres-replication
+        interval: 1m
+        rules:
+          # A replica left past the fork after a switchover keeps reporting healthy in CNPG
+          # (cloudnative-pg#11715, #11800); PostgreSQL itself logs the fork on every retry.
+          - alert: PostgresTimelineFork
+            expr: >-
+              sum by (pod) (
+                count_over_time(
+                  {namespace="databases", container="postgres"}
+                    |~ "forked off current database system timeline|is not a child of this server's history"
+                  [5m]
+                )
+              ) > 0
+            labels: { severity: critical, page: "true" }
+            annotations:
+              summary: "{{ $labels.pod }} diverged from the primary's timeline: rebuild it (kubectl cnpg destroy <cluster> <instance>), never promote it"
       - name: openbao
         interval: 1m
         rules:

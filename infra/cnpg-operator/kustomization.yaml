@@ -6,7 +6,14 @@ resources:
   - https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.1/cnpg-1.30.1.yaml # sha256:37237f145d8138256ea25ae830f87759255665ff08f8d552fdd8224a5ec032fb
   - https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.15.0/manifest.yaml # sha256:1c483eae12a7424ad28ac66bdfee771b510ee8e234cb8756c3ade7254cef2fad
   - networkpolicies.yaml
+  - operator-config.yaml
 patches:
+  # the config map is read only at startup: bump on every change to it
+  - target: { kind: Deployment, name: cnpg-controller-manager }
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations
+        value: { unorouter.com/config-rev: "1" }
   - target: { kind: Deployment, name: barman-cloud }
     patch: |-
       - op: add

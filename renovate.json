@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Weekly dependency bumps, never a PR. Patch and minor of images and charts merge straight to main on Mondays (no CI here, ArgoCD rolls the commit). Everything else waits in the Dependency dashboard issue; ticking its box merges it to main on the next run.",
+  "description": "Weekly dependency bumps, never a PR. Patch and minor of images and charts merge straight to main on Monday daytime, one an hour, so each rollout runs alone while someone is around (no CI here, ArgoCD rolls the commit). Everything else waits in the Dependency dashboard issue; ticking its box merges it to main on the next run.",
   "extends": [
     "config:recommended",
     ":disableRateLimiting",
@@ -8,14 +8,15 @@
   ],
   "timezone": "Europe/Berlin",
   "schedule": [
-    "on monday"
+    "after 10am and before 4pm on monday"
   ],
   "ignoreTests": true,
   "automerge": true,
   "automergeType": "branch",
   "automergeSchedule": [
-    "at any time"
+    "after 10am and before 4pm on monday"
   ],
+  "prHourlyLimit": 1,
   "dependencyDashboard": true,
   "dependencyDashboardTitle": "Dependency dashboard",
   "dependencyDashboardApproval": true,
@@ -103,14 +104,13 @@
       "dependencyDashboardApproval": false
     },
     {
-      "description": "Operators from release manifests: patch merges, minor and major wait",
+      "description": "Operators from release manifests: patch merges, minor and major wait. CNPG patches roll no Postgres pod (in-place instance manager updates, infra/cnpg-operator/operator-config.yaml); the barman-cloud plugin is left out because a plugin bump changes the sidecar image and rolls every cluster into a switchover",
       "matchDatasources": [
         "github-release-attachments"
       ],
       "matchPackageNames": [
         "cert-manager/cert-manager",
-        "cloudnative-pg/cloudnative-pg",
-        "cloudnative-pg/plugin-barman-cloud"
+        "cloudnative-pg/cloudnative-pg"
       ],
       "matchUpdateTypes": [
         "patch",

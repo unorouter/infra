@@ -335,6 +335,32 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "Replication lag {{ $value }}s on {{ $labels.pod }}"
+        # A supervised cluster stops halfway through every rollout (operator, plugin or image
+        # bump) until someone promotes. On 1.30.1 the wait also blanks every query metric
+        # (cloudnative-pg#11636), so the alerts below and CNPGReplicaMissing go silent with it.
+        - alert: CNPGSwitchoverRequired
+          expr: max by (cluster) (cnpg_collector_manual_switchover_required{namespace="databases"}) == 1
+          for: 20m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.cluster }} waits for a supervised switchover: kubectl cnpg promote {{ $labels.cluster }} <updated replica> -n databases"
+        # cnpg_collector_* keeps reporting while the query collector is empty, and
+        # last_collection_error stays 0 (cloudnative-pg#11636, #11809).
+        - alert: CNPGQueryMetricsMissing
+          expr: >-
+            group by (cluster) (cnpg_collector_up{namespace="databases"})
+            unless group by (cluster) (label_replace(cnpg_backends_total{namespace="databases"}, "cluster", "$1", "pod", "(.+)-[0-9]+"))
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.cluster }} exports no query metrics; replication, catalog and security alerts on it are blind"
+        # Replicas hold inactive copies of the HA slots by design; only the primary's count.
+        - alert: CNPGReplicaSlotInactive
+          expr: cnpg_pg_replication_slots_active{namespace="databases"} == 0 and on (pod) (cnpg_pg_replication_in_recovery == 0)
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} slot {{ $labels.slot_name }} has no consumer: that replica stopped streaming (diverged after a switchover? cloudnative-pg#11715)"
 
     # F. ingress / external path -- the hairpin + CF-mitigation chain of the 8h outage.
     - name: unorouter.ingress

@@ -1,0 +1,11 @@
+# Read by the operator at startup (--config-map-name). In-place instance manager updates:
+# an operator bump swaps the manager binary inside the running pods instead of rolling
+# them, so a patch release needs no switchover. A release that changes the pod template
+# still rolls (cloudnative-pg#7727, #5950), and newapi-pg then waits for a promote.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnpg-controller-manager-config
+  namespace: cnpg-system
+data:
+  ENABLE_INSTANCE_MANAGER_INPLACE_UPDATES: "true"
