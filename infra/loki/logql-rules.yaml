@@ -695,6 +695,8 @@ data:
           # A Job in services created by anything but the CronJob controller. Pods are
           # useless for this: the job-controller creates them by generateName, so the
           # metadata-level audit event carries no name to tell cron pods from others.
+          # Exempt: the site's PostSync hook, which ArgoCD creates by its fixed name on
+          # every unorouter sync (GlitchTip source map upload).
           - alert: K8sUnexpectedJob
             expr: >-
               sum by (objectRef_name, actor) (
@@ -707,6 +709,7 @@ data:
                     | objectRef_subresource=""
                     | objectRef_namespace="services"
                     | user_username!="system:serviceaccount:kube-system:cronjob-controller"
+                    | (user_username!="system:serviceaccount:argocd:argocd-application-controller" or objectRef_name!="sourcemaps-upload")
                     | label_format actor=`{{ or .impersonatedUser_username .user_username }}`
                   [5m]
                 )
