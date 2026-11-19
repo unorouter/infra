@@ -128,9 +128,10 @@ spec:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
                 capabilities: { drop: [ALL] }
+              # the 176M binary written into the emptyDir counts as page cache: 64Mi was OOM killed
               resources:
                 requests: { cpu: 10m, memory: 16Mi }
-                limits: { memory: 64Mi }
+                limits: { memory: 256Mi }
               volumeMounts: [{ name: tools, mountPath: /tools }]
           containers:
             - name: scan
