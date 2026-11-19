@@ -30,6 +30,8 @@ spec:
     - fromEndpoints:
         - matchLabels: { app.kubernetes.io/name: grafana }
         - matchLabels: { app.kubernetes.io/name: prometheus }
+        # the running image list (pollers/image-vuln-scan.yaml)
+        - matchLabels: { io.cilium.k8s.policy.serviceaccount: image-vuln-scan }
       toPorts:
         - ports:
             - { port: "9090", protocol: TCP }
@@ -132,6 +134,7 @@ spec:
         - matchLabels: { app.kubernetes.io/name: grafana }
         - matchLabels: { io.cilium.k8s.policy.serviceaccount: image-secret-scan }
         - matchLabels: { io.cilium.k8s.policy.serviceaccount: poller }
+        - matchLabels: { io.cilium.k8s.policy.serviceaccount: image-vuln-scan }
         # reads silences for the heartbeat
         - matchLabels: { app: ntfy-bridge }
       toPorts:
@@ -286,7 +289,7 @@ spec:
         - ports: [{ port: "443", protocol: TCP }]
 ---
 # Watchers that raise alerts through alertmanager and call out to the internet: the pollers
-# (poller account) and image-secret-scan, which also pulls layers.
+# (poller account), image-secret-scan and image-vuln-scan, which also pull layers.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -297,7 +300,7 @@ spec:
     matchExpressions:
       - key: io.cilium.k8s.policy.serviceaccount
         operator: In
-        values: [image-secret-scan, poller]
+        values: [image-secret-scan, image-vuln-scan, poller]
   egress:
     - toEndpoints:
         - matchLabels: { app.kubernetes.io/name: alertmanager }

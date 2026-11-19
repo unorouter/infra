@@ -1,0 +1,189 @@
+# Nightly: every image running in the cluster (kube_pod_container_info, so no Kubernetes API
+# access) is scanned with Trivy for fixable HIGH and CRITICAL vulnerabilities, and only those
+# on CISA's Known Exploited Vulnerabilities list reach Discord (2026-11-20: 1 of 158 fixable
+# findings in the ArgoCD image). Everything else is one log line per image in Loki.
+# Kept as small as it gets on a tight cluster: one pod, one image at a time, priority class
+# batch (never preempts), and a cache volume with the vulnerability database and the
+# analysis of every layer already seen, so a night only downloads layers that changed.
+# Measured locally with 0.76.2: database download fine under a 256Mi limit (the 1.7G it writes
+# is reclaimable page cache), first scan of a large image 235M, a cached rescan 61M.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: image-vuln-scan
+  namespace: monitoring
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: image-vuln-scan-cache
+  namespace: monitoring
+spec:
+  storageClassName: local-path
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: { storage: 3Gi }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-vuln-scan
+  namespace: monitoring
+data:
+  scan.py: |
+    import json, os, subprocess, urllib.parse, urllib.request
+    from datetime import datetime, timezone
+    import notify
+
+    PROM = os.environ.get("PROMETHEUS_URL", "http://kps-prometheus.monitoring.svc:9090")
+    KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    TRIVY, CACHE = "/tools/trivy", "/cache"
+
+    def get(url):
+        req = urllib.request.Request(url, headers={"user-agent": "image-vuln-scan/1"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.load(r)
+
+    def running_images():
+        q = 'count by (image_id) (kube_pod_container_info{image_id!=""})'
+        res = get(PROM + "/api/v1/query?query=" + urllib.parse.quote(q))["data"]["result"]
+        # an id without a repository cannot be pulled
+        return sorted({r["metric"]["image_id"].removeprefix("docker-pullable://") for r in res if "@sha256:" in r["metric"]["image_id"]})
+
+    def trivy(*args, timeout=1200):
+        return subprocess.run([TRIVY, *args, "--cache-dir", CACHE, "--no-progress", "--quiet"],
+                              capture_output=True, text=True, timeout=timeout)
+
+    def main():
+        kev = {v["cveID"] for v in get(KEV_URL)["vulnerabilities"]}
+        images = running_images()
+        p = trivy("image", "--download-db-only")
+        if p.returncode:
+            raise SystemExit("database download failed: " + p.stderr[-500:])
+        # layer analyses of images no longer running would pile up
+        if datetime.now(timezone.utc).day == 1:
+            trivy("clean", "--scan-cache")
+        hits, failed = [], []
+        for img in images:
+            out = "/tmp/result.json"
+            p = trivy("image", "--skip-db-update", "--scanners", "vuln", "--severity", "HIGH,CRITICAL",
+                      "--ignore-unfixed", "--timeout", "15m", "--format", "json", "--output", out, img)
+            if p.returncode:
+                failed.append(img)
+                print(json.dumps({"image": img, "error": p.stderr.strip()[-300:]}), flush=True)
+                continue
+            with open(out) as f:
+                vulns = [v for r in json.load(f).get("Results") or [] for v in r.get("Vulnerabilities") or []]
+            exploited = sorted({v["VulnerabilityID"] for v in vulns if v["VulnerabilityID"] in kev})
+            name = img.split("@")[0]
+            for v in vulns:
+                if v["VulnerabilityID"] in exploited:
+                    hits.append(f"{name}: {v['VulnerabilityID']} {v['Severity']} {v['PkgName']} "
+                                f"{v.get('InstalledVersion')} fixed in {v.get('FixedVersion')}: {(v.get('Title') or '')[:80]}")
+            print(json.dumps({"image": img, "critical": sum(v["Severity"] == "CRITICAL" for v in vulns),
+                              "high": sum(v["Severity"] == "HIGH" for v in vulns), "kev": exploited}), flush=True)
+        # one post per night: digests repeat hourly while active, the ttl ends it first
+        if hits:
+            notify.digest("ImageExploitedVulnerability",
+                          "running images with an actively exploited vulnerability that has a fix (CISA KEV)",
+                          sorted(set(hits))[:20], ttl=3000)
+        if failed:
+            notify.digest("ImageVulnScanFailed", f"image-vuln-scan could not scan {len(failed)} of {len(images)} images",
+                          failed[:20], ttl=3000)
+        print(json.dumps({"images": len(images), "failed": len(failed), "kev_hits": len(hits)}), flush=True)
+
+    main()
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: image-vuln-scan
+  namespace: monitoring
+spec:
+  schedule: "17 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 5400
+      template:
+        spec:
+          restartPolicy: Never
+          priorityClassName: batch
+          serviceAccountName: image-vuln-scan
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
+            seccompProfile: { type: RuntimeDefault }
+          initContainers:
+            - name: trivy
+              image: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+              command: ["cp", "/usr/local/bin/trivy", "/tools/trivy"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 10m, memory: 16Mi }
+                limits: { memory: 64Mi }
+              volumeMounts: [{ name: tools, mountPath: /tools }]
+          containers:
+            - name: scan
+              image: python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
+              command: ["python3", "-u", "/app/scan.py"]
+              env:
+                - name: WATCH_NAME
+                  value: image-vuln-scan
+                - name: PYTHONPATH
+                  value: /app/lib
+                - name: ALERTMANAGER_URL
+                  value: http://kps-alertmanager.monitoring.svc:9093
+                - name: HOME
+                  value: /tmp
+                - name: TMPDIR
+                  value: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              resources:
+                requests: { cpu: 50m, memory: 128Mi }
+                limits: { memory: 512Mi }
+              volumeMounts:
+                - { name: app, mountPath: /app }
+                - { name: lib, mountPath: /app/lib }
+                - { name: tools, mountPath: /tools, readOnly: true }
+                - { name: cache, mountPath: /cache }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - name: app
+              configMap: { name: image-vuln-scan }
+            - name: lib
+              configMap: { name: watch-lib }
+            - name: tools
+              emptyDir: { sizeLimit: 256Mi }
+            - name: tmp
+              emptyDir: { sizeLimit: 1Gi }
+            - name: cache
+              persistentVolumeClaim: { claimName: image-vuln-scan-cache }
+---
+# Registries, the Trivy database and the KEV feed are on 443 (the watchers policy); this adds
+# the one in-cluster read, the running image list from Prometheus.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: image-vuln-scan
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels: { io.cilium.k8s.policy.serviceaccount: image-vuln-scan }
+  egress:
+    - toEndpoints:
+        - matchLabels: { app.kubernetes.io/name: prometheus }
+      toPorts:
+        - ports: [{ port: "9090", protocol: TCP }]
