@@ -9,6 +9,9 @@
 #   httpRequestsAdaptiveGroups: one Loki line per (client address, host, protocol, TLS, content
 #     type, security action, status, user agent) and minute {app="cf-http", host}, plus low
 #     cardinality totals as Prometheus counters. A full page splits the minute in halves.
+#   Visitor requests the edge itself failed to deliver to origin (520 to 530), per host, status
+#     and Cloudflare location: a Cloudflare network fault never reaches cloudflared, so neither
+#     the tunnel metrics nor the gateway see it (2026-11-18 22:00 UTC, Europe to Asia Pacific).
 # Limits, fields and queries: docs/monitoring.md "Cloudflare analytics (cf-analytics)".
 # Token: cloudflare-edge analytics_token (Zone Analytics Read), shared with edge-probe-watch.
 apiVersion: external-secrets.io/v1
@@ -223,6 +226,8 @@ data:
 
     IP_QUERY = groups_query(IP_DIMS, ',{requestSource:"eyeball"}')
     TOTAL_QUERY = groups_query(TOTAL_DIMS, "")
+    UNREACHABLE_QUERY = groups_query("clientRequestHTTPHost edgeResponseStatus coloCode",
+                                     ',{requestSource:"eyeball"},{edgeResponseStatus_geq:520},{edgeResponseStatus_leq:530}')
 
     def groups(dataset, query, s, e, stats):
         rows = gql(dataset, query, {"z": ZONE, "s": iso(s), "e": iso(e)})["httpRequestsAdaptiveGroups"]
@@ -260,6 +265,11 @@ data:
             inc("cf_http_requests_by_action_total", n, host=h, action=d.get("securityAction", ""), source=d.get("requestSource", ""))
             inc("cf_http_requests_by_content_total", n, host=h, content=d.get("edgeResponseContentTypeName", ""))
             if r["sum"]["visits"]: inc("cf_http_visits_total", r["sum"]["visits"], host=h)
+        for _, _, r in groups("http_unreachable", UNREACHABLE_QUERY, m, m + 60, stats):
+            d = r["dimensions"]
+            inc("cf_edge_unreachable_total", r["count"])
+            inc("cf_edge_unreachable_by_colo_total", r["count"], host=host_label(d.get("clientRequestHTTPHost", "")),
+                status=str(d.get("edgeResponseStatus", "")), colo=d.get("coloCode") or "unknown")
         inc("cf_analytics_rows_total", len(per_ip), dataset="http_ip")
         inc("cf_analytics_rows_total", len(totals), dataset="http_total")
         gauge("cf_analytics_rows_per_minute", len(per_ip), dataset="http_ip")
@@ -312,6 +322,8 @@ data:
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         state["tick"] = time.time()
         threading.Thread(target=ThreadingHTTPServer(("", 8080), Handler).serve_forever, daemon=True).start()
+        # present from the first scrape, so increase() counts the first failures too
+        inc("cf_edge_unreachable_total", 0)
         log(event="start", lag=LAG, overlap=OVERLAP, page=PAGE, max_queries_per_minute=QPM)
         while True:
             tick()
@@ -331,7 +343,7 @@ spec:
     metadata:
       labels: { app: cf-analytics }
       # python reads poller.py once at start: bump with every ConfigMap change so ArgoCD rolls the pod
-      annotations: { config-rev: "1" }
+      annotations: { config-rev: "2" }
     spec:
       serviceAccountName: poller
       automountServiceAccountToken: false
@@ -437,6 +449,17 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "Cloudflare answered cf-analytics with a rate limit: the token's 300 queries per 5 minutes are shared with edge-probe-watch"
+        # Normal is under 15 an hour (worst hour 86, 11-16 to 11-18); the 2026-11-18 incident was 1,196.
+        - alert: EdgeOriginUnreachable
+          expr: sum(increase(cf_edge_unreachable_total[10m])) > 60
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Cloudflare failed {{ $value | printf \"%.0f\" }} visitor requests in 10 minutes before they reached us (520 to 530)"
+            description: >-
+              Top locations: {{ range query "topk(5, sum by (colo) (increase(cf_edge_unreachable_by_colo_total[10m])))" }}{{ .Labels.colo }} {{ .Value | printf "%.0f" }}, {{ end }}
+              hosts: {{ range query "sum by (host) (increase(cf_edge_unreachable_by_colo_total[10m]))" }}{{ .Labels.host }} {{ .Value | printf "%.0f" }}, {{ end }}
+              Cloudflared logs quiet and one region only: a Cloudflare network fault, see cloudflarestatus.com. Every location: check the tunnels.
         - alert: CfAnalyticsTruncated
           expr: sum by (dataset) (increase(cf_analytics_truncated_total[30m])) > 0
           labels: { severity: info }
