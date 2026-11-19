@@ -37,7 +37,8 @@ data:
     import notify
 
     PROM = os.environ.get("PROMETHEUS_URL", "http://kps-prometheus.monitoring.svc:9090")
-    KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    # CISA's own mirror: www.cisa.gov answers 403 to the cluster's datacenter address
+    KEV_URL = "https://raw.githubusercontent.com/cisagov/kev-data/main/known_exploited_vulnerabilities.json"
     TRIVY, CACHE = "/tools/trivy", "/cache"
 
     def get(url):
