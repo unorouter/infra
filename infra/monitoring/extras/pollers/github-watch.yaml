@@ -2,9 +2,10 @@
 # images: a repository ruleset that is not active, a deploy key or webhook, an org member,
 # outside collaborator or installed app nobody expects, a commit on a deploy repo's main by
 # an unexpected account (the authenticated pusher, not the commit metadata), a remote manifest
-# that no longer matches its pinned sha256. Actions secret changes go to the Discord digest. ArgoCD deploys
+# that no longer matches its pinned sha256. Actions secret changes and new high or critical
+# Dependabot alerts go to the Discord digest. ArgoCD deploys
 # whatever lands on infra main, so that branch is the cluster.
-# Credentials: the read-only GitHub App "unorouter-github-watch" (OpenBao
+# Credentials: the read-only GitHub App "unorouter-github-watch" (needs Dependabot alerts: read; OpenBao
 # secret/github-watch: app_id, installation_id, private_key). No personal token involved.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
@@ -153,6 +154,23 @@ data:
                     continue
                 if got != want:
                     add("RemoteManifestChanged", f"{f}: {url} serves sha256 {got[:12]}, pinned {want[:12]}")
+
+    # Renovate ships the fixes; this only says a high or critical one exists. Lower ones stay on GitHub.
+    vulns = []
+    try:
+        open_alerts = call(f"/orgs/{ORG}/dependabot/alerts?state=open&severity=high,critical&sort=created&direction=desc&per_page=100", token)
+    except urllib.error.HTTPError as e:
+        open_alerts = []
+        info.append(f"Dependabot alerts unreadable (HTTP {e.code}): the app needs the Dependabot alerts read permission")
+    for a in open_alerts:
+        if not recent(a.get("created_at")):
+            continue
+        adv, v = a.get("security_advisory", {}), a.get("security_vulnerability", {})
+        fix = (v.get("first_patched_version") or {}).get("identifier") or "no fix yet"
+        vulns.append(f"{a['repository']['name']}: {v.get('package', {}).get('name')} {adv.get('severity')} "
+                     f"{adv.get('cve_id') or adv.get('ghsa_id')}, fixed in {fix}: {adv.get('summary', '')[:100]} {a.get('html_url')}")
+    if vulns:
+        notify.digest("DependabotAlert", "new vulnerable dependencies", vulns[:15], ttl=3600)
 
     for name, lines in critical.items():
         notify.alert(name, "github: " + "; ".join(lines[:10]))
