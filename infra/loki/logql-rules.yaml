@@ -905,14 +905,15 @@ data:
           # exception is the daily systemd-tmpfiles-clean run, which checks /root/.ssh for
           # Debian's provision.conf: excluded only as systemd's own child with no login session.
           # xattr reads (syscalls 191 to 196, e.g. `ls -la` on a home dir) expose no file content.
+          # A login session (auid set) pages at once.
           - alert: NetcupSensitiveFileAccess
             expr: >-
               sum by (key, comm) (
                 count_over_time(
                   {namespace="monitoring", app="netcup-journal"} |= `"ident":"audisp-syslog"` |~ `type=SYSCALL`
                     |~ `key=\\?"(secrets|ssh_keys|sudoers|accounts|audit_config)`
-                    !~ `ppid=1 pid=[0-9]+ auid=4294967295 .*exe=\\?"/usr/bin/systemd-tmpfiles\\?"`
                     !~ `syscall=19[1-6] `
+                    !~ `auid=4294967295 `
                     | regexp `comm=\\?"(?P<comm>[^"\\]+)`
                     | regexp `key=\\?"(?P<key>[a-z_]+)`
                   [5m]
@@ -921,6 +922,28 @@ data:
             labels: { page: "true", severity: critical, source: netcup-watch }
             annotations:
               summary: "netcup {{ $labels.key }} touched by {{ $labels.comm }} x{{ $value }}"
+          # No login session: unattended-upgrades rewrites sudoers and pam files whenever Debian
+          # ships sudo (2026-11-22). Its oneshot unit is logged only when it ends, so these wait
+          # 10 minutes and page unless apt-daily-upgrade finished meanwhile.
+          - alert: NetcupSensitiveFileAccess
+            expr: >-
+              sum by (key, comm) (
+                count_over_time(
+                  {namespace="monitoring", app="netcup-journal"} |= `"ident":"audisp-syslog"` |~ `type=SYSCALL`
+                    |~ `key=\\?"(secrets|ssh_keys|sudoers|accounts|audit_config)`
+                    !~ `syscall=19[1-6] `
+                    |= `auid=4294967295 `
+                    !~ `ppid=1 pid=[0-9]+ auid=4294967295 .*exe=\\?"/usr/bin/systemd-tmpfiles\\?"`
+                    | regexp `comm=\\?"(?P<comm>[^"\\]+)`
+                    | regexp `key=\\?"(?P<key>[a-z_]+)`
+                  [5m] offset 10m
+                )
+              ) > 0
+              unless on()
+              (count_over_time({namespace="monitoring", app="netcup-journal"} |= `type=SERVICE_` |= `unit=apt-daily-upgrade` [20m]) > 0)
+            labels: { page: "true", severity: critical, source: netcup-watch }
+            annotations:
+              summary: "netcup {{ $labels.key }} touched by {{ $labels.comm }} x{{ $value }} with no login session"
           - alert: NetcupConfigChange
             expr: >-
               sum by (key) (
