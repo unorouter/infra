@@ -151,12 +151,13 @@ spec:
           annotations:
             summary: "{{ $labels.cluster }} base backup older than 26h (or none at all)"
             description: "Catches BOTH 'never ran' and 'hung in BackupStarted'. Without a base backup, WAL archives alone cannot restore anything -- exactly the 2026-07-22 state where base backups were 0 bytes while WAL looked healthy."
+        # newapi's nightly base backup takes 60 to 67 minutes (2026-11-17 to 11-24)
         - alert: CNPGBackupStuck
           expr: cnpg_backup_phase_info{phase=~"started|running"} == 1
-          for: 1h
+          for: 2h
           labels: { severity: warning }
           annotations:
-            summary: "CNPG backup {{ $labels.name }} stuck in {{ $labels.phase }} >1h"
+            summary: "CNPG backup {{ $labels.name }} stuck in {{ $labels.phase }} >2h"
             description: "barman hangs here indefinitely with no error and no completion (CNPG #5420); the 2026-07-22 backups sat in this state until killed."
         # A provider outage (Hetzner fsn1, 2026-10-15) stops archiving with days of WAL
         # headroom on disk, so the first hours post to Discord; the phone rings once the
