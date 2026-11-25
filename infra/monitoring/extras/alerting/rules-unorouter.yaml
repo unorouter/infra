@@ -108,7 +108,7 @@ spec:
             summary: "{{ $labels.deployment }} has ZERO ready replicas"
             description: "Revenue service is down."
         - alert: SideDeploymentNoReplicas
-          expr: kube_deployment_status_replicas_available{namespace="services",deployment=~"uno-import.*"} == 0
+          expr: kube_deployment_status_replicas_available{namespace="uno-import",deployment=~"uno-import.*"} == 0
           for: 15m
           labels: { severity: warning }
           annotations:
@@ -127,6 +127,17 @@ spec:
           labels: { page: "true", severity: critical }
           annotations:
             summary: "{{ $labels.namespace }}/{{ $labels.pod }} in CrashLoopBackOff"
+        # The tunnel can stay up while carrying nothing (dead VPN servers, 2026-11-25):
+        # each liveness restart needs 10 minutes without a public IP, far too slow
+        # for PodCrashLooping, and readiness stays green on purpose. Two restarts in
+        # two hours means every import is failing with no egress.
+        - alert: UnoImportRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="uno-import",container=~"vpn|api"}[2h]) >= 2
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "uno-import {{ $labels.container }} restarted {{ $value | printf \"%.0f\" }}x in 2h"
+            description: "Card imports are likely failing. Run step 1 of backup/uno-import/CLAUDE.md (egress check)."
         - alert: SidePodCrashLoopBackOff
           expr: kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",pod=~"uno-import.*"} == 1
           for: 15m
